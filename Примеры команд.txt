@@ -1,0 +1,11 @@
+chat Привет! Как дела? - пообщаться с Sin
+
+learn data/documents/sample.txt - обучить Sin из файла
+
+learn_code python "print('Hello')" - обучить на примере кода
+
+query Как работает машинное обучение? - запросить информацию у DeepSeek
+
+propose - предложить новый функционал
+
+status - показать текущий статус обучения
