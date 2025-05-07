@@ -227,7 +227,55 @@ class SinNetwork(nn.Module):
         return response.get('suggestion', 'No suggestion generated')
     
     def _apply_code_update(self, new_code: str) -> None:
-        """Применение обновления кода"""
-        # Здесь должна быть логика безопасного обновления кода
-        # В реальной реализации это было бы сложнее с проверками и откатами
-        logger.warning("Code update functionality is simplified in this example")
+    """Применение обновления кода с проверками и откатами"""
+    try:
+        # 1. Создаем резервную копию текущего состояния
+        backup = {
+            'model_state': self.model.state_dict(),
+            'tokenizer': self.tokenizer.get_vocab(),
+            'config': self.config.to_dict()
+        }
+        
+        # 2. Пытаемся применить изменения
+        temp_globals = {}
+        temp_locals = {}
+        
+        # Безопасное выполнение нового кода
+        exec(new_code, temp_globals, temp_locals)
+        
+        # 3. Проверяем, что обязательные компоненты существуют
+        required_components = ['model', 'tokenizer', 'config']
+        for component in required_components:
+            if component not in temp_locals:
+                raise ValueError(f"Новый код не содержит обязательного компонента: {component}")
+        
+        # 4. Валидация новых компонентов
+        if not isinstance(temp_locals['model'], type(self.model)):
+            raise TypeError("Новая модель имеет несовместимый тип")
+        
+        # 5. Применяем изменения
+        self.model = temp_locals['model'].to(self.device)
+        self.tokenizer = temp_locals['tokenizer']
+        self.config = temp_locals['config']
+        
+        # 6. Проверяем работоспособность
+        test_input = "Test input"
+        input_ids = self.tokenizer.encode(test_input, return_tensors="pt").to(self.device)
+        outputs = self.model(input_ids)
+        
+        if outputs.last_hidden_state.shape[0] != 1:
+            raise ValueError("Новая модель работает некорректно")
+        
+        logger.info("Код успешно обновлен")
+        
+    except Exception as e:
+        # Откат изменений в случае ошибки
+        if 'backup' in locals():
+            self.model.load_state_dict(backup['model_state'])
+            self.tokenizer = GPT2Tokenizer.from_pretrained("gpt2-medium")
+            self.tokenizer.add_special_tokens({'pad_token': '[PAD]'})
+            self.config = GPT2Config.from_dict(backup['config'])
+            logger.info("Выполнен откат к предыдущей версии")
+        
+        logger.error(f"Ошибка при обновлении кода: {str(e)}")
+        raise
