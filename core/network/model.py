@@ -23,6 +23,15 @@ class SinNetwork(nn.Module):
         self.text_processor = TextProcessor()
         self.code_analyzer = CodeAnalyzer()
         self.modifier = AdvancedCodeModifier(self)
+        self.api_server = APIServer(self, self.manager)
+        self.monitor = ResourceMonitor()
+        self.backup_system = BackupSystem(config.get('backup', {}))
+        self.document_processor = DocumentProcessor()
+        self.visualizer = TrainingVisualizer()
+        self.template_engine = TemplateEngine()
+        
+        # Запуск мониторинга ресурсов
+        self.monitor.start()
         
         # Системные параметры
         self.experience = 0
@@ -31,6 +40,41 @@ class SinNetwork(nn.Module):
             'coding': 1,
             'learning': 1
         }
+
+    def start_api_server(self, host="0.0.0.0", port=8000):
+        """Запуск API сервера"""
+        self.api_server.run(host=host, port=port)
+
+    def create_backup(self, components=None):
+        """Создание бэкапа системы"""
+        if components is None:
+            components = [
+                "data/models",
+                "data/training",
+                "config.json"
+            ]
+        return self.backup_system.create_backup(components)
+
+    def fine_tune(self, dataset, target_metric="accuracy"):
+        """Тонкая настройка гиперпараметров"""
+        tuner = HyperparameterTuner(self, dataset.train_loader, dataset.val_loader)
+        best_params = tuner.tune()
+        self.apply_hyperparameters(best_params)
+        return best_params
+
+    def generate_from_template(self, template_name, context):
+        """Генерация кода по шаблону"""
+        if not self.template_engine.validate_context(template_name, context):
+            raise ValueError("Context doesn't match template requirements")
+        return self.template_engine.generate_from_template(template_name, context)
+
+    def process_document(self, file_path):
+        """Обработка документа (PDF/DOCX/изображение)"""
+        return self.document_processor.process_file(file_path)
+
+    def get_resource_usage(self):
+        """Получение текущего использования ресурсов"""
+        return self.monitor.get_report()
 
     def forward(self, input_ids: torch.Tensor, attention_mask: torch.Tensor) -> torch.Tensor:
         return self.model(input_ids, attention_mask=attention_mask).logits
