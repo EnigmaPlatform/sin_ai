@@ -1,11 +1,14 @@
+# core/plugins.py
+
 import importlib
 import logging
 from pathlib import Path
-from typing import Dict, Type, List, Any
+from typing import Dict, Type, List, Any, Optional
 from sin_ai.core.network import SinNetwork
 from sin_ai.plugins.base import SinPlugin
 
 logger = logging.getLogger(__name__)
+
 
 class PluginManager:
     """
@@ -18,7 +21,7 @@ class PluginManager:
     ...     plugin.initialize(sin_instance)
     """
     
-    def __init__(self, sin_instance: SinNetwork):
+    def __init__(self, sin_instance: SinNetwork) -> None:
         self.sin = sin_instance
         self.plugins_dir = Path(__file__).parent.parent / "plugins"
         self.loaded_plugins: Dict[str, SinPlugin] = {}
@@ -31,7 +34,7 @@ class PluginManager:
             
         return list(self.plugins_dir.glob("*.py"))
 
-    def load_plugin(self, plugin_file: Path) -> Type[SinPlugin] | None:
+    def load_plugin(self, plugin_file: Path) -> Optional[Type[SinPlugin]]:
         """Загрузка одного плагина из файла"""
         if plugin_file.name.startswith('_') or plugin_file.name == 'base.py':
             return None
@@ -53,7 +56,7 @@ class PluginManager:
             
         return None
 
-    def initialize_plugin(self, plugin_class: Type[SinPlugin]) -> SinPlugin | None:
+    def initialize_plugin(self, plugin_class: Type[SinPlugin]) -> Optional[SinPlugin]:
         """Инициализация экземпляра плагина"""
         try:
             plugin = plugin_class()
@@ -77,7 +80,7 @@ class PluginManager:
         logger.info(f"Успешно загружено {len(self.loaded_plugins)} плагинов")
         return self.loaded_plugins
 
-    def get_plugin(self, name: str) -> SinPlugin | None:
+    def get_plugin(self, name: str) -> Optional[SinPlugin]:
         """Получение загруженного плагина по имени"""
         return self.loaded_plugins.get(name)
 
