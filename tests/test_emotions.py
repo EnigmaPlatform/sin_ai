@@ -1,5 +1,5 @@
 import unittest
-from sin_ai.core.emotions import EmotionEngine, EmotionResponse
+from core.emotions import EmotionEngine, EmotionResponse
 
 class TestEmotionEngine(unittest.TestCase):
     def setUp(self):
