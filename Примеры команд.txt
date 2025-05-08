@@ -1,11 +1,86 @@
-chat Привет! Как дела? - пообщаться с Sin
+chat [сообщение]        - Общение с Sin AI
+learn [путь_к_файлу]    - Обучение из файла
+learn_code [язык] [код] - Обучение на примере кода
+query [запрос]          - Запрос к DeepSeek API
+save [имя_модели]       - Сохранение текущей модели
+list                    - Список сохраненных моделей
+load [имя/номер]        - Загрузка модели
+delete [имя/номер]      - Удаление модели
+propose                 - Предложить новый функционал
+status                  - Показать статус обучения
+plugins                 - Список загруженных плагинов
+exit                    - Выход
 
-learn data/documents/sample.txt - обучить Sin из файла
+__________________________
+Примеры команд обучения
 
-learn_code python "print('Hello')" - обучить на примере кода
+# Обучение из текстового файла
+learn data/documents/science.txt
 
-query Как работает машинное обучение? - запросить информацию у DeepSeek
+# Обучение на Python коде
+learn_code python "def factorial(n): return 1 if n == 0 else n * factorial(n-1)"
 
-propose - предложить новый функционал
+# Обучение из Word документа
+learn data/documents/report.docx
 
-status - показать текущий статус обучения
+# Обучение из PDF
+learn data/documents/book.pdf
+
+_________________________
+
+Команды работы с моделями
+
+# Сохранение текущей модели
+save my_trained_model
+
+# Загрузка модели по имени
+load my_trained_model
+
+# Загрузка модели по номеру (из списка)
+load 2
+
+# Удаление модели
+delete old_model
+
+____________________________
+
+
+Команды мониторинга (если включен --monitor)
+
+# Просмотр метрик (curl или браузер)
+curl http://localhost:8001/metrics
+
+# Примеры ключевых метрик:
+sin_requests_total - Всего запросов
+sin_learning_progress - Прогресс обучения (0-100)
+sin_model_level - Текущий уровень модели
+
+________________________
+
+Дополнительные утилиты
+
+# Запуск тестов
+python -m pytest tests/
+
+# Генерация документации
+sphinx-build docs/ docs/_build/
+
+# Форматирование кода
+black .
+
+___________________________
+
+Пример сессии работы
+
+# Активация окружения
+source venv/bin/activate
+
+# Запуск с мониторингом
+python main.py --monitor
+
+# В интерфейсе:
+Sin> learn data/docs/ai.txt
+Sin> chat Расскажи про ИИ
+Sin> propose
+Sin> status
+Sin> exit
