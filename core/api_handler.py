@@ -7,6 +7,7 @@ from typing import Dict, Optional, List
 from dotenv import load_dotenv
 import logging
 from datetime import datetime
+from .api_cache import APICache
 
 logger = logging.getLogger(__name__)
 
@@ -16,6 +17,7 @@ class DeepSeekAPIHandler:
     def __init__(self):
         self.api_key = os.getenv('DEEPSEEK_API_KEY')
         self.base_url = "https://api.deepseek.com/v1"
+        self.cache = APICache()
         self.session = requests.Session()
         self.session.headers.update({
             'Authorization': f'Bearer {self.api_key}',
@@ -23,6 +25,10 @@ class DeepSeekAPIHandler:
         })
     
     def query(self, prompt: str, context: Optional[List[str]] = None) -> Dict:
+        cache_key = f"{prompt}-{'-'.join(context or [])}"
+        cached = self.cache.get(cache_key)
+        if cached:
+            return cached
         if not self.api_key:
             raise ValueError("DeepSeek API key not configured")
         """Отправка запроса к DeepSeek API"""
