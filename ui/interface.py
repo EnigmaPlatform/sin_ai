@@ -9,13 +9,68 @@ from ..core.level_system import LevelSystem
 logger = logging.getLogger(__name__)
 
 class CommandLineInterface(cmd.Cmd):
-    prompt = "Sin> "
-    
     def __init__(self, network: SinNetwork):
         super().__init__()
         self.sin = network
         self.model_manager = ModelManager()
         self.current_file = None
+        self.plugins = self._load_plugins()
+
+    def _load_plugins(self) -> Dict[str, SinPlugin]:
+        plugins = {}
+        # Динамическая загрузка плагинов
+        plugins_dir = Path(__file__).parent.parent / "plugins"
+        for plugin_file in plugins_dir.glob("*.py"):
+            if plugin_file.name.startswith("_") or plugin_file.name == "base.py":
+                continue
+            
+            module_name = f"sin_ai.plugins.{plugin_file.stem}"
+            try:
+                module = __import__(module_name, fromlist=[''])
+                for name, obj in module.__dict__.items():
+                    if (isinstance(obj, type) and 
+                        issubclass(obj, SinPlugin) and 
+                        obj != SinPlugin):
+                        plugin = obj()
+                        plugin.initialize(self.sin)
+                        plugins[plugin_file.stem] = plugin
+            except Exception as e:
+                logger.error(f"Failed to load plugin {plugin_file}: {e}")
+        
+        return plugins
+    
+    def get_names(self):
+        names = super().get_names()
+        # Добавляем команды из плагинов
+        for plugin in self.plugins.values():
+            names.extend(f"do_{cmd}" for cmd in plugin.get_commands())
+        return names
+    
+    def __getattr__(self, name):
+        # Обработка команд плагинов
+        if name.startswith('do_'):
+            cmd = name[3:]
+            for plugin in self.plugins.values():
+                if cmd in plugin.get_commands():
+                    return lambda arg: self._execute_plugin_command(plugin, cmd, arg)
+        
+        raise AttributeError(f"'CommandLineInterface' object has no attribute '{name}'")
+    
+    def _execute_plugin_command(self, plugin, command, args):
+        result = plugin.execute_command(command, args)
+        print(result)
+    
+    def do_plugins(self, arg):
+        """Список загруженных плагинов"""
+        if not self.plugins:
+            print("Нет загруженных плагинов")
+            return
+        
+        print("\nЗагруженные плагины:")
+        for i, (name, plugin) in enumerate(self.plugins.items(), 1):
+            print(f"{i}. {name}")
+            for cmd, desc in plugin.get_commands().items():
+                print(f"   {cmd}: {desc}")
     
     def precmd(self, line):
         logger.info(f"Command: {line}")
