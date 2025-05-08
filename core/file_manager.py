@@ -5,6 +5,10 @@ class FileManager:
     def __init__(self, root_dir="sin_ai"):
         self.root = Path(root_dir)
 
+    def _validate_path(self, path):
+    if "../" in str(path):
+        raise SecurityError("Недопустимый путь")
+
     def write_file(self, path: str, content: str):
         target = self.root / path
         target.parent.mkdir(exist_ok=True)
