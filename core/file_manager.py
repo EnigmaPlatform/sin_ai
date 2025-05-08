@@ -9,6 +9,10 @@ class FileManager:
     if "../" in str(path):
         raise SecurityError("Недопустимый путь")
 
+    def load_archetypes(self, config_path):
+    with open(config_path) as f:
+        self.ARCHETYPES.update(json.load(f))
+
     def write_file(self, path: str, content: str):
         target = self.root / path
         target.parent.mkdir(exist_ok=True)
