@@ -1,3 +1,5 @@
+# core/network.py
+
 import torch
 import torch.nn as nn
 from transformers import GPT2Model, GPT2Config, GPT2Tokenizer
@@ -44,10 +46,6 @@ class SinNetwork(nn.Module):
     >>> response = sin.query_deepseek("Что такое искусственный интеллект?")
     >>> print(response)
     """
-    def __init__(self):
-        self.deepseek_trainer = DeepSeekTrainer(self)
-
-    
     def __init__(self, model_name: str = "sin_base"):
         super(SinNetwork, self).__init__()
         self.model_name = model_name
@@ -72,6 +70,7 @@ class SinNetwork(nn.Module):
         self.level_system = LevelSystem()
         self.visualizer = TrainingVisualizer()
         self.model_manager = ModelManager()
+        self.deepseek_trainer = DeepSeekTrainer(self)
         
         # Состояние
         self.current_context = []
@@ -83,9 +82,7 @@ class SinNetwork(nn.Module):
         outputs = self.model(input_ids=input_ids, attention_mask=attention_mask)
         return outputs.last_hidden_state
     
-    def communicate(self, message):
-    raw_response = self._generate_response(message)  # обычная генерация
-    return self.personality.format_response(raw_response)  # применение личности
+    def communicate(self, message: str) -> str:
         """
         Основной метод для общения с пользователем.
         
@@ -95,34 +92,34 @@ class SinNetwork(nn.Module):
         """
         # Обновление контекста
         try:
-        self.current_context.append(f"User: {message}")
-        
-        # Подготовка ввода
-        input_text = "\n".join(self.current_context[-5:])
-        input_ids = self.tokenizer.encode(input_text, return_tensors="pt").to(self.device)
-        attention_mask = torch.ones_like(input_ids).to(self.device)
-        
-        # Генерация ответа
-        with torch.no_grad():
-            outputs = self.model.generate(
-                input_ids,
-                attention_mask=attention_mask,
-                max_length=200,
-                temperature=0.7,
-                do_sample=True
-            )
-        
-        response = self.tokenizer.decode(outputs[0], skip_special_tokens=True)
-        response = response[len(input_text):].strip()
-        
-        # Обновление контекста
-        self.current_context.append(f"Sin: {response}")
-        
-        return response
+            self.current_context.append(f"User: {message}")
+            
+            # Подготовка ввода
+            input_text = "\n".join(self.current_context[-5:])
+            input_ids = self.tokenizer.encode(input_text, return_tensors="pt").to(self.device)
+            attention_mask = torch.ones_like(input_ids).to(self.device)
+            
+            # Генерация ответа
+            with torch.no_grad():
+                outputs = self.model.generate(
+                    input_ids,
+                    attention_mask=attention_mask,
+                    max_length=200,
+                    temperature=0.7,
+                    do_sample=True
+                )
+            
+            response = self.tokenizer.decode(outputs[0], skip_special_tokens=True)
+            response = response[len(input_text):].strip()
+            
+            # Обновление контекста
+            self.current_context.append(f"Sin: {response}")
+            
+            return response
 
-    except Exception as e:
-        logger.error(f"Communication error: {str(e)}")
-        return "Sorry, an error occurred while processing your message"
+        except Exception as e:
+            logger.error(f"Communication error: {str(e)}")
+            return "Sorry, an error occurred while processing your message"
     
     @validate_input(text=validate_text)
     def learn_from_text(self, text: str) -> None:
@@ -144,14 +141,15 @@ class SinNetwork(nn.Module):
     
     @validate_input(file_path=validate_file_path)
     def learn_from_file(self, file_path: str) -> None:
-    if not Path(file_path).exists():
-        raise FileNotFoundError(f"File not found: {file_path}")
         """
         Обучение из файла (поддерживает txt, docx, pdf).
         
         Пример:
         >>> sin.learn_from_file("data/document.pdf")
         """
+        if not Path(file_path).exists():
+            raise FileNotFoundError(f"File not found: {file_path}")
+            
         self.is_learning = True
         try:
             if file_path.endswith('.txt'):
