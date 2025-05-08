@@ -6,6 +6,13 @@ class DeepSeekTrainer:
             'communication': self._train_communication
         }
 
+    def generate_task(self):
+    prompt = f"""
+    Сгенерируй задачу для ИИ с характеристиками: 
+    {self.sin.personality.current_mode}
+    """
+    return self.sin.query_deepseek(prompt)
+
     async def train(self, task_type: str):
         # DeepSeek генерирует задачу
         task = self.sin.query_deepseek(f"Сгенерируй {task_type} задачу для обучения ИИ")
