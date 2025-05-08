@@ -1,4 +1,4 @@
-from sin_ai.plugins.base import SinPlugin
+from plugins.base import SinPlugin
 
 
 class ExamplePlugin(SinPlugin):
