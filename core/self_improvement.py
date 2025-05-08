@@ -2,6 +2,10 @@ class SelfImprovementEngine:
     def __init__(self, sin_instance):
         self.sin = sin_instance
 
+    def _log_change(self, change):
+    with open("data/change_log.jsonl", "a") as f:
+        f.write(json.dumps(change) + "\n")
+
     def analyze_and_propose(self):
         # Анализ слабых мест
         analysis = self.sin.query_deepseek(
