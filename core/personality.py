@@ -1,5 +1,4 @@
 
-
 class PersonalityCore:
     ARCHETYPES = {
         'neutral': {"traits": []},
