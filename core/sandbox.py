@@ -1,11 +1,17 @@
+# core/sandbox.py
+
 import sys
 import io
 import contextlib
 import traceback
-from typing import Dict, Optional
+import re
+import resource
+from typing import Dict, Any, Optional
+from multiprocessing import Process, Queue
 import logging
 
 logger = logging.getLogger(__name__)
+
 
 class CodeSandbox:
     def __init__(self):
@@ -15,8 +21,8 @@ class CodeSandbox:
         }
         self.max_execution_time = 5  # seconds
         self.max_memory_usage = 100  # MB
-        
-    def test_code(self, code: str, timeout: int = 5) -> Dict:
+
+    def test_code(self, code: str, timeout: int = 5) -> Dict[str, Any]:
         """Безопасное выполнение кода с ограничениями"""
         # Добавляем проверки на опасные конструкции
         forbidden_patterns = [
@@ -24,14 +30,14 @@ class CodeSandbox:
             r'open\(', r'eval\(', r'exec\(', r'import\s+os',
             r'import\s+sys', r'import\s+subprocess'
         ]
-        
+
         for pattern in forbidden_patterns:
             if re.search(pattern, code):
                 return {
                     'success': False,
                     'error': f"Запрещенная конструкция: {pattern}"
                 }
-        
+
         # Создаем безопасное окружение
         safe_globals = {
             '__builtins__': {
@@ -40,16 +46,15 @@ class CodeSandbox:
                 if name in self._get_safe_builtins()
             }
         }
-        
+
         # Добавляем безопасные модули
         for mod in self.safe_modules:
             try:
                 safe_globals[mod] = __import__(mod)
             except ImportError:
-                pass
-        
+                logger.warning(f"Module {mod} not available")
+
         # Ограничиваем ресурсы
-        import resource
         def set_limits():
             resource.setrlimit(
                 resource.RLIMIT_CPU,
@@ -59,16 +64,14 @@ class CodeSandbox:
                 resource.RLIMIT_AS,
                 (self.max_memory_usage * 1024 * 1024, self.max_memory_usage * 1024 * 1024)
             )
-        
+
         # Выполнение с ограничениями
         old_stdout = sys.stdout
         sys.stdout = captured_output = io.StringIO()
-        
+
         try:
-            # Создаем новый процесс для изоляции
-            from multiprocessing import Process, Queue
             result_queue = Queue()
-            
+
             def worker():
                 try:
                     set_limits()
@@ -79,30 +82,30 @@ class CodeSandbox:
                         'variables': {
                             k: v for k, v in local_vars.items()
                             if not k.startswith('__')
-                        }
+                        },
+                        'output': captured_output.getvalue()
                     })
                 except Exception as e:
                     result_queue.put({
                         'success': False,
-                        'error': traceback.format_exc()
+                        'error': traceback.format_exc(),
+                        'output': captured_output.getvalue()
                     })
-            
+
             p = Process(target=worker)
             p.start()
             p.join(timeout=self.max_execution_time + 1)
-            
+
             if p.is_alive():
                 p.terminate()
                 p.join()
                 raise TimeoutError("Execution timed out")
-            
+
             if result_queue.empty():
                 raise RuntimeError("No result from worker process")
-            
-            result = result_queue.get()
-            result['output'] = captured_output.getvalue()
-            return result
-            
+
+            return result_queue.get()
+
         except Exception as e:
             return {
                 'success': False,
@@ -111,8 +114,8 @@ class CodeSandbox:
             }
         finally:
             sys.stdout = old_stdout
-    
-    def _get_safe_builtins(self):
+
+    def _get_safe_builtins(self) -> set:
         return {
             'range', 'enumerate', 'len', 'list', 'dict', 'set', 'tuple',
             'str', 'int', 'float', 'bool', 'max', 'min', 'sum', 'abs',
