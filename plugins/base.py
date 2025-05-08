@@ -2,7 +2,7 @@
 
 from abc import ABC, abstractmethod
 from typing import Dict, Any
-from sin_ai.core.network import SinNetwork
+from core.network import SinNetwork
 
 
 class SinPlugin(ABC):
