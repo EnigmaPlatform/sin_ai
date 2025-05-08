@@ -1,5 +1,6 @@
 from functools import wraps
 from typing import Callable, Any, Dict
+from pathlib import Path
 import re
 
 def validate_input(**validators: Dict[str, Callable]) -> Callable:
