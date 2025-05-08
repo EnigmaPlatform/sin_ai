@@ -1,7 +1,9 @@
+# core/api_handler.py
+
 import os
 import requests
 import json
-from typing import Dict, Optional
+from typing import Dict, Optional, List
 from dotenv import load_dotenv
 import logging
 from datetime import datetime
@@ -21,8 +23,8 @@ class DeepSeekAPIHandler:
         })
     
     def query(self, prompt: str, context: Optional[List[str]] = None) -> Dict:
-    if not self.api_key:
-        raise ValueError("DeepSeek API key not configured")
+        if not self.api_key:
+            raise ValueError("DeepSeek API key not configured")
         """Отправка запроса к DeepSeek API"""
         if context is None:
             context = []
