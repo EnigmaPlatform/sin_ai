@@ -1,7 +1,7 @@
 # api/server.py
 
 from fastapi import FastAPI, HTTPException
-from sin_ai.core.network import SinNetwork
+from core.network import SinNetwork
 from pydantic import BaseModel
 import uvicorn
 from typing import List, Dict, Any
