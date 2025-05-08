@@ -292,3 +292,16 @@ def _extract_text_from_pdf(self, file_path: str) -> str:
         
         logger.error(f"Ошибка при обновлении кода: {str(e)}")
         raise
+
+@validate_input(text=validate_text)
+def learn_from_text(self, text: str) -> None:
+    """Обучение на текстовых данных"""
+    self.is_learning = True
+    try:
+        self.learning_engine.train_on_text(text)
+        self.level_system.add_experience(10)
+        logger.info("Successfully learned from text")
+    except Exception as e:
+        logger.error(f"Error learning from text: {e}")
+    finally:
+        self.is_learning = False
