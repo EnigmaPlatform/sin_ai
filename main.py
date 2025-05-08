@@ -1,8 +1,8 @@
-from sin_ai.core.network import SinNetwork
-from sin_ai.ui.interface import CommandLineInterface
-from sin_ai.core.monitoring import start_monitoring
-from sin_ai.core.plugins import PluginManager
-from sin_ai.models.model_manager import ModelManager
+from core.network import SinNetwork
+from ui.interface import CommandLineInterface
+from core.monitoring import start_monitoring
+from core.plugins import PluginManager
+from models.model_manager import ModelManager
 import logging
 import argparse
 from pathlib import Path
