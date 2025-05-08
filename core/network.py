@@ -8,6 +8,7 @@ from pathlib import Path
 import json
 from datetime import datetime
 from ..models.model_manager import ModelManager
+from .emotions import EmotionEngine
 from .learning import LearningEngine
 from .memory import MemorySystem
 from .api_handler import DeepSeekAPIHandler
