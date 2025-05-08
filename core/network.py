@@ -138,6 +138,8 @@ class SinNetwork(nn.Module):
     
     @validate_input(file_path=validate_file_path)
     def learn_from_file(self, file_path: str) -> None:
+    if not Path(file_path).exists():
+        raise FileNotFoundError(f"File not found: {file_path}")
         """
         Обучение из файла (поддерживает txt, docx, pdf).
         
