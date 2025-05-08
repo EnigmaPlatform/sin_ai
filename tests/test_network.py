@@ -17,6 +17,11 @@ class TestSinNetwork(unittest.TestCase):
         response = self.network.communicate("Hello")
         self.assertIsInstance(response, str)
         self.assertGreater(len(response), 0)
+
+    def test_communicate_error(self):
+    with patch.object(self.network.model, 'generate', side_effect=Exception("Test error")):
+        with self.assertRaises(Exception):
+            self.network.communicate("test")
     
     @patch('sin_ai.core.network.SinNetwork._extract_text_from_pdf')
     def test_learn_from_pdf(self, mock_extract):
