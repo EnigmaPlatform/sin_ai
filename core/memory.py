@@ -1,5 +1,5 @@
 from typing import List, Dict, Optional
-from annoy import AnnoyIndex 
+import nmslib
 import json
 from datetime import datetime
 from pathlib import Path
