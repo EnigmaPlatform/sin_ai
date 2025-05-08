@@ -4,8 +4,8 @@ import importlib
 import logging
 from pathlib import Path
 from typing import Dict, Type, List, Any, Optional
-from sin_ai.core.network import SinNetwork
-from sin_ai.plugins.base import SinPlugin
+from core.network import SinNetwork
+from plugins.base import SinPlugin
 
 logger = logging.getLogger(__name__)
 
