@@ -180,6 +180,10 @@ class CommandLineInterface(cmd.Cmd):
         print("\nСохраненные модели:")
         for i, model in enumerate(models, 1):
             print(f"{i}. {model['model_name']} ({model['save_date']})")
+
+     def do_train(self, args):
+    """Запуск тренировки: train [programming|communication]"""
+    self.sin.deepseek_trainer.train(args)
     
     def do_load(self, arg):
         """Загрузка модели: load [имя_модели или номер]"""
