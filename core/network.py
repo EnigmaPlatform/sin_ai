@@ -181,6 +181,58 @@ class SinNetwork(nn.Module):
             for page in reader.pages:
                 text.append(page.extract_text())
         return "\n".join(text)
+
+    def learn_from_json(self, 
+                      file_path: str, 
+                      text_fields: List[str] = None,
+                      context_field: str = None) -> None:
+        """
+        Обучение на структурированном JSON
+        
+        :param file_path: Путь к JSON-файлу
+        :param text_fields: Поля для извлечения текста (например, ["text", "answer"])
+        :param context_field: Поле контекста (например, "situation")
+        """
+        path = Path(file_path)
+        if not path.exists():
+            raise FileNotFoundError(f"JSON file not found: {file_path}")
+        
+        data = self._load_json(path)
+        processed_text = self._process_json_data(data, text_fields, context_field)
+        self.learn_from_text(processed_text)
+
+    def _load_json(self, path: Path) -> Union[Dict, List]:
+        """Безопасная загрузка JSON"""
+        with open(path, 'r', encoding='utf-8') as f:
+            try:
+                return json.load(f)
+            except json.JSONDecodeError as e:
+                raise ValueError(f"Invalid JSON: {e}")
+
+    def _process_json_data(self, 
+                         data: Union[Dict, List], 
+                         text_fields: List[str],
+                         context_field: str) -> str:
+        """Рекурсивная обработка JSON-структур"""
+        result = []
+        
+        if isinstance(data, list):
+            for item in data:
+                result.append(self._process_json_data(item, text_fields, context_field))
+        elif isinstance(data, dict):
+            # Извлечение контекста
+            context = data.get(context_field, "") if context_field else ""
+            
+            # Извлечение текстовых полей
+            texts = []
+            for field in text_fields or []:
+                if field in data:
+                    texts.append(str(data[field]))
+            
+            if texts:
+                result.append(f"{context}\n" + "\n".join(texts) if context else "\n".join(texts))
+        
+        return "\n\n".join(filter(None, result))
     
     @validate_input(language=validate_language)
     def learn_from_code(self, code: str, language: str = 'python') -> None:
