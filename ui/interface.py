@@ -169,6 +169,11 @@ class CommandLineInterface(cmd.Cmd):
         print(f"Сохранение модели как {model_name}...")
         self.sin.save_model(model_name)
         print("Модель сохранена")
+
+     def do_personality(self, args):
+    """Смена личности: personality [scientist|friend|neutral]"""
+    self.sin.personality.set_mode(args)
+    print(f"Установлен режим: {args}")
     
     def do_list(self, arg):
         """Список сохраненных моделей"""
