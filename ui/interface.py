@@ -14,7 +14,7 @@ class CommandLineInterface(cmd.Cmd):
         self.sin = network
         self.model_manager = ModelManager()
         self.current_file = None
-        self.plugins = self._load_plugins()
+        self.plugins = {}  # Словарь загруженных плагинов
 
     def _load_plugins(self) -> Dict[str, SinPlugin]:
         plugins = {}
@@ -61,7 +61,7 @@ class CommandLineInterface(cmd.Cmd):
         print(result)
     
     def do_plugins(self, arg):
-        """Список загруженных плагинов"""
+        """Список загруженных плагинов и их команд"""
         if not self.plugins:
             print("Нет загруженных плагинов")
             return
@@ -71,6 +71,30 @@ class CommandLineInterface(cmd.Cmd):
             print(f"{i}. {name}")
             for cmd, desc in plugin.get_commands().items():
                 print(f"   {cmd}: {desc}")
+
+     def register_plugins(self, plugins: Dict[str, SinPlugin]):
+        """Регистрация плагинов в интерфейсе"""
+        self.plugins = plugins
+        for cmd_name, description in self.get_plugin_commands().items():
+            setattr(self, f'do_{cmd_name}', self._create_plugin_command(cmd_name))
+
+    def _create_plugin_command(self, cmd_name: str):
+        """Динамическое создание методов для команд плагинов"""
+        def plugin_command(args):
+            for plugin in self.plugins.values():
+                if cmd_name in plugin.get_commands():
+                    result = plugin.execute_command(cmd_name, args)
+                    print(result)
+                    return
+            print(f"Команда {cmd_name} не найдена в плагинах")
+        return plugin_command
+
+    def get_plugin_commands(self) -> Dict[str, str]:
+        """Получение всех команд из плагинов"""
+        commands = {}
+        for plugin in self.plugins.values():
+            commands.update(plugin.get_commands())
+        return commands
     
     def precmd(self, line):
         logger.info(f"Command: {line}")
