@@ -1,5 +1,4 @@
 from typing import List, Dict, Optional
-import nmslib
 import json
 from datetime import datetime
 from pathlib import Path
@@ -12,10 +11,7 @@ class MemorySystem:
         self.memory_file = Path(memory_file)
         self.memory = self._load_memory()
         self.embedder = SentenceTransformer('all-MiniLM-L6-v2')
-        self.index = AnnoyIndex(self.embedder.get_sentence_embedding_dimension(), 'angular')
-        self.memory_embeddings = self._load_embeddings()  # Инициализация при создании
-
-        self._build_index()
+        self.embeddings = self._load_embeddings()  # Теперь храним эмбеддинги в numpy массиве
     
     def add_memory(self, content: str, tags: List[str] = None, importance: float = 0.5) -> None:
         """Добавление информации в память"""
@@ -34,30 +30,23 @@ class MemorySystem:
         self._update_embeddings(content)
         self._save_memory()
     
-    def _build_index(self):
-        """Построение индекса для быстрого поиска"""
-        self.index.unload()
-        if len(self.memory) == 0:
-            return
-            
-        embeddings = self.embedder.encode([m['content'] for m in self.memory])
-        for i, emb in enumerate(embeddings):
-            self.index.add_item(i, emb)
-        self.index.build(10)  # 10 деревьев
-    
     def retrieve_memory(self, query: str, top_k: int = 3) -> List[Dict]:
-        """Поиск с использованием векторного индекса"""
-        query_embedding = self.embedder.encode(query)
-        indices = self.index.get_nns_by_vector(
-            query_embedding, 
-            top_k,
-            include_distances=True
-        )
+        """Поиск похожих записей через косинусную схожесть"""
+        if len(self.memory) == 0:
+            return []
+
+        query_embedding = self.embedder.encode(query).reshape(1, -1)
+        
+        # Вычисляем схожесть со всеми сохраненными эмбеддингами
+        similarities = cosine_similarity(query_embedding, self.embeddings)[0]
+        
+        # Получаем индексы top_k наиболее похожих записей
+        top_indices = np.argsort(similarities)[-top_k:][::-1]
         
         results = []
-        for idx, distance in zip(*indices):
-            entry = self.memory[idx]
-            entry['similarity'] = 1 - distance  # преобразуем расстояние в схожесть
+        for idx in top_indices:
+            entry = self.memory[idx].copy()
+            entry['similarity'] = float(similarities[idx])  # преобразуем numpy.float32 в python float
             entry['last_accessed'] = datetime.now().isoformat()
             results.append(entry)
         
@@ -65,7 +54,7 @@ class MemorySystem:
         return results
     
     def get_recent_topics(self, top_k: int = 3) -> List[str]:
-        """Получение недавних тем"""
+        """Получение недавних тем (без изменений)"""
         sorted_memory = sorted(
             self.memory,
             key=lambda x: x['last_accessed'],
@@ -74,7 +63,7 @@ class MemorySystem:
         return [entry['content'][:100] for entry in sorted_memory[:top_k]]
     
     def _load_memory(self) -> List[Dict]:
-        """Загрузка памяти из файла"""
+        """Загрузка памяти из файла (без изменений)"""
         try:
             if self.memory_file.exists():
                 with open(self.memory_file, 'r') as f:
@@ -84,7 +73,7 @@ class MemorySystem:
         return []
     
     def _save_memory(self) -> None:
-        """Сохранение памяти в файл"""
+        """Сохранение памяти в файл (без изменений)"""
         self.memory_file.parent.mkdir(exist_ok=True, parents=True)
         with open(self.memory_file, 'w') as f:
             json.dump(self.memory, f, indent=2)
@@ -100,7 +89,7 @@ class MemorySystem:
     def _update_embeddings(self, new_content: str) -> None:
         """Обновление эмбеддингов с новым контентом"""
         new_embedding = self.embedder.encode([new_content])
-        if len(self.memory_embeddings) == 0:
-            self.memory_embeddings = new_embedding
+        if len(self.embeddings) == 0:
+            self.embeddings = new_embedding
         else:
-            self.memory_embeddings = np.vstack([self.memory_embeddings, new_embedding])
+            self.embeddings = np.vstack([self.embeddings, new_embedding])
