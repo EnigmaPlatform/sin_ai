@@ -1,5 +1,6 @@
 from sin_ai.plugins.base import SinPlugin
 
+
 class ExamplePlugin(SinPlugin):
     """Пример плагина для демонстрации возможностей"""
     
@@ -10,7 +11,7 @@ class ExamplePlugin(SinPlugin):
     def get_commands(self):
         return {
             'example': "Пример команды плагина",
-            'count': "Счетчик вызовов",
+            'count': "Счетчик вызовов", 
             'ask': "Задать вопрос через Sin"
         }
     
