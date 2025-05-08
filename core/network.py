@@ -94,23 +94,36 @@ class SinNetwork(nn.Module):
     
     def learn_from_file(self, file_path: str) -> None:
         """Обучение из файла"""
-        self.is_learning = True
-        try:
-            if file_path.endswith('.txt'):
-                with open(file_path, 'r', encoding='utf-8') as f:
-                    text = f.read()
-                self.learn_from_text(text)
-            elif file_path.endswith(('.doc', '.docx')):
-                text = self._extract_text_from_word(file_path)
-                self.learn_from_text(text)
-            else:
-                logger.warning(f"Unsupported file format: {file_path}")
-            
-            self.level_system.add_experience(20)
-        except Exception as e:
-            logger.error(f"Error learning from file: {e}")
-        finally:
-            self.is_learning = False
+    self.is_learning = True
+    try:
+        if file_path.endswith('.txt'):
+            with open(file_path, 'r', encoding='utf-8') as f:
+                text = f.read()
+            self.learn_from_text(text)
+        elif file_path.endswith(('.doc', '.docx')):
+            text = self._extract_text_from_word(file_path)
+            self.learn_from_text(text)
+        elif file_path.endswith('.pdf'):
+            text = self._extract_text_from_pdf(file_path)
+            self.learn_from_text(text)
+        else:
+            logger.warning(f"Unsupported file format: {file_path}")
+        
+        self.level_system.add_experience(20)
+    except Exception as e:
+        logger.error(f"Error learning from file: {e}")
+    finally:
+        self.is_learning = False
+
+def _extract_text_from_pdf(self, file_path: str) -> str:
+    """Извлечение текста из PDF"""
+    from PyPDF2 import PdfReader
+    text = []
+    with open(file_path, 'rb') as f:
+        reader = PdfReader(f)
+        for page in reader.pages:
+            text.append(page.extract_text())
+    return "\n".join(text)
     
     def learn_from_code(self, code: str, language: str = 'python') -> None:
         """Обучение на примере кода"""
