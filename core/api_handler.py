@@ -21,6 +21,8 @@ class DeepSeekAPIHandler:
         })
     
     def query(self, prompt: str, context: Optional[List[str]] = None) -> Dict:
+    if not self.api_key:
+        raise ValueError("DeepSeek API key not configured")
         """Отправка запроса к DeepSeek API"""
         if context is None:
             context = []
