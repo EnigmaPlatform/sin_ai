@@ -9,8 +9,9 @@ from pathlib import Path
 import sys
 from dotenv import load_dotenv
 
+
 def configure_logging(log_level=logging.INFO, log_file='sin_ai.log'):
-    """Настройка системы логирования"""
+    """Настройка системы логирования."""
     log_format = '%(asctime)s - %(name)s - %(levelname)s - %(message)s'
     
     handlers = [
@@ -28,16 +29,18 @@ def configure_logging(log_level=logging.INFO, log_file='sin_ai.log'):
     logging.getLogger('transformers').setLevel(logging.WARNING)
     logging.getLogger('urllib3').setLevel(logging.WARNING)
 
+
 def load_environment():
-    """Загрузка переменных окружения"""
+    """Загрузка переменных окружения."""
     env_path = Path(__file__).parent / '.env'
     if env_path.exists():
         load_dotenv(env_path)
     else:
         logging.warning(f"Файл .env не найден по пути: {env_path}")
 
+
 def parse_args():
-    """Разбор аргументов командной строки"""
+    """Разбор аргументов командной строки."""
     parser = argparse.ArgumentParser(description='Sin AI - Интеллектуальный ассистент')
     
     parser.add_argument(
@@ -74,8 +77,9 @@ def parse_args():
     
     return parser.parse_args()
 
+
 def initialize_network(model_name=None):
-    """Инициализация нейросети с обработкой ошибок"""
+    """Инициализация нейросети с обработкой ошибок."""
     try:
         model_manager = ModelManager()
         
@@ -94,8 +98,9 @@ def initialize_network(model_name=None):
         logging.critical(f"Ошибка инициализации нейросети: {str(e)}")
         sys.exit(1)
 
+
 def run_cli_interface(sin_instance, load_plugins=True):
-    """Запуск CLI интерфейса"""
+    """Запуск CLI интерфейса."""
     try:
         cli = CommandLineInterface(sin_instance)
         
@@ -116,8 +121,9 @@ def run_cli_interface(sin_instance, load_plugins=True):
         logging.critical(f"Критическая ошибка в интерфейсе: {str(e)}")
         sys.exit(1)
 
+
 def main():
-    """Основная функция запуска приложения"""
+    """Основная функция запуска приложения."""
     args = parse_args()
     
     # Настройка логирования
@@ -137,6 +143,7 @@ def main():
     
     # Запуск интерфейса
     run_cli_interface(sin, not args.no_plugins)
+
 
 if __name__ == "__main__":
     main()
