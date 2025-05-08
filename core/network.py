@@ -83,7 +83,9 @@ class SinNetwork(nn.Module):
         outputs = self.model(input_ids=input_ids, attention_mask=attention_mask)
         return outputs.last_hidden_state
     
-    def communicate(self, message: str) -> str:
+    def communicate(self, message):
+    raw_response = self._generate_response(message)  # обычная генерация
+    return self.personality.format_response(raw_response)  # применение личности
         """
         Основной метод для общения с пользователем.
         
