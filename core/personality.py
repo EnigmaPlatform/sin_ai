@@ -26,3 +26,7 @@ class PersonalityCore:
         if 'аналитичный' in traits:
             message = f"🤔 {message}"
         return message
+
+def communicate(self, message):
+    response = super().communicate(message)
+    return self.personality.format_response(response)
