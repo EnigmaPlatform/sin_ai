@@ -1,4 +1,4 @@
-core/personality.py
+
 
 class PersonalityCore:
     ARCHETYPES = {
