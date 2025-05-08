@@ -38,24 +38,27 @@ class ModelManager:
         
         logger.info(f"Model saved to {model_path}")
     
-    def load_model(self, model_name: str, model_class) -> Optional:
-    try:
-        model_path = self.model_dir / model_name
-        if not model_path.exists():
-            raise FileNotFoundError(f"Model directory {model_path} not found")
-            return None
-        
+    def load_model(self, model_name: str, model_class) -> Optional[Any]:
         try:
-            # Загрузка модели
-            model = model_class()
-            model.load_state_dict(torch.load(model_path / "model_weights.pt"))
-            model.eval()
+            model_path = self.model_dir / model_name
+            if not model_path.exists():
+                raise FileNotFoundError(f"Model directory {model_path} not found")
+                return None
             
-            logger.info(f"Model {model_name} loaded successfully")
-            return model
+            try:
+                # Загрузка модели
+                model = model_class()
+                model.load_state_dict(torch.load(model_path / "model_weights.pt"))
+                model.eval()
+                
+                logger.info(f"Model {model_name} loaded successfully")
+                return model
+            except Exception as e:
+                logger.error(f"Model loading failed: {str(e)}")
+                return None
         except Exception as e:
-        logger.error(f"Model loading failed: {str(e)}")
-        return None
+            logger.error(f"Error in load_model: {str(e)}")
+            return None
     
     def delete_model(self, model_name: str) -> bool:
         """Удаление модели"""
