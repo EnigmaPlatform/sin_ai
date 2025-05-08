@@ -1,6 +1,6 @@
 import unittest
 from unittest.mock import patch, MagicMock
-from sin_ai.core.network import SinNetwork
+from core.network import SinNetwork
 from pathlib import Path
 import torch
 
