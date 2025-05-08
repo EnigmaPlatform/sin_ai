@@ -1,3 +1,5 @@
+# plugins/my_plugin.py
+
 from sin_ai.plugins.base import SinPlugin
 
 class MyPlugin(SinPlugin):
