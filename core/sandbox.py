@@ -9,80 +9,112 @@ logger = logging.getLogger(__name__)
 
 class CodeSandbox:
     def __init__(self):
-        self.safe_builtins = {
-            'range', 'enumerate', 'len', 'list', 'dict', 'set', 'tuple',
-            'str', 'int', 'float', 'bool', 'max', 'min', 'sum', 'abs',
-            'zip', 'sorted', 'reversed'
+        self.safe_modules = {
+            'math', 'datetime', 'collections', 'itertools',
+            'numpy', 'pandas', 'json', 're'
         }
-    
+        self.max_execution_time = 5  # seconds
+        self.max_memory_usage = 100  # MB
+        
     def test_code(self, code: str, timeout: int = 5) -> Dict:
-        """Безопасное выполнение кода в песочнице"""
-        result = {
-            'success': False,
-            'output': '',
-            'error': '',
-            'execution_time': 0,
-            'variables': {}
-        }
+        """Безопасное выполнение кода с ограничениями"""
+        # Добавляем проверки на опасные конструкции
+        forbidden_patterns = [
+            r'__.*__', r'os\.', r'sys\.', r'subprocess\.',
+            r'open\(', r'eval\(', r'exec\(', r'import\s+os',
+            r'import\s+sys', r'import\s+subprocess'
+        ]
         
-        # Создаем безопасный globals
+        for pattern in forbidden_patterns:
+            if re.search(pattern, code):
+                return {
+                    'success': False,
+                    'error': f"Запрещенная конструкция: {pattern}"
+                }
+        
+        # Создаем безопасное окружение
         safe_globals = {
-            '__builtins__': {name: getattr(__builtins__, name) 
-                            for name in self.safe_builtins 
-                            if hasattr(__builtins__, name)}
+            '__builtins__': {
+                name: getattr(__builtins__, name)
+                for name in dir(__builtins__)
+                if name in self._get_safe_builtins()
+            }
         }
         
-        # Перенаправляем stdout
+        # Добавляем безопасные модули
+        for mod in self.safe_modules:
+            try:
+                safe_globals[mod] = __import__(mod)
+            except ImportError:
+                pass
+        
+        # Ограничиваем ресурсы
+        import resource
+        def set_limits():
+            resource.setrlimit(
+                resource.RLIMIT_CPU,
+                (self.max_execution_time, self.max_execution_time)
+            )
+            resource.setrlimit(
+                resource.RLIMIT_AS,
+                (self.max_memory_usage * 1024 * 1024, self.max_memory_usage * 1024 * 1024)
+            )
+        
+        # Выполнение с ограничениями
         old_stdout = sys.stdout
         sys.stdout = captured_output = io.StringIO()
         
         try:
-            # Выполняем код с ограниченными глобальными переменными
-            exec(code, safe_globals)
+            # Создаем новый процесс для изоляции
+            from multiprocessing import Process, Queue
+            result_queue = Queue()
             
-            result['success'] = True
+            def worker():
+                try:
+                    set_limits()
+                    local_vars = {}
+                    exec(code, safe_globals, local_vars)
+                    result_queue.put({
+                        'success': True,
+                        'variables': {
+                            k: v for k, v in local_vars.items()
+                            if not k.startswith('__')
+                        }
+                    })
+                except Exception as e:
+                    result_queue.put({
+                        'success': False,
+                        'error': traceback.format_exc()
+                    })
+            
+            p = Process(target=worker)
+            p.start()
+            p.join(timeout=self.max_execution_time + 1)
+            
+            if p.is_alive():
+                p.terminate()
+                p.join()
+                raise TimeoutError("Execution timed out")
+            
+            if result_queue.empty():
+                raise RuntimeError("No result from worker process")
+            
+            result = result_queue.get()
             result['output'] = captured_output.getvalue()
-            result['variables'] = {
-                k: v for k, v in safe_globals.items() 
-                if not k.startswith('__')
-            }
+            return result
+            
         except Exception as e:
-            result['error'] = traceback.format_exc()
-            logger.error(f"Code execution failed: {e}")
+            return {
+                'success': False,
+                'error': traceback.format_exc(),
+                'output': captured_output.getvalue()
+            }
         finally:
             sys.stdout = old_stdout
-        
-        return result
     
-    def test_feature(self, feature_code: str, test_code: str) -> Dict:
-        """Тестирование нового функционала"""
-        # Сначала проверяем сам код фичи
-        feature_test = self.test_code(feature_code)
-        if not feature_test['success']:
-            return {
-                'feature_valid': False,
-                'test_passed': False,
-                'feature_error': feature_test['error'],
-                'test_error': '',
-                'test_output': ''
-            }
-        
-        # Затем тестируем тестовый код
-        test_result = self.test_code(test_code)
-        if not test_result['success']:
-            return {
-                'feature_valid': True,
-                'test_passed': False,
-                'feature_error': '',
-                'test_error': test_result['error'],
-                'test_output': test_result['output']
-            }
-        
-        # Если оба выполнены успешно
+    def _get_safe_builtins(self):
         return {
-            'feature_valid': True,
-            'test_passed': True,
-            'feature_error': '',
-            'test_error': '',
-            'test_output': test_result['output']
+            'range', 'enumerate', 'len', 'list', 'dict', 'set', 'tuple',
+            'str', 'int', 'float', 'bool', 'max', 'min', 'sum', 'abs',
+            'zip', 'sorted', 'reversed', 'isinstance', 'type', 'round'
         }
