@@ -1,3 +1,5 @@
+core/personality.py
+
 class PersonalityCore:
     ARCHETYPES = {
         'neutral': {"traits": []},
@@ -16,17 +18,21 @@ class PersonalityCore:
         self.custom_traits = []
 
     def set_archetype(self, name: str):
-        self.current_archetype = self.ARCHETYPES.get(name, 'neutral')
+        if name in self.ARCHETYPES:
+            self.current_archetype = name
+        else:
+            self.current_archetype = 'neutral'
 
     def add_trait(self, trait: str):
         self.custom_traits.append(trait)
 
     def format_response(self, message: str) -> str:
-        traits = self.current_archetype['traits'] + self.custom_traits
+        archetype_data = self.ARCHETYPES[self.current_archetype]
+        traits = archetype_data['traits'] + self.custom_traits  # Опечатка в 'traits' исправлена
         if 'аналитичный' in traits:
             message = f"🤔 {message}"
         return message
 
-def communicate(self, message):
-    response = super().communicate(message)
-    return self.personality.format_response(response)
+    def communicate(self, message):
+        response = self.format_response(message)
+        return response
