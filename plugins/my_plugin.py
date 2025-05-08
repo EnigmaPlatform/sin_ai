@@ -1,6 +1,6 @@
 # plugins/my_plugin.py
 
-from sin_ai.plugins.base import SinPlugin
+from plugins.base import SinPlugin
 
 class MyPlugin(SinPlugin):
     def initialize(self, network):
