@@ -88,6 +88,7 @@ class SinNetwork(nn.Module):
         >>> print(response)
         """
         # Обновление контекста
+        try:
         self.current_context.append(f"User: {message}")
         
         # Подготовка ввода
@@ -112,6 +113,10 @@ class SinNetwork(nn.Module):
         self.current_context.append(f"Sin: {response}")
         
         return response
+
+    except Exception as e:
+        logger.error(f"Communication error: {str(e)}")
+        return "Sorry, an error occurred while processing your message"
     
     @validate_input(text=validate_text)
     def learn_from_text(self, text: str) -> None:
