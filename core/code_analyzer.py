@@ -1,16 +1,18 @@
+# core/code_analyzer.py
 import ast
 import logging
-from typing import Dict
+from typing import Dict, List
 import hashlib
 
 logger = logging.getLogger(__name__)
+
 
 class CodeAnalyzer:
     def __init__(self):
         self.supported_languages = ['python', 'javascript', 'java']
     
     def analyze(self, code: str, language: str = 'python') -> Dict:
-        """Анализ кода и извлечение информации"""
+        """Анализ кода и извлечение информации."""
         if language not in self.supported_languages:
             logger.warning(f"Language {language} is not fully supported")
         
@@ -30,7 +32,7 @@ class CodeAnalyzer:
         return analysis
     
     def _analyze_python(self, code: str) -> Dict:
-        """Анализ Python кода"""
+        """Анализ Python кода."""
         try:
             tree = ast.parse(code)
             analysis = {
@@ -41,7 +43,7 @@ class CodeAnalyzer:
                 'complexity': self._calculate_complexity(tree)
             }
             
-            # Извлечение функций
+            # Извлечение функций, классов и импортов
             for node in ast.walk(tree):
                 if isinstance(node, ast.FunctionDef):
                     analysis['functions'].append({
@@ -59,7 +61,9 @@ class CodeAnalyzer:
                         analysis['imports'].append(alias.name)
                 elif isinstance(node, ast.ImportFrom):
                     module = node.module if node.module else ''
-                    analysis['imports'].extend(f"{module}.{alias.name}" for alias in node.names)
+                    analysis['imports'].extend(
+                        f"{module}.{alias.name}" for alias in node.names
+                    )
             
             return analysis
         except SyntaxError as e:
@@ -71,13 +75,13 @@ class CodeAnalyzer:
                 'imports': []
             }
     
-    def _extract_structure(self, tree) -> Dict:
-        """Извлечение структуры кода"""
+    def _extract_structure(self, tree: ast.AST) -> Dict:
+        """Извлечение структуры кода."""
         # Упрощенная реализация
         return {'node_count': len(list(ast.walk(tree)))}
     
-    def _calculate_complexity(self, tree) -> int:
-        """Вычисление сложности кода"""
+    def _calculate_complexity(self, tree: ast.AST) -> int:
+        """Вычисление сложности кода."""
         # Упрощенная метрика сложности
         complexity = 0
         for node in ast.walk(tree):
@@ -90,5 +94,5 @@ class CodeAnalyzer:
         return complexity
     
     def _generate_hash(self, code: str) -> str:
-        """Генерация хеша кода для идентификации"""
+        """Генерация хеша кода для идентификации."""
         return hashlib.md5(code.encode('utf-8')).hexdigest()
