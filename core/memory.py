@@ -11,7 +11,8 @@ class MemorySystem:
         self.memory_file = Path(memory_file)
         self.memory = self._load_memory()
         self.embedder = SentenceTransformer('all-MiniLM-L6-v2')
-        self.memory_embeddings = self._load_embeddings()
+        self.index = AnnoyIndex(self.embedder.get_sentence_embedding_dimension(), 'angular')
+        self._build_index()
     
     def add_memory(self, content: str, tags: List[str] = None, importance: float = 0.5) -> None:
         """Добавление информации в память"""
@@ -30,20 +31,30 @@ class MemorySystem:
         self._update_embeddings(content)
         self._save_memory()
     
+    def _build_index(self):
+        """Построение индекса для быстрого поиска"""
+        self.index.unload()
+        if len(self.memory) == 0:
+            return
+            
+        embeddings = self.embedder.encode([m['content'] for m in self.memory])
+        for i, emb in enumerate(embeddings):
+            self.index.add_item(i, emb)
+        self.index.build(10)  # 10 деревьев
+    
     def retrieve_memory(self, query: str, top_k: int = 3) -> List[Dict]:
-        """Поиск в памяти по релевантности"""
+        """Поиск с использованием векторного индекса"""
         query_embedding = self.embedder.encode(query)
-        similarities = cosine_similarity(
-            [query_embedding],
-            self.memory_embeddings
-        )[0]
+        indices = self.index.get_nns_by_vector(
+            query_embedding, 
+            top_k,
+            include_distances=True
+        )
         
-        top_indices = np.argsort(similarities)[-top_k:][::-1]
         results = []
-        
-        for idx in top_indices:
+        for idx, distance in zip(*indices):
             entry = self.memory[idx]
-            entry['similarity'] = float(similarities[idx])
+            entry['similarity'] = 1 - distance  # преобразуем расстояние в схожесть
             entry['last_accessed'] = datetime.now().isoformat()
             results.append(entry)
         
