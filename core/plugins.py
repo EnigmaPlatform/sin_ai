@@ -1,7 +1,7 @@
 import importlib
 import logging
 from pathlib import Path
-from typing import Dict, Type, List
+from typing import Dict, Type, List, Any
 from sin_ai.core.network import SinNetwork
 from sin_ai.plugins.base import SinPlugin
 
