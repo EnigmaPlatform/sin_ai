@@ -1,7 +1,7 @@
 import torch
 import torch.nn as nn
 from transformers import GPT2Model, GPT2Config, GPT2Tokenizer
-from typing import List, Dict, Optional, Union
+from typing import List, Dict, Optional, Union, Any
 from pathlib import Path
 import json
 from datetime import datetime
