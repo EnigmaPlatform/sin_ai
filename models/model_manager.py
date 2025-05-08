@@ -39,11 +39,10 @@ class ModelManager:
         logger.info(f"Model saved to {model_path}")
     
     def load_model(self, model_name: str, model_class) -> Optional:
-        """Загрузка модели"""
+    try:
         model_path = self.model_dir / model_name
-        
         if not model_path.exists():
-            logger.error(f"Model {model_name} not found")
+            raise FileNotFoundError(f"Model directory {model_path} not found")
             return None
         
         try:
@@ -55,8 +54,8 @@ class ModelManager:
             logger.info(f"Model {model_name} loaded successfully")
             return model
         except Exception as e:
-            logger.error(f"Failed to load model {model_name}: {e}")
-            return None
+        logger.error(f"Model loading failed: {str(e)}")
+        return None
     
     def delete_model(self, model_name: str) -> bool:
         """Удаление модели"""
