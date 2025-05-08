@@ -1,6 +1,9 @@
+# plugins/base.py
+
 from abc import ABC, abstractmethod
 from typing import Dict, Any
 from sin_ai.core.network import SinNetwork
+
 
 class SinPlugin(ABC):
     """
@@ -27,7 +30,7 @@ class SinPlugin(ABC):
     @abstractmethod
     def get_commands(self) -> Dict[str, str]:
         """Возвращает словарь команд плагина {команда: описание}"""
-        return {}
+        pass
     
     @abstractmethod
     def execute_command(self, command: str, args: str) -> Any:
