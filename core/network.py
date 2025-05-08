@@ -44,6 +44,9 @@ class SinNetwork(nn.Module):
     >>> response = sin.query_deepseek("Что такое искусственный интеллект?")
     >>> print(response)
     """
+    def __init__(self):
+        self.deepseek_trainer = DeepSeekTrainer(self)
+
     
     def __init__(self, model_name: str = "sin_base"):
         super(SinNetwork, self).__init__()
