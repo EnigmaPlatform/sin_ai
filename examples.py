@@ -2,7 +2,7 @@
 Примеры использования SinNetwork
 """
 
-from sin_ai.core.network import SinNetwork
+from core.network import SinNetwork
 
 def basic_usage():
     # Инициализация
