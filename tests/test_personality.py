@@ -1,5 +1,5 @@
 import unittest
-from sin_ai.core.personality import PersonalityCore
+from core.personality import PersonalityCore
 
 class TestPersonalityCore(unittest.TestCase):
     def setUp(self):
