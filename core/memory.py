@@ -13,7 +13,8 @@ class MemorySystem:
         self.memory = self._load_memory()
         self.embedder = SentenceTransformer('all-MiniLM-L6-v2')
         self.index = AnnoyIndex(self.embedder.get_sentence_embedding_dimension(), 'angular')
-        self.memory_embeddings = np.array([])  # Добавлено инициализацию memory_embeddings
+        self.memory_embeddings = self._load_embeddings()  # Инициализация при создании
+
         self._build_index()
     
     def add_memory(self, content: str, tags: List[str] = None, importance: float = 0.5) -> None:
