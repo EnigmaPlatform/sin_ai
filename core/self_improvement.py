@@ -1,10 +1,12 @@
+core/self_improvement.py
+
 class SelfImprovementEngine:
     def __init__(self, sin_instance):
         self.sin = sin_instance
 
     def _log_change(self, change):
-    with open("data/change_log.jsonl", "a") as f:
-        f.write(json.dumps(change) + "\n")
+        with open("data/change_log.jsonl", "a") as f:
+            f.write(json.dumps(change) + "\n")
 
     def analyze_and_propose(self):
         # Анализ слабых мест
@@ -25,11 +27,11 @@ class SelfImprovementEngine:
             self.sin.update_self(improvement['code'])
 
     def propose_feature(self):
-    # Запрос к DeepSeek на генерацию улучшения
-    prompt = """Напиши улучшение для моего кода в формате:
-    {
-        "description": "...",
-        "code": "...",
-        "tests": "..."
-    }"""
-    return self.query_deepseek(prompt)
+        # Запрос к DeepSeek на генерацию улучшения
+        prompt = """Напиши улучшение для моего кода в формате:
+        {
+            "description": "...",
+            "code": "...",
+            "tests": "..."
+        }"""
+        return self.query_deepseek(prompt)
