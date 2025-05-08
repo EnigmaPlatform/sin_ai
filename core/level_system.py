@@ -80,7 +80,7 @@ class LevelSystem:
             return 0.0
             
         return min(1.0, max(0.0, (self.current_experience - current_level_exp) / 
-                   (next_level_exp - current_level_exp))
+                   (next_level_exp - current_level_exp)))
     
     def _load_level_data(self) -> None:
         """Загружает данные об уровне из файла. Если файл не существует или поврежден, 
