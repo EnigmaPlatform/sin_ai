@@ -2,7 +2,7 @@
 
 import unittest
 from unittest.mock import patch
-from sin_ai.core.api_handler import DeepSeekAPIHandler
+from core.api_handler import DeepSeekAPIHandler
 
 class TestAPIHandler(unittest.TestCase):
     @patch('requests.Session.post')
