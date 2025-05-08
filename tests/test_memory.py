@@ -1,5 +1,5 @@
 import unittest
-from sin_ai.core.memory import MemorySystem
+from core.memory import MemorySystem
 
 
 class TestMemorySystem(unittest.TestCase):
