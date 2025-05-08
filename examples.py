@@ -17,9 +17,9 @@ def basic_usage():
     
     # Обучение на коде
     python_code = """
-    def factorial(n):
-        return 1 if n == 0 else n * factorial(n-1)
-    """
+def factorial(n):
+    return 1 if n == 0 else n * factorial(n-1)
+"""
     sin.learn_from_code(python_code, "python")
     
     # Запрос к API
