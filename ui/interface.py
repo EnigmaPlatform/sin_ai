@@ -1,10 +1,12 @@
 import cmd
 import logging
-from typing import Optional
+from typing import Optional, Dict
 from pathlib import Path
+from datetime import datetime
 from ..core.network import SinNetwork
 from ..models.model_manager import ModelManager
 from ..core.level_system import LevelSystem
+from ..plugins.base import SinPlugin
 
 logger = logging.getLogger(__name__)
 
@@ -72,7 +74,7 @@ class CommandLineInterface(cmd.Cmd):
             for cmd, desc in plugin.get_commands().items():
                 print(f"   {cmd}: {desc}")
 
-     def register_plugins(self, plugins: Dict[str, SinPlugin]):
+    def register_plugins(self, plugins: Dict[str, SinPlugin]):
         """Регистрация плагинов в интерфейсе"""
         self.plugins = plugins
         for cmd_name, description in self.get_plugin_commands().items():
@@ -170,10 +172,10 @@ class CommandLineInterface(cmd.Cmd):
         self.sin.save_model(model_name)
         print("Модель сохранена")
 
-     def do_personality(self, args):
-    """Смена личности: personality [scientist|friend|neutral]"""
-    self.sin.personality.set_mode(args)
-    print(f"Установлен режим: {args}")
+    def do_personality(self, args):
+        """Смена личности: personality [scientist|friend|neutral]"""
+        self.sin.personality.set_mode(args)
+        print(f"Установлен режим: {args}")
     
     def do_list(self, arg):
         """Список сохраненных моделей"""
@@ -186,9 +188,9 @@ class CommandLineInterface(cmd.Cmd):
         for i, model in enumerate(models, 1):
             print(f"{i}. {model['model_name']} ({model['save_date']})")
 
-     def do_train(self, args):
-    """Запуск тренировки: train [programming|communication]"""
-    self.sin.deepseek_trainer.train(args)
+    def do_train(self, args):
+        """Запуск тренировки: train [programming|communication]"""
+        self.sin.deepseek_trainer.train(args)
     
     def do_load(self, arg):
         """Загрузка модели: load [имя_модели или номер]"""
