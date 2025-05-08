@@ -1,86 +1,102 @@
-chat [сообщение]        - Общение с Sin AI
-learn [путь_к_файлу]    - Обучение из файла
-learn_code [язык] [код] - Обучение на примере кода
-query [запрос]          - Запрос к DeepSeek API
-save [имя_модели]       - Сохранение текущей модели
-list                    - Список сохраненных моделей
-load [имя/номер]        - Загрузка модели
-delete [имя/номер]      - Удаление модели
-propose                 - Предложить новый функционал
-status                  - Показать статус обучения
-plugins                 - Список загруженных плагинов
-exit                    - Выход
+1. Установка Python и настройка окружения (CMD/PowerShell)
+
+cmd
+
+:: Проверить установленный Python
+python --version
+python -m pip --version
+
+:: Если Python не установлен, скачать с python.org и установить с опцией "Add to PATH"
+
+:: Создание виртуального окружения
+python -m venv venv
+
+:: Активация окружения
+venv\Scripts\activate
+
+:: Установка зависимостей
+pip install -r requirements.txt
+2. Основные команды для работы с Sin AI
+Запуск приложения:
+
+cmd
+python main.py
+
+______________________
+
+
+Команды с аргументами:
+
+cmd
+:: Запуск с конкретной моделью
+python main.py --model my_model_v1
+
+:: Включение режима отладки
+python main.py --debug
+
+:: Запуск сервера мониторинга
+python main.py --monitor --monitor-port 8001
+
+:: Отключение плагинов
+python main.py --no-plugins
+
+________________________________
+
+3. Команды внутри CLI интерфейса Sin AI
+Основные команды:
+
+chat [сообщение]          - Общение с Sin AI
+learn [путь_к_файлу]      - Обучение из файла
+learn_code [язык] [код]   - Обучение на примере кода
+query [запрос]            - Запрос к DeepSeek API
+save [имя_модели]         - Сохранение текущей модели
+load [имя_модели]         - Загрузка модели
+delete [имя_модели]       - Удаление модели
+list                      - Список сохраненных моделей
+status                    - Показать статус обучения
+plugins                   - Список загруженных плагинов
+exit                      - Выход из программы
+Команды для работы с личностью:
+
+personality [режим]       - Смена личности (scientist|friend|neutral)
+Команды разработки:
+
+propose                   - Предложить новый функционал
+train [тип]               - Запуск тренировки (programming|communication)
+
 
 __________________________
-Примеры команд обучения
-
-# Обучение из текстового файла
-learn data/documents/science.txt
-
-# Обучение на Python коде
-learn_code python "def factorial(n): return 1 if n == 0 else n * factorial(n-1)"
-
-# Обучение из Word документа
-learn data/documents/report.docx
-
-# Обучение из PDF
-learn data/documents/book.pdf
-
-_________________________
-
-Команды работы с моделями
-
-# Сохранение текущей модели
-save my_trained_model
-
-# Загрузка модели по имени
-load my_trained_model
-
-# Загрузка модели по номеру (из списка)
-load 2
-
-# Удаление модели
-delete old_model
-
-____________________________
 
 
-Команды мониторинга (если включен --monitor)
+4. Сервисные команды
+Запуск API сервера:
 
-# Просмотр метрик (curl или браузер)
-curl http://localhost:8001/metrics
+cmd
+python -m sin_ai.api.server
+Запуск тестов:
 
-# Примеры ключевых метрик:
-sin_requests_total - Всего запросов
-sin_learning_progress - Прогресс обучения (0-100)
-sin_model_level - Текущий уровень модели
-
-________________________
-
-Дополнительные утилиты
-
-# Запуск тестов
+cmd
 python -m pytest tests/
+Создание документации:
 
-# Генерация документации
-sphinx-build docs/ docs/_build/
+cmd
+python -m pdoc --html sin_ai --output-dir docs
 
-# Форматирование кода
-black .
+            return f"Привет, {args}!" if args else "Привет!"
 
-___________________________
 
-Пример сессии работы
 
-# Активация окружения
-source venv/bin/activate
+______________________________________
+6. Команды для администрирования
+Очистка кэша API:
 
-# Запуск с мониторингом
-python main.py --monitor
+cmd
+rmdir /s /q data\api_cache
+Сброс обучения:
 
-# В интерфейсе:
-Sin> learn data/docs/ai.txt
-Sin> chat Расскажи про ИИ
-Sin> propose
-Sin> status
-Sin> exit
+cmd
+rmdir /s /q data\learned
+Проверка стиля кода:
+
+cmd
+flake8 sin_ai
