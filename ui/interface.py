@@ -5,9 +5,12 @@ from pathlib import Path
 from datetime import datetime
 from models.model_manager import ModelManager
 from core.level_system import LevelSystem
-from plugins.base import SinPlugin
 
 logger = logging.getLogger(__name__)
+
+def get_sin_network():
+    from core.network import SinNetwork
+    return SinNetwork
 
 class CommandLineInterface(cmd.Cmd):
     def __init__(self, network: SinNetwork):
