@@ -1,13 +1,13 @@
-from core.network import SinNetwork
-from ui.interface import CommandLineInterface
-from core.monitoring import start_monitoring
-from core.plugins import PluginManager
-from models.model_manager import ModelManager
 import logging
 import argparse
 from pathlib import Path
 import sys
 from dotenv import load_dotenv
+from core.network import SinNetwork
+from ui.interface import CommandLineInterface
+from core.monitoring import start_monitoring
+from core.plugins import PluginManager
+from models.model_manager import ModelManager
 
 
 def configure_logging(log_level=logging.INFO, log_file='sin_ai.log'):
