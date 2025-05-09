@@ -1,5 +1,3 @@
-
-
 class DeepSeekTrainer:
     def __init__(self, sin_instance):
         self.sin = sin_instance
@@ -8,30 +6,40 @@ class DeepSeekTrainer:
             'communication': self._train_communication
         }
 
-    def generate_task(self):
-        prompt = f"""
-        Сгенерируй задачу для ИИ с характеристиками: 
-        {self.sin.personality.current_mode}
-        """
-        return self.sin.query_deepseek(prompt)
-
-    async def train(self, task_type: str):
-        # DeepSeek генерирует задачу
-        task = self.sin.query_deepseek(f"Сгенерируй {task_type} задачу для обучения ИИ")
-        
-        # Sin пытается выполнить
+    def _train_programming(self):
+        """Обучение программированию"""
+        task = self.sin.query_deepseek("Сгенерируй задачу по программированию")
         response = self.sin.communicate(task)
         
-        # DeepSeek оценивает ответ
         evaluation = self.sin.query_deepseek(
             f"Оцени ответ '{response}' на задачу '{task}' по шкале 0-100"
         )
+        return self._process_evaluation(evaluation)
+
+    def _train_communication(self):
+        """Обучение коммуникации"""
+        task = self.sin.query_deepseek("Сгенерируй диалоговую задачу")
+        response = self.sin.communicate(task)
         
-        # Обработка оценки
-        score = self._parse_score(evaluation)
-        if score >= 70:
-            self.sin.level_system.add_experience(score)
-            self.sin.memory.add_memory(f"Успешное решение: {task}", importance=0.9)
-        else:
-            correction = self.sin.query_deepseek(f"Покажи правильное решение для: {task}")
-            self.sin.learn_from_text(correction)
+        evaluation = self.sin.query_deepseek(
+            f"Оцени ответ '{response}' на диалоговую задачу '{task}'"
+        )
+        return self._process_evaluation(evaluation)
+
+    def _process_evaluation(self, evaluation):
+        """Обработка оценки от DeepSeek"""
+        try:
+            score = int(evaluation)
+            if score >= 70:
+                self.sin.level_system.add_experience(score)
+                return True
+            return False
+        except ValueError:
+            return False
+
+    def train(self, task_type: str):
+        """Основной метод обучения"""
+        if task_type not in self.task_types:
+            raise ValueError(f"Unknown task type: {task_type}")
+        
+        return self.task_types[task_type]()
