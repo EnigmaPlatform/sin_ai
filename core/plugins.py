@@ -35,25 +35,24 @@ class PluginManager:
         return list(self.plugins_dir.glob("*.py"))
 
     def load_plugin(self, plugin_file: Path) -> Optional[Type[SinPlugin]]:
-        """Загрузка одного плагина из файла"""
         if plugin_file.name.startswith('_') or plugin_file.name == 'base.py':
             return None
-            
-        module_name = f"sin_ai.plugins.{plugin_file.stem}"
         
         try:
-            module = importlib.import_module(module_name)
-            
+        # Изменяем способ импорта плагинов
+            module_name = f"plugins.{plugin_file.stem}"
+            spec = importlib.util.spec_from_file_location(module_name, plugin_file)
+            module = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(module)
+        
             for name, obj in module.__dict__.items():
                 if (isinstance(obj, type) and 
                     issubclass(obj, SinPlugin) and 
                     obj != SinPlugin):
                     logger.info(f"Найден плагин: {name} в {plugin_file.name}")
                     return obj
-                    
         except Exception as e:
             logger.error(f"Ошибка загрузки плагина {plugin_file}: {str(e)}")
-            
         return None
 
     def initialize_plugin(self, plugin_class: Type[SinPlugin]) -> Optional[SinPlugin]:
