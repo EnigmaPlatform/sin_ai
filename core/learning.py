@@ -4,7 +4,8 @@
 
 import torch
 from torch.utils.data import Dataset, DataLoader
-from transformers import AdamW, get_linear_schedule_with_warmup
+from torch.optim import AdamW
+from transformers.optimization import get_linear_schedule_with_warmup
 import logging
 from tqdm import tqdm
 import numpy as np
