@@ -4,22 +4,6 @@ from abc import ABC, abstractmethod
 from typing import Dict, Any
 
 class SinPlugin(ABC):
-    """
-    Базовый класс для всех плагинов Sin AI.
-    
-    Пример реализации плагина:
-    >>> class MyPlugin(SinPlugin):
-    ...     def initialize(self, network):
-    ...         self.network = network
-    ...     
-    ...     def get_commands(self):
-    ...         return {'greet': "Приветствие пользователя"}
-    ...     
-    ...     def execute_command(self, command, args):
-    ...         if command == 'greet':
-    ...             return f"Привет, {args}!" if args else "Привет!"
-    """
-
     @abstractmethod
     def initialize(self, network: 'SinNetwork') -> None:
         """Инициализация плагина с доступом к основной сети"""
