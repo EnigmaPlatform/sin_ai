@@ -11,7 +11,6 @@ from tqdm import tqdm
 import numpy as np
 from datetime import datetime
 from typing import List, Dict
-from ui.visualizer import TrainingVisualizer
 import ast
 
 logger = logging.getLogger(__name__)
@@ -46,7 +45,14 @@ class LearningEngine:
         self.batch_size = 4
         self.epochs = 3
         self.learning_speed = 1.0
-        self.visualizer = TrainingVisualizer()
+        self._visualizer = None
+
+    @property
+    def visualizer(self):
+        if self._visualizer is None:
+        from ui.visualizer import TrainingVisualizer
+        self._visualizer = TrainingVisualizer()
+        return self._visualizer
     
     def train_on_text(self, text: str) -> None:
         """Обучение на текстовых данных"""
