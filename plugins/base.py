@@ -1,20 +1,17 @@
-# plugins/base.py
+from typing import Dict, Any, Optional, TYPE_CHECKING
 
-from abc import ABC, abstractmethod
-from typing import Dict, Any
+if TYPE_CHECKING:
+    from core.network import SinNetwork
 
-class SinPlugin(ABC):
-    @abstractmethod
+class SinPlugin:
     def initialize(self, network: 'SinNetwork') -> None:
         """Инициализация плагина с доступом к основной сети"""
-        pass
+        self.network = network
     
-    @abstractmethod
     def get_commands(self) -> Dict[str, str]:
         """Возвращает словарь команд плагина {команда: описание}"""
-        pass
+        raise NotImplementedError
     
-    @abstractmethod
     def execute_command(self, command: str, args: str) -> Any:
         """Выполнение команды плагина"""
-        pass
+        raise NotImplementedError
