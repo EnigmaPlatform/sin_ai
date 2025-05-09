@@ -14,9 +14,16 @@ class CommandLineInterface(cmd.Cmd):
     def __init__(self, network: 'SinNetwork'):
         super().__init__()
         self.sin = network
-        self.model_manager = ModelManager()  # type: ignore
+        self._model_manager = None  # Отложенная инициализация
         self.current_file: Optional[Path] = None
-        self.plugins: Dict[str, Any] = {}  # Используем Any вместо SinPlugin
+        self.plugins: Dict[str, Any] = {}
+
+    @property
+    def model_manager(self) -> 'ModelManager':
+        if self._model_manager is None:
+            from models.model_manager import ModelManager  # Локальный импорт
+            self._model_manager = ModelManager()
+        return self._model_manager
 
     def _load_plugins(self) -> Dict[str, Any]:  # Any вместо SinPlugin
         from plugins.base import SinPlugin  # Ленивый импорт
