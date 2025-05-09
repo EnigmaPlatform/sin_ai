@@ -1,3 +1,6 @@
+from typing import Dict, List
+import json
+from pathlib import Path
 
 class PersonalityCore:
     ARCHETYPES = {
