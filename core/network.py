@@ -12,7 +12,8 @@ if TYPE_CHECKING:
     from ui.interface import CommandLineInterface
     
     # Core компоненты
-    from core.learning import LearningEngine
+    from typing import Any
+    LearningEngine = Any
     from core.memory import MemorySystem
     from core.api_handler import DeepSeekAPIHandler
     from core.code_analyzer import CodeAnalyzer
