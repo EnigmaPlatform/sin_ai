@@ -7,6 +7,7 @@ from dotenv import load_dotenv
 import logging
 from datetime import datetime
 from core.api_cache import APICache
+from typing import Dict, Optional, List
 
 logger = logging.getLogger(__name__)
 
