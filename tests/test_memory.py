@@ -1,7 +1,6 @@
 import unittest
 from core.memory import MemorySystem
 
-
 class TestMemorySystem(unittest.TestCase):
     def test_add_retrieve_memory(self):
         memory = MemorySystem()
