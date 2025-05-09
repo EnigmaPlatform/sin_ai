@@ -126,50 +126,77 @@ class SinNetwork(nn.Module):
         return outputs.last_hidden_state
     
     def communicate(self, message: str) -> str:
-        """Основной метод для общения с пользователем"""
+        """Улучшенный метод общения"""
         try:
             self.current_context.append(f"User: {message}")
-            input_text = "\n".join(self.current_context[-5:])
+            input_text = "\n".join(self.current_context[-3:])  # Ограничиваем контекст
         
-            input_ids = self.tokenizer.encode(input_text, return_tensors="pt").to(self.device)
-            attention_mask = torch.ones_like(input_ids).to(self.device)
+            inputs = self.tokenizer(
+                input_text,
+                return_tensors="pt",
+                max_length=512,
+                truncation=True
+            ).to(self.device)
         
         # Генерация с правильными параметрами
             outputs = self.model.generate(
-                input_ids,
-                attention_mask=attention_mask,
-                max_length=200,
-                temperature=0.7,
+                input_ids=inputs.input_ids,
+                attention_mask=inputs.attention_mask,
+                max_new_tokens=100,  # Ограничиваем длину ответа
+                temperature=0.9,     # Контроль случайности
+                top_k=50,            # Ограничиваем словарь
+                top_p=0.95,          # Nucleus sampling
                 do_sample=True,
-                pad_token_id=self.tokenizer.eos_token_id  # Добавлено
+                pad_token_id=self.tokenizer.eos_token_id
         )
         
-            response = self.tokenizer.decode(outputs[0], skip_special_tokens=True)
-            response = response[len(input_text):].strip()
-            self.current_context.append(f"Sin: {response}")
+            response = self.tokenizer.decode(
+                outputs[0][inputs.input_ids.shape[-1]:], 
+                skip_special_tokens=True
+            ).strip()
         
+            self.current_context.append(f"Sin: {response}")
             return response
+        
         except Exception as e:
             logger.error(f"Communication error: {str(e)}")
-            return "Sorry, an error occurred while processing your message"
+            return "Извините, произошла ошибка при обработке вашего сообщения"
     
     @validate_input(text=validate_text)
     def learn_from_text(self, text: str) -> None:
-        """Обучение на текстовых данных"""
+        """Улучшенное обучение на текстах"""
         self.is_learning = True
         try:
-            inputs = self.tokenizer(text, return_tensors="pt", truncation=True, max_length=512)
-            inputs = {k: v.to(self.device) for k, v in inputs.items()}
+        # Подготовка данных обучения
+            samples = [
+                f"{text}\n\n###\n\n"  # Добавляем разделитель
+                for text in text.split('\n\n') if text.strip()
+        ]
         
-            outputs = self.model(**inputs, labels=inputs["input_ids"])
-            loss = outputs.loss
-            loss.backward()
-        
-            self.optimizer.step()
-            self.optimizer.zero_grad()
-            self.scheduler.step()
-        
-            logger.info(f"Learned from text, loss: {loss.item()}")
+            for sample in samples:
+                inputs = self.tokenizer(
+                    sample,
+                    max_length=512,
+                    padding='max_length',
+                    truncation=True,
+                    return_tensors="pt"
+                ).to(self.device)
+            
+            # Прямой проход с вычислением потерь
+                outputs = self.model(
+                    input_ids=inputs.input_ids,
+                    attention_mask=inputs.attention_mask,
+                    labels=inputs.input_ids
+            )
+            
+            # Обратное распространение
+                loss = outputs.loss
+                loss.backward()
+                self.optimizer.step()
+                self.optimizer.zero_grad()
+            
+                logger.info(f"Learned from text, loss: {loss.item()}")
+            
         except Exception as e:
             logger.error(f"Error learning from text: {e}")
         finally:
