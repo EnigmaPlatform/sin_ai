@@ -99,7 +99,7 @@ class SinNetwork(nn.Module):
         self.level_system = LevelSystem()
         self._visualizer = None  # Ленивая загрузка
         self.model_manager = ModelManager()
-        self.deepseek_trainer = DeepSeekTrainer(self)
+        self._deepseek_trainer = None
         
         # Состояние
         self.current_context = []
@@ -112,6 +112,13 @@ class SinNetwork(nn.Module):
             from ui.visualizer import TrainingVisualizer
             self._visualizer = TrainingVisualizer()
         return self._visualizer
+
+    @property
+    def deepseek_trainer(self):
+        if self._deepseek_trainer is None:
+            from core.deepseek_trainer import DeepSeekTrainer
+            self._deepseek_trainer = DeepSeekTrainer(self)
+        return self._deepseek_trainer
         
     def forward(self, input_ids: torch.Tensor, attention_mask: torch.Tensor) -> torch.Tensor:
         """Прямой проход модели"""
