@@ -7,6 +7,7 @@
 
 # Основной экспорт
 from .network import SinNetwork
+from typing import Dict, List  # в начале файла
 from .types import (
     SinNetworkProtocol,
     MemorySystemProtocol,
