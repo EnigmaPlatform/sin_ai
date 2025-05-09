@@ -6,23 +6,18 @@ from datetime import datetime
 from models.model_manager import ModelManager
 from core.level_system import LevelSystem
 
-logger = logging.getLogger(__name__)
-
-def get_sin_network():
-    from core.network import SinNetwork
-    return SinNetwork
-
 class CommandLineInterface(cmd.Cmd):
-    def __init__(self, network: SinNetwork):
-        super().__init__()
-        from core.network import SinNetwork
+    def __init__(self, network: 'SinNetwork'):  # Используем строковую аннотацию
         self.sin = network
         self.model_manager = ModelManager()
         self.current_file = None
-        self.plugins = {}  # Словарь загруженных плагинов
-
-    def _load_plugins(self) -> Dict[str, SinPlugin]:
-        plugins = {}
+        self.plugins = {}
+        
+        # Ленивая загрузка для плагинов
+        self._load_plugins()
+    
+    def _load_plugins(self) -> Dict[str, 'SinPlugin']:
+        from plugins.base import SinPlugin  # Локальный импорт
         # Динамическая загрузка плагинов
         plugins_dir = Path(__file__).parent.parent / "plugins"
         for plugin_file in plugins_dir.glob("*.py"):
