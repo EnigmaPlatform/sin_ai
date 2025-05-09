@@ -1,5 +1,6 @@
 import cmd
 import logging
+from typing import Optional, Dict
 from pathlib import Path
 from datetime import datetime
 from core.network import SinNetwork
