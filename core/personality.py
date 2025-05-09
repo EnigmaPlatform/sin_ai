@@ -1,40 +1,38 @@
-from typing import Dict, List
-import json
-from pathlib import Path
+import logging
+from typing import Dict
+
+logger = logging.getLogger(__name__)
 
 class PersonalityCore:
-    ARCHETYPES = {
-        'neutral': {"traits": []},
+    MODES = {
+        'neutral': {"traits": [], "responses": ["Я вас слушаю", "Продолжайте"]},
         'scientist': {
-            "traits": ["аналитичный", "любопытный"],
-            "phrases": ["По моим расчетам...", "Это интересно с научной точки зрения..."]
+            "traits": ["аналитичный", "точный"],
+            "responses": ["Согласно моим данным...", "Анализ показывает..."]
         },
-        'artist': {
-            "traits": ["креативный", "эмоциональный"],
-            "phrases": ["Я чувствую, что...", "Это вдохновляет!"]
+        'friendly': {
+            "traits": ["дружелюбный", "эмпатичный"],
+            "responses": ["Рад вас слышать!", "Как я могу помочь?"]
         }
     }
 
     def __init__(self):
-        self.current_archetype = 'neutral'
-        self.custom_traits = []
+        self.current_mode = 'neutral'
+        self.custom_responses = []
 
-    def set_archetype(self, name: str):
-        if name in self.ARCHETYPES:
-            self.current_archetype = name
+    def set_mode(self, mode: str):
+        if mode in self.MODES:
+            self.current_mode = mode
+            logger.info(f"Personality set to {mode} mode")
         else:
-            self.current_archetype = 'neutral'
+            logger.warning(f"Unknown personality mode: {mode}")
 
-    def add_trait(self, trait: str):
-        self.custom_traits.append(trait)
-
-    def format_response(self, message: str) -> str:
-        archetype_data = self.ARCHETYPES[self.current_archetype]
-        traits = archetype_data['traits'] + self.custom_traits  # Опечатка в 'traits' исправлена
-        if 'аналитичный' in traits:
-            message = f"🤔 {message}"
-        return message
-
-    def communicate(self, message):
-        response = self.format_response(message)
-        return response
+    def get_response(self, message: str) -> str:
+        import random
+        base_responses = self.MODES[self.current_mode]["responses"]
+        responses = base_responses + self.custom_responses
+        
+        if not responses:
+            return "Я вас слушаю"
+            
+        return random.choice(responses)
