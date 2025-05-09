@@ -2,22 +2,21 @@
 
 import torch
 import torch.nn as nn
+import logging
 from transformers import GPT2Model, GPT2Config, GPT2Tokenizer
-from typing import List, Dict, Optional, Union, Any
 from pathlib import Path
 import json
 from datetime import datetime
-from ..models.model_manager import ModelManager
-from .emotions import EmotionEngine
-from .learning import LearningEngine
-from .memory import MemorySystem
-from .api_handler import DeepSeekAPIHandler
-from .code_analyzer import CodeAnalyzer
-from .sandbox import CodeSandbox
-from .level_system import LevelSystem
-from ..ui.visualizer import TrainingVisualizer
-from .utils import validate_input, validate_text, validate_file_path, validate_language
-import logging
+from models.model_manager import ModelManager
+from core.emotions import EmotionEngine
+from core.learning import LearningEngine
+from core.memory import MemorySystem
+from core.api_handler import DeepSeekAPIHandler
+from core.code_analyzer import CodeAnalyzer
+from core.sandbox import CodeSandbox
+from core.level_system import LevelSystem
+from ui.visualizer import TrainingVisualizer
+from core.utils import validate_input, validate_text, validate_file_path, validate_language
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
