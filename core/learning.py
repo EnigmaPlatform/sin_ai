@@ -285,3 +285,5 @@ class LearningEngine:
         shift_labels = input_ids[..., 1:].contiguous()
         loss = loss_fct(shift_logits.view(-1, shift_logits.size(-1)), shift_labels.view(-1))
         return loss
+# В конце файла добавьте:
+__all__ = ['LearningEngine']
