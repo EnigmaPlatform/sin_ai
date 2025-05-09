@@ -1,5 +1,10 @@
 from __future__ import annotations
-from typing import List, Dict, Optional, Union, Any
+from typing import List, Dict, Optional, Union, Any, TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from ui.visualizer import TrainingVisualizer
+    from core.learning import LearningEngine
+    from core.memory import MemorySystem
 import torch
 import torch.nn as nn
 import logging
