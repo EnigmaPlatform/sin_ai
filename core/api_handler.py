@@ -14,15 +14,18 @@ logger = logging.getLogger(__name__)
 load_dotenv()
 
 class DeepSeekAPIHandler:
-    def __init__(self):
+   def __init__(self):
         self.api_key = os.getenv('DEEPSEEK_API_KEY')
+        if not self.api_key:
+            logger.error("DeepSeek API key not found in environment variables")
+            raise ValueError("API key is required. Set DEEPSEEK_API_KEY in .env file")
+    
         self.base_url = "https://api.deepseek.com/v1"
-        self.cache = APICache()
         self.session = requests.Session()
         self.session.headers.update({
             'Authorization': f'Bearer {self.api_key}',
             'Content-Type': 'application/json'
-        })
+    })
     
     def query(self, prompt: str, context: Optional[List[str]] = None) -> Dict:
         cache_key = f"{prompt}-{'-'.join(context or [])}"
