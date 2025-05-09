@@ -1,3 +1,8 @@
+import logging
+from typing import Dict, Optional
+
+logger = logging.getLogger(__name__)
+
 class DeepSeekTrainer:
     def __init__(self, sin_instance):
         self.sin = sin_instance
@@ -6,47 +11,72 @@ class DeepSeekTrainer:
             'communication': self._train_communication
         }
 
-    def _train_programming(self):
-        """Обучение программированию"""
-        task = self.sin.query_deepseek("Сгенерируй задачу по программированию")
-        response = self.sin.communicate(task)
-        
-        evaluation = self.sin.query_deepseek(
-            f"Оцени ответ '{response}' на задачу '{task}' по шкале 0-100"
-        )
-        return self._process_evaluation(evaluation)
-
-    def _train_communication(self):
-        """Обучение коммуникации"""
-        task = self.sin.query_deepseek("Сгенерируй диалоговую задачу")
-        response = self.sin.communicate(task)
-        
-        evaluation = self.sin.query_deepseek(
-            f"Оцени ответ '{response}' на диалоговую задачу '{task}'"
-        )
-        return self._process_evaluation(evaluation)
-
-    def _process_evaluation(self, evaluation):
-        """Обработка оценки от DeepSeek"""
+    def _train_programming(self) -> bool:
+        """Метод тренировки программированию"""
         try:
-            score = int(evaluation)
-            if score >= 70:
-                self.sin.level_system.add_experience(score)
+            task = self.sin.query_deepseek("Сгенерируй задачу по программированию на Python")
+            if not task or isinstance(task, dict):
+                logger.error("Invalid task received from API")
+                return False
+                
+            response = self.sin.communicate(task)
+            evaluation = self._process_evaluation(response)
+            
+            if evaluation >= 70:
+                self.sin.level_system.add_experience(evaluation)
                 return True
             return False
-        except ValueError:
+            
+        except Exception as e:
+            logger.error(f"Programming training error: {str(e)}")
             return False
 
-    def train(self, task_type: str):
-        """Безопасный метод тренировки"""
+    def _train_communication(self) -> bool:
+        """Метод тренировки коммуникации"""
         try:
-            if task_type not in ['programming', 'communication']:
-                raise ValueError("Invalid task type")
+            task = self.sin.query_deepseek("Сгенерируй диалоговую ситуацию для тренировки общения")
+            if not task or isinstance(task, dict):
+                logger.error("Invalid task received from API")
+                return False
+                
+            response = self.sin.communicate(task)
+            evaluation = self._process_evaluation(response)
             
-            if task_type == 'programming':
-                return self._train_programming()
-            else:
-                return self._train_communication()
+            if evaluation >= 70:
+                self.sin.level_system.add_experience(evaluation)
+                return True
+            return False
+            
+        except Exception as e:
+            logger.error(f"Communication training error: {str(e)}")
+            return False
+
+    def _process_evaluation(self, response: str) -> int:
+        """Обработка оценки ответа"""
+        try:
+            if isinstance(response, dict):
+                return 0
+            return min(100, max(0, len(response) // 2))  # Простая метрика качества
+        except Exception as e:
+            logger.error(f"Evaluation error: {str(e)}")
+            return 0
+
+    def train(self, task_type: str) -> bool:
+        """
+        Основной метод тренировки
+        
+        Args:
+            task_type: Тип тренировки ('programming' или 'communication')
+            
+        Returns:
+            bool: True если тренировка успешна, False если есть ошибки
+        """
+        try:
+            if task_type not in self.task_types:
+                raise ValueError(f"Unknown task type: {task_type}. Use 'programming' or 'communication'")
+                
+            training_method = self.task_types[task_type]
+            return training_method()
             
         except Exception as e:
             logger.error(f"Training error: {str(e)}")
