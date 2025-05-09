@@ -76,7 +76,7 @@ class SinNetwork(nn.Module):
     Основной класс нейросетевой архитектуры Sin AI.
     """
     def __init__(self, model_name: str = "sin_base"):
-        super(SinNetwork, self).__init__()
+        super().__init__()
         self.model_name = model_name
         self.emotions = EmotionEngine()
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -117,6 +117,9 @@ class SinNetwork(nn.Module):
             step_size=1,
             gamma=0.9
     )
+
+    from core.personality import PersonalityCore
+    self.personality = PersonalityCore()
     
     @property
     def visualizer(self):
