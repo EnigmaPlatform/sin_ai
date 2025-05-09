@@ -4,7 +4,6 @@ from abc import ABC, abstractmethod
 from typing import Dict, Any
 from core.network import SinNetwork
 
-
 class SinPlugin(ABC):
     """
     Базовый класс для всех плагинов Sin AI.
