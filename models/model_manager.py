@@ -91,3 +91,5 @@ class ModelManager:
                         logger.error(f"Failed to read metadata for {model_dir.name}: {e}")
         
         return sorted(models, key=lambda x: x.get('save_date', ''), reverse=True)
+
+__all__ = ['ModelManager']
