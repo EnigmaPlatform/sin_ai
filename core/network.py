@@ -1,3 +1,4 @@
+from core.learning import LearningEngine
 from __future__ import annotations
 from typing import (
     List, Dict, Optional, Union, Any, 
@@ -91,8 +92,7 @@ class SinNetwork(nn.Module):
         
         # Подсистемы (ленивая загрузка визуализатора)
         self.memory = MemorySystem()
-        from core.learning import LearningEngine
-        self.learning_engine = LearningEngine(self)
+        self._learning_engine = None
         self.api_handler = DeepSeekAPIHandler()
         self.code_analyzer = CodeAnalyzer()
         self.sandbox = CodeSandbox()
@@ -235,6 +235,13 @@ class SinNetwork(nn.Module):
         data = self._load_json(path)
         processed_text = self._process_json_data(data, text_fields, context_field)
         self.learn_from_text(processed_text)
+
+    @property
+    def learning_engine(self):
+        if self._learning_engine is None:
+            from core.learning import LearningEngine
+            self._learning_engine = LearningEngine(self)
+        return self._learning_engine
 
     def _load_json(self, path: Path) -> Union[Dict, List]:
         """Безопасная загрузка JSON"""
