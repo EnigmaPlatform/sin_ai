@@ -82,11 +82,11 @@ class SinNetwork(nn.Module):
         self.is_learning = False
 
     @property
-def visualizer(self):
-    if self._visualizer is None:
+    def visualizer(self):
+        if self._visualizer is None:
         from ui.visualizer import TrainingVisualizer
         self._visualizer = TrainingVisualizer()
-    return self._visualizer
+        return self._visualizer
         
     def forward(self, input_ids: torch.Tensor, attention_mask: torch.Tensor) -> torch.Tensor:
         """Прямой проход модели"""
