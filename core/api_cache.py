@@ -5,7 +5,6 @@ from pathlib import Path
 from datetime import datetime, timedelta
 from typing import Dict, Any, Optional
 
-
 class APICache:
     """Кэш для хранения ответов API с TTL (временем жизни)."""
     
