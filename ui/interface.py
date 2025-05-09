@@ -1,6 +1,9 @@
 import cmd
 import logging
-from typing import Optional, Dict
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from core.network import SinNetwork
 from pathlib import Path
 from datetime import datetime
 from models.model_manager import ModelManager
