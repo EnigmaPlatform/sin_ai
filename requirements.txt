@@ -11,9 +11,20 @@ matplotlib>=3.4.0
 scikit-learn>=0.24.0
 python-dotenv>=0.19.0
 openai>=0.27.0
-fastapi>=0.68.0  # Для API сервера
-uvicorn>=0.15.0  # Для запуска API
-python-multipart  # Для обработки файлов в API
-pytest>=7.0.0  # Для тестирования
-prometheus-client>=0.12.0  # Для мониторинга
+fastapi>=0.68.0
+uvicorn>=0.15.0
+python-multipart
+pytest>=7.0.0
+prometheus-client>=0.12.0
 langdetect
+sentencepiece>=0.1.99  # Для токенизаторов
+protobuf>=3.20.0  # Для сериализации
+dataclasses>=0.6  # Для Python < 3.7
+typing-extensions>=4.0.0  # Для аннотаций
+aiohttp>=3.8.0  # Для асинхронных HTTP-запросов
+zstandard>=0.15.0  # Для сжатия данных
+astunparse>=1.6.3  # Для анализа кода
+scipy>=1.7.0  # Для научных вычислений
+tokenizers>=0.12.0  # Для работы с токенизаторами
+accelerate>=0.12.0  # Для оптимизации работы с GPU
+safetensors>=0.3.0  # Для безопасной сериализации
