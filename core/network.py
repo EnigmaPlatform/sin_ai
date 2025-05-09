@@ -105,6 +105,18 @@ class SinNetwork(nn.Module):
         self.current_context = []
         self.learning_progress = 0
         self.is_learning = False
+
+        self.optimizer = torch.optim.AdamW(
+            self.model.parameters(), 
+            lr=5e-5,
+            weight_decay=0.01
+    )
+    
+        self.scheduler = torch.optim.lr_scheduler.StepLR(
+            self.optimizer, 
+            step_size=1,
+            gamma=0.9
+    )
     
     @property
     def visualizer(self):
@@ -204,35 +216,29 @@ class SinNetwork(nn.Module):
     
     @validate_input(file_path=validate_file_path)
     def learn_from_file(self, file_path: str) -> None:
-        """
-        Обучение из файла (поддерживает txt, docx, pdf).
-        
-        Пример:
-        >>> sin.learn_from_file("data/document.pdf")
-        """
-        if not Path(file_path).exists():
-            raise FileNotFoundError(f"File not found: {file_path}")
-            
-        self.is_learning = True
+        """Обучение из файла с поддержкой формата"""
         try:
-            if file_path.endswith('.txt'):
-                with open(file_path, 'r', encoding='utf-8') as f:
-                    text = f.read()
-                self.learn_from_text(text)
-            elif file_path.endswith(('.doc', '.docx')):
-                text = self._extract_text_from_word(file_path)
-                self.learn_from_text(text)
-            elif file_path.endswith('.pdf'):
-                text = self._extract_text_from_pdf(file_path)
-                self.learn_from_text(text)
-            else:
-                logger.warning(f"Unsupported file format: {file_path}")
+            with open(file_path, 'r', encoding='utf-8') as f:
+                content = f.read()
             
-            self.level_system.add_experience(20)
+            if "input:" in content and "response:" in content:
+            # Обработка структурированных данных
+                samples = []
+                for block in content.split('\n\n'):
+                    if 'input:' in block and 'response:' in block:
+                        input_text = block.split('input:')[1].split('response:')[0].strip()
+                        response_text = block.split('response:')[1].strip()
+                        samples.append(f"{input_text}\n{response_text}")
+            
+                training_text = "\n\n".join(samples)
+            else:
+            # Обычный текст
+                training_text = content
+            
+            self.learn_from_text(training_text)
+        
         except Exception as e:
             logger.error(f"Error learning from file: {e}")
-        finally:
-            self.is_learning = False
 
     def _extract_text_from_pdf(self, file_path: str) -> str:
         """Извлечение текста из PDF"""
