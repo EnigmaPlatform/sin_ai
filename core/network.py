@@ -15,8 +15,13 @@ from core.api_handler import DeepSeekAPIHandler
 from core.code_analyzer import CodeAnalyzer
 from core.sandbox import CodeSandbox
 from core.level_system import LevelSystem
+from core.personality import PersonalityCore
+from core.deepseek_trainer import DeepSeekTrainer
 from ui.visualizer import TrainingVisualizer
 from core.utils import validate_input, validate_text, validate_file_path, validate_language
+from PyPDF2 import PdfReader
+from docx import Document
+import ast
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
