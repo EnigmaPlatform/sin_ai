@@ -155,17 +155,21 @@ class SinNetwork(nn.Module):
     
     @validate_input(text=validate_text)
     def learn_from_text(self, text: str) -> None:
-        """
-        Обучение на текстовых данных.
-        
-        Пример:
-        >>> sin.learn_from_text("ИИ - это система, способная выполнять задачи...")
-        """
+        """Обучение на текстовых данных"""
         self.is_learning = True
         try:
-            self.learning_engine.train_on_text(text)
-            self.level_system.add_experience(10)
-            logger.info("Successfully learned from text")
+            inputs = self.tokenizer(text, return_tensors="pt", truncation=True, max_length=512)
+            inputs = {k: v.to(self.device) for k, v in inputs.items()}
+        
+            outputs = self.model(**inputs, labels=inputs["input_ids"])
+            loss = outputs.loss
+            loss.backward()
+        
+            self.optimizer.step()
+            self.optimizer.zero_grad()
+            self.scheduler.step()
+        
+            logger.info(f"Learned from text, loss: {loss.item()}")
         except Exception as e:
             logger.error(f"Error learning from text: {e}")
         finally:
