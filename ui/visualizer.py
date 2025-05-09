@@ -4,7 +4,6 @@ import time
 from datetime import datetime
 from typing import List
 import logging
-
 import matplotlib.pyplot as plt
 
 
