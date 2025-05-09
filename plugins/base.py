@@ -2,7 +2,6 @@
 
 from abc import ABC, abstractmethod
 from typing import Dict, Any
-from core.network import SinNetwork
 
 class SinPlugin(ABC):
     """
@@ -22,7 +21,7 @@ class SinPlugin(ABC):
     """
 
     @abstractmethod
-    def initialize(self, network: SinNetwork) -> None:
+    def initialize(self, network: 'SinNetwork') -> None:
         """Инициализация плагина с доступом к основной сети"""
         pass
     
