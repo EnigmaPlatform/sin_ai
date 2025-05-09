@@ -82,7 +82,7 @@ class CommandLineInterface(cmd.Cmd):
         return commands
     
     def precmd(self, line):
-        logger.info(f"Command: {line}")
+        logger.info(f"Command: {line}")  # Теперь logger определен
         return line
     
     def postcmd(self, stop, line):
