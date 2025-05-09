@@ -4,7 +4,7 @@ from pathlib import Path
 import shutil
 import logging
 from datetime import datetime
-from typing import List, Dict, Optional, Type, Any
+from typing import Dict, List, Optional, Any
 
 logger = logging.getLogger(__name__)
 
