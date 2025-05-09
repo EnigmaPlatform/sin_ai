@@ -115,13 +115,12 @@ def run_cli_interface(sin_instance, load_plugins=True):
             else:
                 logging.warning("Не удалось загрузить плагины")
         
-        cli.run()
+        cli.run()  # Теперь метод существует
     except KeyboardInterrupt:
         logging.info("Завершение работы по запросу пользователя")
     except Exception as e:
         logging.critical(f"Критическая ошибка в интерфейсе: {str(e)}")
         sys.exit(1)
-
 
 def main():
     """Основная функция запуска приложения."""
