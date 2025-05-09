@@ -160,13 +160,13 @@ class CommandLineInterface(cmd.Cmd):
                 print("Допустимые типы тренировки: programming, communication")
                 return
         
-        success = self.sin.deepseek_trainer.train(args)
-        if success:
-            print("Тренировка успешно завершена!")
-        else:
-            print("Тренировка завершена, но требуются улучшения")
-    except Exception as e:
-        print(f"Ошибка тренировки: {str(e)}")
+            success = self.sin.deepseek_trainer.train(args)
+            if success:
+                print("Тренировка успешно завершена!")
+            else:
+                print("Тренировка завершена, но требуются улучшения")
+        except Exception as e:
+            print(f"Ошибка тренировки: {str(e)}")
     
     def do_load(self, arg):
         """Загрузка модели: load [имя_модели или номер]"""
