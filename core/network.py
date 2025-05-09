@@ -1,5 +1,5 @@
-from core.learning import LearningEngine
 from __future__ import annotations
+from core.learning import LearningEngine
 from typing import (
     List, Dict, Optional, Union, Any, 
     TYPE_CHECKING, Tuple, Callable, TypeVar
