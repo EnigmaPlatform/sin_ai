@@ -32,7 +32,7 @@ if TYPE_CHECKING:
 
     # Типы для аннотаций
     Tensor = torch.Tensor
-    ModelOutput = Dict[str, Union[str, float, List[Any]]
+    ModelOutput = Dict[str, Union[str, float, List[Any]]]
     LearningProgress = Dict[str, Union[float, int, bool, List[str]]]
 else:
     Tensor = Any
