@@ -3,6 +3,8 @@ import cmd
 import logging
 from pathlib import Path
 from datetime import datetime
+import logging
+logger = logging.getLogger(__name__)
 
 if TYPE_CHECKING:
     from core.network import SinNetwork
