@@ -17,7 +17,6 @@ from core.sandbox import CodeSandbox
 from core.level_system import LevelSystem
 from core.personality import PersonalityCore
 from core.deepseek_trainer import DeepSeekTrainer
-from ui.visualizer import TrainingVisualizer
 from core.utils import validate_input, validate_text, validate_file_path, validate_language
 from PyPDF2 import PdfReader
 from docx import Document
@@ -73,7 +72,7 @@ class SinNetwork(nn.Module):
         self.code_analyzer = CodeAnalyzer()
         self.sandbox = CodeSandbox()
         self.level_system = LevelSystem()
-        self.visualizer = TrainingVisualizer()
+        self._visualizer = None
         self.model_manager = ModelManager()
         self.deepseek_trainer = DeepSeekTrainer(self)
         
@@ -81,6 +80,13 @@ class SinNetwork(nn.Module):
         self.current_context = []
         self.learning_progress = 0
         self.is_learning = False
+
+    @property
+def visualizer(self):
+    if self._visualizer is None:
+        from ui.visualizer import TrainingVisualizer
+        self._visualizer = TrainingVisualizer()
+    return self._visualizer
         
     def forward(self, input_ids: torch.Tensor, attention_mask: torch.Tensor) -> torch.Tensor:
         """Прямой проход модели"""
