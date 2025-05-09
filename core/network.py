@@ -51,7 +51,7 @@ import logging
 from pathlib import Path
 import json
 from datetime import datetime
-from transformers import GPT2Model, GPT2Config, GPT2Tokenizer
+from transformers import GPT2LMHeadModel, GPT2Tokenizer, GPT2Config  # Изменён импорт
 from PyPDF2 import PdfReader
 from docx import Document
 import ast
@@ -81,12 +81,12 @@ class SinNetwork(nn.Module):
         self.emotions = EmotionEngine()
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         
-        # Инициализация компонентов
+         # Используем GPT2LMHeadModel вместо GPT2Model
         self.config = GPT2Config.from_pretrained("gpt2-medium")
         self.tokenizer = GPT2Tokenizer.from_pretrained("gpt2-medium")
         self.tokenizer.add_special_tokens({'pad_token': '[PAD]'})
         
-        self.model = GPT2Model(self.config)
+        self.model = GPT2LMHeadModel(self.config)  # Модель с языковой головкой
         self.model.resize_token_embeddings(len(self.tokenizer))
         self.model.to(self.device)
         
@@ -126,40 +126,29 @@ class SinNetwork(nn.Module):
         return outputs.last_hidden_state
     
     def communicate(self, message: str) -> str:
-        """
-        Основной метод для общения с пользователем.
-        
-        Пример:
-        >>> response = sin.communicate("Какая сегодня погода?")
-        >>> print(response)
-        """
-        # Обновление контекста
+        """Основной метод для общения с пользователем"""
         try:
             self.current_context.append(f"User: {message}")
-            
-            # Подготовка ввода
             input_text = "\n".join(self.current_context[-5:])
+        
             input_ids = self.tokenizer.encode(input_text, return_tensors="pt").to(self.device)
             attention_mask = torch.ones_like(input_ids).to(self.device)
-            
-            # Генерация ответа
-            with torch.no_grad():
-                outputs = self.model.generate(
-                    input_ids,
-                    attention_mask=attention_mask,
-                    max_length=200,
-                    temperature=0.7,
-                    do_sample=True
-                )
-            
+        
+        # Генерация с правильными параметрами
+            outputs = self.model.generate(
+                input_ids,
+                attention_mask=attention_mask,
+                max_length=200,
+                temperature=0.7,
+                do_sample=True,
+                pad_token_id=self.tokenizer.eos_token_id  # Добавлено
+        )
+        
             response = self.tokenizer.decode(outputs[0], skip_special_tokens=True)
             response = response[len(input_text):].strip()
-            
-            # Обновление контекста
             self.current_context.append(f"Sin: {response}")
-            
+        
             return response
-
         except Exception as e:
             logger.error(f"Communication error: {str(e)}")
             return "Sorry, an error occurred while processing your message"
