@@ -1,7 +1,8 @@
+from __future__ import annotations
+from typing import List, Dict, Optional, Union, Any
 import torch
 import torch.nn as nn
 import logging
-from typing import List, Dict, Optional, Union, Any  # Добавлены необходимые импорты типов
 from pathlib import Path
 import json
 from datetime import datetime
