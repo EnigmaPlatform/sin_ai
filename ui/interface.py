@@ -3,7 +3,6 @@ import logging
 from typing import Optional, Dict
 from pathlib import Path
 from datetime import datetime
-from core.network import SinNetwork
 from models.model_manager import ModelManager
 from core.level_system import LevelSystem
 from plugins.base import SinPlugin
@@ -13,6 +12,7 @@ logger = logging.getLogger(__name__)
 class CommandLineInterface(cmd.Cmd):
     def __init__(self, network: SinNetwork):
         super().__init__()
+        from core.network import SinNetwork
         self.sin = network
         self.model_manager = ModelManager()
         self.current_file = None
