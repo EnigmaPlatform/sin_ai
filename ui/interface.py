@@ -155,7 +155,18 @@ class CommandLineInterface(cmd.Cmd):
 
     def do_train(self, args):
         """Запуск тренировки: train [programming|communication]"""
-        self.sin.deepseek_trainer.train(args)
+        try:
+            if args not in ['programming', 'communication']:
+                print("Допустимые типы тренировки: programming, communication")
+                return
+        
+        success = self.sin.deepseek_trainer.train(args)
+        if success:
+            print("Тренировка успешно завершена!")
+        else:
+            print("Тренировка завершена, но требуются улучшения")
+    except Exception as e:
+        print(f"Ошибка тренировки: {str(e)}")
     
     def do_load(self, arg):
         """Загрузка модели: load [имя_модели или номер]"""
