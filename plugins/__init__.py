@@ -3,3 +3,4 @@
 """
 
 from .base import SinPlugin
+__all__ = ['SinPlugin']
