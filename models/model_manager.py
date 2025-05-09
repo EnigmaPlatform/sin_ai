@@ -1,7 +1,6 @@
 import torch
 import json
 from pathlib import Path
-from typing import Optional
 import shutil
 import logging
 from datetime import datetime
