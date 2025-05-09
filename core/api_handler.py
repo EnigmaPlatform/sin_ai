@@ -3,11 +3,10 @@
 import os
 import requests
 import json
-from typing import Dict, Optional, List
 from dotenv import load_dotenv
 import logging
 from datetime import datetime
-from .api_cache import APICache
+from core.api_cache import APICache
 
 logger = logging.getLogger(__name__)
 
