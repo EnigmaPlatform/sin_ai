@@ -1,28 +1,27 @@
+from typing import Dict, List, Optional, Any, TYPE_CHECKING
 import cmd
 import logging
-from typing import TYPE_CHECKING
+from pathlib import Path
+from datetime import datetime
 
 if TYPE_CHECKING:
     from core.network import SinNetwork
-from pathlib import Path
-from datetime import datetime
-from models.model_manager import ModelManager
-from core.level_system import LevelSystem
+    from plugins.base import SinPlugin
+    from models.model_manager import ModelManager
+    from core.level_system import LevelSystem
 
 class CommandLineInterface(cmd.Cmd):
-    def __init__(self, network: 'SinNetwork'):  # Используем строковую аннотацию
+    def __init__(self, network: 'SinNetwork'):
+        super().__init__()
         self.sin = network
-        self.model_manager = ModelManager()
-        self.current_file = None
-        self.plugins = {}
-        
-        # Ленивая загрузка для плагинов
-        self._load_plugins()
-    
+        self.model_manager: 'ModelManager' = ModelManager()
+        self.current_file: Optional[Path] = None
+        self.plugins: Dict[str, 'SinPlugin'] = {}
+
     def _load_plugins(self) -> Dict[str, 'SinPlugin']:
-        from plugins.base import SinPlugin  # Локальный импорт
-        # Динамическая загрузка плагинов
+        plugins: Dict[str, 'SinPlugin'] = {}
         plugins_dir = Path(__file__).parent.parent / "plugins"
+        
         for plugin_file in plugins_dir.glob("*.py"):
             if plugin_file.name.startswith("_") or plugin_file.name == "base.py":
                 continue
@@ -31,14 +30,12 @@ class CommandLineInterface(cmd.Cmd):
             try:
                 module = __import__(module_name, fromlist=[''])
                 for name, obj in module.__dict__.items():
-                    if (isinstance(obj, type) and 
-                        issubclass(obj, SinPlugin) and 
-                        obj != SinPlugin):
+                    if isinstance(obj, type) and issubclass(obj, SinPlugin) and obj != SinPlugin:
                         plugin = obj()
                         plugin.initialize(self.sin)
                         plugins[plugin_file.stem] = plugin
             except Exception as e:
-                logger.error(f"Failed to load plugin {plugin_file}: {e}")
+                logging.error(f"Failed to load plugin {plugin_file}: {e}")
         
         return plugins
     
