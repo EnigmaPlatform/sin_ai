@@ -1,15 +1,18 @@
-# core/network.py
-
 import torch
 import torch.nn as nn
 import logging
-from transformers import GPT2Model, GPT2Config, GPT2Tokenizer
+from typing import List, Dict, Optional, Union, Any  # Добавлены необходимые импорты типов
 from pathlib import Path
 import json
 from datetime import datetime
+from transformers import GPT2Model, GPT2Config, GPT2Tokenizer
+from PyPDF2 import PdfReader
+from docx import Document
+import ast
+
+# Относительные импорты
 from models.model_manager import ModelManager
 from core.emotions import EmotionEngine
-from core.learning import LearningEngine
 from core.memory import MemorySystem
 from core.api_handler import DeepSeekAPIHandler
 from core.code_analyzer import CodeAnalyzer
@@ -18,9 +21,6 @@ from core.level_system import LevelSystem
 from core.personality import PersonalityCore
 from core.deepseek_trainer import DeepSeekTrainer
 from core.utils import validate_input, validate_text, validate_file_path, validate_language
-from PyPDF2 import PdfReader
-from docx import Document
-import ast
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -28,27 +28,6 @@ logger = logging.getLogger(__name__)
 class SinNetwork(nn.Module):
     """
     Основной класс нейросетевой архитектуры Sin AI.
-    
-    Примеры использования:
-    
-    1. Базовое общение:
-    >>> sin = SinNetwork()
-    >>> response = sin.communicate("Привет! Как дела?")
-    >>> print(response)
-    
-    2. Обучение из файла:
-    >>> sin.learn_from_file("data/document.txt")
-    
-    3. Обучение на коде:
-    >>> code = \"\"\"
-    def hello():
-        print("Hello World")
-    \"\"\"
-    >>> sin.learn_from_code(code, "python")
-    
-    4. Работа с API:
-    >>> response = sin.query_deepseek("Что такое искусственный интеллект?")
-    >>> print(response)
     """
     def __init__(self, model_name: str = "sin_base"):
         super(SinNetwork, self).__init__()
@@ -65,14 +44,14 @@ class SinNetwork(nn.Module):
         self.model.resize_token_embeddings(len(self.tokenizer))
         self.model.to(self.device)
         
-        # Подсистемы
+        # Подсистемы (ленивая загрузка визуализатора)
         self.memory = MemorySystem()
         self.learning_engine = LearningEngine(self)
         self.api_handler = DeepSeekAPIHandler()
         self.code_analyzer = CodeAnalyzer()
         self.sandbox = CodeSandbox()
         self.level_system = LevelSystem()
-        self._visualizer = None
+        self._visualizer = None  # Ленивая загрузка
         self.model_manager = ModelManager()
         self.deepseek_trainer = DeepSeekTrainer(self)
         
@@ -80,12 +59,12 @@ class SinNetwork(nn.Module):
         self.current_context = []
         self.learning_progress = 0
         self.is_learning = False
-
+    
     @property
     def visualizer(self):
         if self._visualizer is None:
-        from ui.visualizer import TrainingVisualizer
-        self._visualizer = TrainingVisualizer()
+            from ui.visualizer import TrainingVisualizer
+            self._visualizer = TrainingVisualizer()
         return self._visualizer
         
     def forward(self, input_ids: torch.Tensor, attention_mask: torch.Tensor) -> torch.Tensor:
