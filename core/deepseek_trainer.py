@@ -38,8 +38,16 @@ class DeepSeekTrainer:
             return False
 
     def train(self, task_type: str):
-        """Основной метод обучения"""
-        if task_type not in self.task_types:
-            raise ValueError(f"Unknown task type: {task_type}")
-        
-        return self.task_types[task_type]()
+        """Безопасный метод тренировки"""
+        try:
+            if task_type not in ['programming', 'communication']:
+                raise ValueError("Invalid task type")
+            
+            if task_type == 'programming':
+                return self._train_programming()
+            else:
+                return self._train_communication()
+            
+        except Exception as e:
+            logger.error(f"Training error: {str(e)}")
+            return False
