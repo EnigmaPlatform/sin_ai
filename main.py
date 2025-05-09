@@ -81,17 +81,18 @@ def parse_args():
 def initialize_network(model_name=None):
     """Инициализация нейросети с обработкой ошибок."""
     try:
+        from models.model_manager import ModelManager  # Ленивый импорт
+        from core.network import SinNetwork
+        
         model_manager = ModelManager()
         
         if model_name:
-            # Попытка загрузить указанную модель
-            model = model_manager.load_model(model_name, SinNetwork)
-            if model:
+            loaded_model = model_manager.load_model(model_name, SinNetwork)
+            if loaded_model:
                 logging.info(f"Модель {model_name} успешно загружена")
-                return model
+                return loaded_model
             logging.warning(f"Не удалось загрузить модель {model_name}, создается новая")
         
-        # Создание новой модели
         return SinNetwork()
         
     except Exception as e:
