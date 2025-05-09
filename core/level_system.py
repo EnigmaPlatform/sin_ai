@@ -2,8 +2,7 @@ import math
 import json
 from pathlib import Path
 from datetime import datetime
-from typing import Dict, Optional
-
+from typing import Dict
 
 class LevelSystem:
     def __init__(self, level_file: str = "data/levels.json") -> None:
