@@ -1,10 +1,48 @@
 from __future__ import annotations
-from typing import List, Dict, Optional, Union, Any, TYPE_CHECKING
+from typing import (
+    List, Dict, Optional, Union, Any, 
+    TYPE_CHECKING, Tuple, Callable, TypeVar
+)
+from pathlib import Path
+import torch
 
 if TYPE_CHECKING:
+    # UI компоненты
     from ui.visualizer import TrainingVisualizer
+    from ui.interface import CommandLineInterface
+    
+    # Core компоненты
     from core.learning import LearningEngine
     from core.memory import MemorySystem
+    from core.api_handler import DeepSeekAPIHandler
+    from core.code_analyzer import CodeAnalyzer
+    from core.sandbox import CodeSandbox
+    from core.level_system import LevelSystem
+    from core.personality import PersonalityCore
+    from core.emotions import EmotionEngine
+    from core.deepseek_trainer import DeepSeekTrainer
+    from core.plugins import PluginManager
+    from core.monitoring import monitor
+    
+    # Модели
+    from models.model_manager import ModelManager
+    
+    # Плагины
+    from plugins.base import SinPlugin
+
+    # Типы для аннотаций
+    Tensor = torch.Tensor
+    ModelOutput = Dict[str, Union[str, float, List[Any]]
+    LearningProgress = Dict[str, Union[float, int, bool, List[str]]]
+else:
+    Tensor = Any
+    ModelOutput = Dict[str, Any]
+    LearningProgress = Dict[str, Any]
+
+# Type variables для generic типов
+T = TypeVar('T')
+ModelType = TypeVar('ModelType', bound='SinNetwork')
+
 import torch
 import torch.nn as nn
 import logging
