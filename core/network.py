@@ -91,6 +91,7 @@ class SinNetwork(nn.Module):
         
         # Подсистемы (ленивая загрузка визуализатора)
         self.memory = MemorySystem()
+        from core.learning import LearningEngine
         self.learning_engine = LearningEngine(self)
         self.api_handler = DeepSeekAPIHandler()
         self.code_analyzer = CodeAnalyzer()
