@@ -25,6 +25,15 @@ class CommandLineInterface(cmd.Cmd):
             self._model_manager = ModelManager()
         return self._model_manager
 
+    def run(self):
+        """Основной цикл интерфейса"""
+        print(
+        "Sin AI - Интеллектуальный ассистент\n"
+        "Введите 'help' для списка команд\n"
+        "----------------------------------"
+    )
+        self.cmdloop()
+
     def _load_plugins(self) -> Dict[str, Any]:  # Any вместо SinPlugin
         from plugins.base import SinPlugin  # Ленивый импорт
         plugins: Dict[str, SinPlugin] = {}
