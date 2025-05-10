@@ -1,32 +1,20 @@
 import os
 import json
 import torch
+import logging
 from pathlib import Path
+from datetime import datetime
 from brain.model import SinModel
 from brain.memory import SinMemory
 from brain.trainer import SinTrainer
 from brain.evaluator import ModelEvaluator
 from brain.monitor import TrainingMonitor
 from torch.optim.lr_scheduler import CosineAnnealingLR
-import logging
+
 logger = logging.getLogger(__name__)
 
 class Sin:
     def __init__(self):
-        self.data_dir = Path("data")
-        self.models_dir = self.data_dir / "models"
-        self.conversations_dir = self.data_dir / "conversations"
-        
-        self.models_dir.mkdir(parents=True, exist_ok=True)
-        self.conversations_dir.mkdir(exist_ok=True)
-        
-        self.model = self._load_model()
-        self.memory = SinMemory()
-        self.trainer = SinTrainer(self.model)
-        self.evaluator = ModelEvaluator(self.model, self.model.tokenizer)
-        self.monitor = TrainingMonitor()
-        self.load()
-        
         self.logger = logging.getLogger(__name__)
         try:
             self.data_dir = Path("data")
@@ -77,28 +65,28 @@ class Sin:
         self.logger.info(f"Received user input: {user_input}")
     
         try:
-        # Логируем добавление в память
+            # Логируем добавление в память
             self.logger.debug("Adding interaction to memory")
             self.memory.add_interaction(user_input, "")
         
-        # Формируем контекст
+            # Формируем контекст
             context = "\n".join(list(self.memory.context)[-4:])
             self.logger.debug(f"Current context: {context}")
         
             prompt = f"{context}\nSin:"
             self.logger.debug(f"Generated prompt: {prompt}")
         
-        # Генерация ответа
+            # Генерация ответа
             self.logger.info("Generating response...")
             response = self.model.generate_response(prompt)
             self.logger.debug(f"Raw response: {response}")
         
-        # Очистка ответа
+            # Очистка ответа
             clean_response = response.split("Sin:")[-1].strip()
             clean_response = clean_response.split("\n")[0].strip()
             self.logger.debug(f"Cleaned response: {clean_response}")
         
-        # Сохранение в память
+            # Сохранение в память
             self.memory.add_interaction(user_input, clean_response)
             self.logger.info(f"Returning response: {clean_response}")
         
@@ -121,7 +109,7 @@ class Sin:
         
             self.logger.info(f"Loaded dataset with {len(train_dataset)} samples")
         
-        # Валидация перед обучением
+            # Валидация перед обучением
             if val_dataset:
                 self.logger.info("Running initial validation...")
                 init_metrics = self.evaluate(val_dataset)
@@ -146,11 +134,11 @@ class Sin:
                         if batch_idx % 50 == 0:
                             self.logger.debug(
                                 f"Epoch {epoch+1} | Batch {batch_idx} | Loss: {loss.item():.4f}"
-                        )
+                            )
                 
                     scheduler.step()
                 
-                # Валидация после эпохи
+                    # Валидация после эпохи
                     val_metrics = None
                     if val_dataset:
                         self.logger.info("Running validation...")
@@ -160,7 +148,7 @@ class Sin:
                     self.monitor.log_epoch(epoch+1, total_loss, val_metrics)
                     self.logger.info(
                         f"Epoch {epoch+1} complete | Avg Loss: {total_loss/len(train_dataset):.4f}"
-                )
+                    )
                 
                 except Exception as e:
                     self.logger.error(f"Error during epoch {epoch+1}: {str(e)}", exc_info=True)
@@ -188,7 +176,7 @@ class Sin:
                 elif filename.endswith('.txt'):
                     datasets.append(self.trainer.load_text_data(filepath))
             except Exception as e:
-                print(f"Error loading {filename}: {str(e)}")
+                self.logger.error(f"Error loading {filename}: {str(e)}")
         
         return torch.utils.data.ConcatDataset(datasets) if datasets else None
 
@@ -209,18 +197,18 @@ class Sin:
             self.logger.error(f"Failed to save: {str(e)}", exc_info=True)
             raise
 
-def load(self):
-    """Загрузка сохраненного состояния"""
-    try:
-        memory_path = self.data_dir / "memory.json"
-        if memory_path.exists():
-            self.logger.info("Loading memory...")
-            self.memory.load(memory_path)
-            self.logger.info("Memory loaded successfully")
-    except Exception as e:
-        self.logger.error(f"Failed to load memory: {str(e)}", exc_info=True)
-        # Не прерываем работу, продолжаем с пустой памятью
-        self.memory = SinMemory()
+    def load(self):
+        """Загрузка сохраненного состояния"""
+        try:
+            memory_path = self.data_dir / "memory.json"
+            if memory_path.exists():
+                self.logger.info("Loading memory...")
+                self.memory.load(memory_path)
+                self.logger.info("Memory loaded successfully")
+        except Exception as e:
+            self.logger.error(f"Failed to load memory: {str(e)}", exc_info=True)
+            # Не прерываем работу, продолжаем с пустой памятью
+            self.memory = SinMemory()
 
     def get_training_report(self):
         """Получение отчета о последнем обучении"""
@@ -255,44 +243,44 @@ def load(self):
             self.model.load_state_dict(original_state)
             raise e
 
-  def save_model(self, model_name=None):
-    """Ручное сохранение модели с указанием имени"""
-    try:
-        if not model_name:
-            model_name = f"sin_model_{datetime.now().strftime('%Y%m%d_%H%M%S')}.pt"
-        elif not model_name.endswith('.pt'):
-            model_name += '.pt'
-        
-        model_path = self.models_dir / model_name
-        self.model.save(model_path)
-        self.logger.info(f"Model manually saved to {model_path}")
-        
-        # Очистка старых моделей (сохраняем последние 5)
-        self._cleanup_old_models(max_models=5)
-        return str(model_path)
-    except Exception as e:
-        self.logger.error(f"Manual save failed: {str(e)}", exc_info=True)
-        raise
-
-def _cleanup_old_models(self, max_models=5):
-    """Удаление старых моделей, кроме max_models последних"""
-    models = sorted(
-        [f for f in self.models_dir.glob('*.pt') if f.is_file()],
-        key=lambda f: f.stat().st_mtime,
-        reverse=True
-    )
-    
-    for old_model in models[max_models:]:
+    def save_model(self, model_name=None):
+        """Ручное сохранение модели с указанием имени"""
         try:
-            old_model.unlink()
-            self.logger.info(f"Removed old model: {old_model}")
+            if not model_name:
+                model_name = f"sin_model_{datetime.now().strftime('%Y%m%d_%H%M%S')}.pt"
+            elif not model_name.endswith('.pt'):
+                model_name += '.pt'
+            
+            model_path = self.models_dir / model_name
+            self.model.save(model_path)
+            self.logger.info(f"Model manually saved to {model_path}")
+            
+            # Очистка старых моделей (сохраняем последние 5)
+            self._cleanup_old_models(max_models=5)
+            return str(model_path)
         except Exception as e:
-            self.logger.error(f"Failed to remove {old_model}: {str(e)}")
+            self.logger.error(f"Manual save failed: {str(e)}", exc_info=True)
+            raise
 
-def list_models(self):
-    """Список доступных моделей"""
-    return [f.name for f in sorted(
-        self.models_dir.glob('*.pt'),
-        key=lambda f: f.stat().st_mtime,
-        reverse=True
-    )]
+    def _cleanup_old_models(self, max_models=5):
+        """Удаление старых моделей, кроме max_models последних"""
+        models = sorted(
+            [f for f in self.models_dir.glob('*.pt') if f.is_file()],
+            key=lambda f: f.stat().st_mtime,
+            reverse=True
+        )
+        
+        for old_model in models[max_models:]:
+            try:
+                old_model.unlink()
+                self.logger.info(f"Removed old model: {old_model}")
+            except Exception as e:
+                self.logger.error(f"Failed to remove {old_model}: {str(e)}")
+
+    def list_models(self):
+        """Список доступных моделей"""
+        return [f.name for f in sorted(
+            self.models_dir.glob('*.pt'),
+            key=lambda f: f.stat().st_mtime,
+            reverse=True
+        )]
