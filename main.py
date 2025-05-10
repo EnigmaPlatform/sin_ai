@@ -1,6 +1,9 @@
 from sin import Sin
 import argparse
 import logging
+import torch
+print(f"PyTorch version: {torch.__version__}")
+print(f"CUDA available: {torch.cuda.is_available()}")
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
