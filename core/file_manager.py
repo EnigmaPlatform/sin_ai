@@ -1,32 +1,34 @@
-import shutil
 from pathlib import Path
+import logging
+
+logger = logging.getLogger(__name__)
 
 class FileManager:
-    def __init__(self, root_dir="sin_ai"):
-        self.root = Path(root_dir)
+    @staticmethod
+    def read_text_file(file_path: str) -> str:
+        """Чтение текстовых файлов с обработкой ошибок"""
+        try:
+            path = Path(file_path)
+            if not path.exists():
+                raise FileNotFoundError(f"Файл не найден: {file_path}")
+                
+            with open(path, 'r', encoding='utf-8') as f:
+                return f.read()
+                
+        except Exception as e:
+            logger.error(f"Ошибка чтения файла: {str(e)}")
+            raise
 
-    def _validate_path(self, path):
-        if "../" in str(path):
-            raise SecurityError("Недопустимый путь")
-
-    def load_archetypes(self, config_path):
-        with open(config_path) as f:
-            self.ARCHETYPES.update(json.load(f))
-
-    def write_file(self, path: str, content: str):
-        target = self.root / path
-        target.parent.mkdir(exist_ok=True)
-        target.write_text(content)
-
-    def update_code(self, module_path: str, new_code: str):
-        # Автоматическое обновление кода с бэкапом
-        backup = self.root / f"{module_path}.bak"
-        original = self.root / f"{module_path}.py"
-        
-        shutil.copy(original, backup)
-        self.write_file(module_path, new_code)
-        
-        # Перезагрузка модуля
-        import importlib
-        module = importlib.import_module(module_path.replace('/', '.'))
-        importlib.reload(module)
+    @staticmethod
+    def extract_text_from_file(file_path: str) -> str:
+        """Поддержка основных текстовых форматов"""
+        path = Path(file_path)
+        if path.suffix == '.txt':
+            return FileManager.read_text_file(file_path)
+        elif path.suffix == '.pdf':
+            from PyPDF2 import PdfReader
+            with open(file_path, 'rb') as f:
+                reader = PdfReader(f)
+                return "\n".join(page.extract_text() for page in reader.pages)
+        else:
+            raise ValueError(f"Неподдерживаемый формат файла: {path.suffix}")
