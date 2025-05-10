@@ -6,6 +6,7 @@ from brain.model import SinModel
 from brain.memory import SinMemory
 from brain.trainer import SinTrainer
 from brain.evaluator import ModelEvaluator
+from brain.monitor import TrainingMonitor
 
 class Sin:
     def __init__(self):
@@ -21,10 +22,13 @@ class Sin:
         self.trainer = SinTrainer(self.model)
         self.load()
         self.evaluator = ModelEvaluator(self.model, self.model.tokenizer)
+        self.monitor = TrainingMonitor()
 
-     def evaluate(self, test_data):
-        """Публичный метод для оценки"""
-        return self.evaluator.evaluate_dataset(test_data)
+     def evaluate(self, dataset, sample_size=100):
+         """Оценка модели на датасете"""
+            if not dataset:
+                return {}
+            return self.evaluator.evaluate_dataset(dataset, sample_size)
 
     def _load_model(self):
         model_path = self.models_dir / "sin_model.pt"
@@ -40,14 +44,28 @@ class Sin:
         self.memory.add_interaction(user_input, response)
         return response
 
-    def train(self):
-        dataset = self._load_all_datasets()
-        if dataset is None:
+    def train(self, epochs=3, val_dataset=None):
+        """Обучение с валидацией"""
+        train_dataset = self._load_all_datasets()
+        if not train_dataset:
             raise ValueError("No training data found")
         
-        loss = self.trainer.train(dataset)
-        self.save()
-        return loss
+        # Начальная оценка
+        init_metrics = self.evaluate(val_dataset) if val_dataset else {}
+        print(f"Initial metrics: {init_metrics}")
+        
+        # Процесс обучения
+        for epoch in range(epochs):
+            train_loss = self._train_epoch(train_dataset)
+            
+            # Валидация
+            val_metrics = self.evaluate(val_dataset) if val_dataset else None
+            self.monitor.log_epoch(epoch+1, train_loss, val_metrics)
+        
+        # Финализация
+        best_epoch = self.monitor.get_best_epoch()
+        print(f"\nTraining complete! Best epoch: {best_epoch}")
+        return self.monitor.current_log
 
     def _load_all_datasets(self):
         datasets = []
@@ -85,20 +103,29 @@ class Sin:
                 return json.load(f)
         return None
 
-def compare_models(self, model_a, model_b, test_data):
-    """Сравнение двух версий модели"""
-    original_model = self.model
-    try:
-        self.model = SinModel.load(Path(f"data/models/{model_a}"))
-        metrics_a = self.trainer.evaluate(test_data)
+ def compare_models(self, model_paths, test_dataset):
+        """Сравнение нескольких моделей"""
+        results = {}
+        original_state = self.model.state_dict()
         
-        self.model = SinModel.load(Path(f"data/models/{model_b}"))
-        metrics_b = self.trainer.evaluate(test_data)
-        
-        return {
-            model_a: metrics_a,
-            model_b: metrics_b,
-            "difference": {k: v2 - v1 for (k, v1), (_, v2) in zip(metrics_a.items(), metrics_b.items())}
-        }
-    finally:
-        self.model = original_model
+        try:
+            for path in model_paths:
+                self.model.load_state_dict(torch.load(path))
+                metrics = self.evaluate(test_dataset)
+                results[Path(path).name] = metrics
+            
+            # Восстанавливаем оригинальную модель
+            self.model.load_state_dict(original_state)
+            
+            # Расчет разницы
+            if len(results) > 1:
+                base = next(iter(results.values()))
+                for name, metrics in results.items():
+                    results[name]["improvement"] = {
+                        k: v - base[k] for k, v in metrics.items()
+                    }
+            
+            return results
+        except Exception as e:
+            self.model.load_state_dict(original_state)
+            raise e
