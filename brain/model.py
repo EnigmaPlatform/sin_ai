@@ -54,10 +54,12 @@ def generate_response(self, prompt, max_new_tokens=100, **kwargs):
     )
 
 def save(self, path):
-    # Убедитесь, что сохраняете только state_dict
     torch.save({
-        'model_state': self.state_dict(),
-        'tokenizer_config': self.tokenizer.get_vocab()
+        'model_state': self.state_dict(),  # Состояние модели
+        'tokenizer_config': {
+            'vocab': self.tokenizer.get_vocab(),
+            'special_tokens': self.tokenizer.special_tokens_map
+        }
     }, path)
 
 @classmethod
