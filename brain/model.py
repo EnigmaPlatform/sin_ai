@@ -36,24 +36,39 @@ class SinModel(nn.Module):
         adapted = self.adaptation(outputs.hidden_states[-1])
         return self.base_model.lm_head(adapted)
 
-    def generate_response(self, prompt, max_new_tokens=100, temperature=0.7, top_p=0.9, repetition_penalty=1.2):
-        """Генерация ответа с обработкой ошибок"""
+    def generate_response(self, prompt, max_new_tokens=100, temperature=0.7):
         try:
-            inputs = self.tokenizer(prompt, return_tensors="pt", truncation=True, max_length=512).to(self.device)
+        # Очистка промпта от предыдущих ответов
+            clean_prompt = prompt.split("Sin:")[0].strip()
+        
+            inputs = self.tokenizer(
+                clean_prompt,
+                return_tensors="pt",
+                max_length=512,
+                truncation=True
+            ).to(self.device)
+        
             with torch.no_grad():
                 outputs = self.base_model.generate(
                     **inputs,
                     max_new_tokens=max_new_tokens,
                     temperature=temperature,
-                    top_p=top_p,
-                    repetition_penalty=repetition_penalty,
-                    do_sample=True,
-                    pad_token_id=self.tokenizer.eos_token_id
-                )
-            return self.tokenizer.decode(outputs[0], skip_special_tokens=True).replace(prompt, "").strip()
+                    top_k=50,
+                    top_p=0.9,
+                    repetition_penalty=1.2,
+                    pad_token_id=self.tokenizer.eos_token_id,
+                    do_sample=True
+            )
+        
+        # Извлекаем только новый сгенерированный текст
+            full_response = self.tokenizer.decode(outputs[0], skip_special_tokens=True)
+            response = full_response.replace(clean_prompt, "").strip()
+            return response.split("\n")[0]  # Берем первую строку ответа
+        
         except Exception as e:
             print(f"Ошибка генерации: {str(e)}")
-            return "Извините, возникла ошибка при формировании ответа"
+            return "Извините, произошла ошибка"
+
 
     def save(self, path):
         """Сохранение модели с обработкой ошибок"""
