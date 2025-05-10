@@ -20,15 +20,15 @@ class Sin:
         self.model = self._load_model()
         self.memory = SinMemory()
         self.trainer = SinTrainer(self.model)
-        self.load()
         self.evaluator = ModelEvaluator(self.model, self.model.tokenizer)
         self.monitor = TrainingMonitor()
+        self.load()
 
-     def evaluate(self, dataset, sample_size=100):
-         """Оценка модели на датасете"""
-            if not dataset:
-                return {}
-            return self.evaluator.evaluate_dataset(dataset, sample_size)
+    def evaluate(self, dataset, sample_size=100):
+        """Оценка модели на датасете"""
+        if not dataset:
+            return {}
+        return self.evaluator.evaluate_dataset(dataset, sample_size)
 
     def _load_model(self):
         model_path = self.models_dir / "sin_model.pt"
@@ -37,6 +37,7 @@ class Sin:
         return SinModel()
 
     def chat(self, user_input):
+        """Генерация ответа с учетом контекста"""
         self.memory.add_interaction(user_input, "")
         context = self.memory.get_context()
         prompt = f"{context}\nSin:"
@@ -50,21 +51,31 @@ class Sin:
         if not train_dataset:
             raise ValueError("No training data found")
         
-        # Начальная оценка
         init_metrics = self.evaluate(val_dataset) if val_dataset else {}
         print(f"Initial metrics: {init_metrics}")
         
-        # Процесс обучения
-        for epoch in range(epochs):
-            train_loss = self._train_epoch(train_dataset)
-            
-            # Валидация
-            val_metrics = self.evaluate(val_dataset) if val_dataset else None
-            self.monitor.log_epoch(epoch+1, train_loss, val_metrics)
+        optimizer = torch.optim.AdamW(self.model.parameters(), lr=5e-5)
+        scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, epochs)
         
-        # Финализация
+        for epoch in range(epochs):
+            self.model.train()
+            total_loss = 0
+            
+            for batch in self.trainer.get_data_loader(train_dataset):
+                optimizer.zero_grad()
+                loss = self.trainer.train_step(batch)
+                loss.backward()
+                optimizer.step()
+                total_loss += loss.item()
+            
+            scheduler.step()
+            
+            val_metrics = self.evaluate(val_dataset) if val_dataset else None
+            self.monitor.log_epoch(epoch+1, total_loss, val_metrics)
+        
         best_epoch = self.monitor.get_best_epoch()
         print(f"\nTraining complete! Best epoch: {best_epoch}")
+        self.save()
         return self.monitor.current_log
 
     def _load_all_datasets(self):
@@ -77,8 +88,6 @@ class Sin:
                         data = json.load(f)
                         if 'dialogues' in data:
                             datasets.append(self.trainer.load_json_data(filepath))
-                            for dialogue in data['dialogues']:
-                                self.memory.add_dialogue(dialogue)
                 elif filename.endswith('.txt'):
                     datasets.append(self.trainer.load_text_data(filepath))
             except Exception as e:
@@ -87,24 +96,26 @@ class Sin:
         return torch.utils.data.ConcatDataset(datasets) if datasets else None
 
     def save(self):
+        """Сохранение модели и памяти"""
         self.model.save(self.models_dir / "sin_model.pt")
         self.memory.save(self.data_dir / "memory.json")
 
     def load(self):
+        """Загрузка сохраненного состояния"""
         memory_path = self.data_dir / "memory.json"
         if memory_path.exists():
             self.memory.load(memory_path)
 
-   def get_training_report(self):
-       """Получение отчета о последнем обучении"""
+    def get_training_report(self):
+        """Получение отчета о последнем обучении"""
         report_path = Path("data/logs/training_log.json")
         if report_path.exists():
             with open(report_path, "r") as f:
                 return json.load(f)
         return None
 
- def compare_models(self, model_paths, test_dataset):
-        """Сравнение нескольких моделей"""
+    def compare_models(self, model_paths, test_dataset):
+        """Сравнение нескольких версий моделей"""
         results = {}
         original_state = self.model.state_dict()
         
@@ -114,10 +125,8 @@ class Sin:
                 metrics = self.evaluate(test_dataset)
                 results[Path(path).name] = metrics
             
-            # Восстанавливаем оригинальную модель
             self.model.load_state_dict(original_state)
             
-            # Расчет разницы
             if len(results) > 1:
                 base = next(iter(results.values()))
                 for name, metrics in results.items():
