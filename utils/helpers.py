@@ -1,6 +1,8 @@
 import os
 import json
 from jsonschema import validate
+import logging
+logger = logging.getLogger(__name__)
 
 JSON_SCHEMA = {
     "type": "object",
