@@ -4,65 +4,37 @@ import logging
 from logging.handlers import RotatingFileHandler
 import sys
 import torch
+
 print(f"PyTorch version: {torch.__version__}")
 print(f"CUDA available: {torch.cuda.is_available()}")
 
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
+def setup_logging():
+    logger = logging.getLogger()
+    logger.setLevel(logging.INFO)
+    
+    # Формат логов
+    formatter = logging.Formatter(
+        '%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+    )
+    
+    # Логи в файл с ротацией
+    file_handler = RotatingFileHandler(
+        'data/logs/sin.log',
+        maxBytes=5*1024*1024,
+        backupCount=3
+    )
+    file_handler.setFormatter(formatter)
+    
+    # Логи в консоль
+    console_handler = logging.StreamHandler(sys.stdout)
+    console_handler.setFormatter(formatter)
+    
+    logger.addHandler(file_handler)
+    logger.addHandler(console_handler)
+    
+    return logger
 
-def main():
-    parser = argparse.ArgumentParser(description="Sin - Russian AI Assistant")
-    parser.add_argument('--train', action='store_true', help="Enable training mode")
-    args = parser.parse_args()
-    
-    ai = Sin()
-    
-    if args.train:
-        logger.info("Starting training process...")
-        try:
-            loss = ai.train()
-            logger.info(f"Training complete | Loss: {loss:.4f}")
-        except Exception as e:
-            logger.error(f"Training failed: {str(e)}")
-        return
-    
-    print("Sin: Привет! Я Sin, твой русскоязычный ИИ помощник.")
-    print("     Напиши 'выход' чтобы завершить диалог.\n")
-    
-    while True:
-        try:
-            user_input = input("Ты: ").strip()
-            
-            if user_input.lower() in ('выход', 'exit', 'quit'):
-                print("Sin: До новых встреч!")
-                ai.save()
-                break
-                
-            response = ai.chat(user_input)
-            print(f"Sin: {response}")
-
-            if user_input.startswith('/'):
-            if handle_command(ai, user_input):
-                continue
-                
-        if user_input.lower() in ('выход', 'exit', 'quit', '/exit'):
-            print("Sin: До новых встреч!")
-            ai.save()
-            break
-            
-        response = ai.chat(user_input)
-        print(f"Sin: {response}")
-        
-    except KeyboardInterrupt:
-        print("\nSin: Сохраняю данные перед выходом...")
-        ai.save()
-        break
-    except Exception as e:
-        logger.error(f"Error: {str(e)}")
-        print("Sin: Произошла ошибка, попробуйте другой вопрос")
-
-if __name__ == "__main__":
-    main()
+logger = setup_logging()
 
 def print_help():
     print("\nДоступные команды:")
@@ -118,30 +90,48 @@ def handle_command(ai, command):
         
     return False
 
-def setup_logging():
-    logger = logging.getLogger()
-    logger.setLevel(logging.INFO)
+def main():
+    parser = argparse.ArgumentParser(description="Sin - Russian AI Assistant")
+    parser.add_argument('--train', action='store_true', help="Enable training mode")
+    args = parser.parse_args()
     
-    # Формат логов
-    formatter = logging.Formatter(
-        '%(asctime)s - %(name)s - %(levelname)s - %(message)s'
-    )
+    ai = Sin()
     
-    # Логи в файл с ротацией
-    file_handler = RotatingFileHandler(
-        'data/logs/sin.log',
-        maxBytes=5*1024*1024,
-        backupCount=3
-    )
-    file_handler.setFormatter(formatter)
+    if args.train:
+        logger.info("Starting training process...")
+        try:
+            loss = ai.train()
+            logger.info(f"Training complete | Loss: {loss:.4f}")
+        except Exception as e:
+            logger.error(f"Training failed: {str(e)}")
+        return
     
-    # Логи в консоль
-    console_handler = logging.StreamHandler(sys.stdout)
-    console_handler.setFormatter(formatter)
+    print("Sin: Привет! Я Sin, твой русскоязычный ИИ помощник.")
+    print("     Напиши 'выход' чтобы завершить диалог.\n")
     
-    logger.addHandler(file_handler)
-    logger.addHandler(console_handler)
-    
-    return logger
+    while True:
+        try:
+            user_input = input("Ты: ").strip()
+            
+            if user_input.startswith('/'):
+                if handle_command(ai, user_input):
+                    continue
+                    
+            if user_input.lower() in ('выход', 'exit', 'quit', '/exit'):
+                print("Sin: До новых встреч!")
+                ai.save()
+                break
+                
+            response = ai.chat(user_input)
+            print(f"Sin: {response}")
+            
+        except KeyboardInterrupt:
+            print("\nSin: Сохраняю данные перед выходом...")
+            ai.save()
+            break
+        except Exception as e:
+            logger.error(f"Error: {str(e)}")
+            print("Sin: Произошла ошибка, попробуйте другой вопрос")
 
-logger = setup_logging()
+if __name__ == "__main__":
+    main()
