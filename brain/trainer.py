@@ -202,54 +202,137 @@ class SinTrainer:
     }
 
     def train(self, dataset, epochs=3, batch_size=4, lr=5e-5):
-        dataloader = DataLoader(dataset, batch_size=batch_size, shuffle=True)
-        initial_metrics = self.evaluate(dataset)
-        print(f"Initial metrics: {initial_metrics}")
+        """Улучшенный метод обучения с проверками и логированием"""
+        try:
+        # 1. Проверка входных данных
+            if dataset is None or len(dataset) == 0:
+                error_msg = "Dataset is empty or None"
+                self.logger.error(error_msg)
+                raise ValueError(error_msg)
+            
+            if epochs <= 0 or batch_size <= 0:
+                error_msg = f"Invalid parameters: epochs={epochs}, batch_size={batch_size}"
+                self.logger.error(error_msg)
+                raise ValueError(error_msg)
+
+        # 2. Инициализация
+            self.logger.info(f"Starting training for {epochs} epochs, batch_size={batch_size}, lr={lr}")
+            dataloader = DataLoader(dataset, batch_size=batch_size, shuffle=True)
         
-        optimizer = AdamW(self.model.parameters(), lr=lr)
-        scheduler = get_linear_schedule_with_warmup(
-            optimizer,
-            num_warmup_steps=100,
-            num_training_steps=len(dataloader) * epochs
+        # 3. Начальная оценка
+            self.logger.info("Running initial evaluation...")
+            initial_metrics = self.evaluate(dataset)
+            self.logger.info(f"Initial metrics: {initial_metrics}")
+            print(f"\nInitial metrics: {initial_metrics}")
+
+        # 4. Настройка оптимизатора
+            optimizer = AdamW(self.model.parameters(), lr=lr)
+            scheduler = get_linear_schedule_with_warmup(
+                optimizer,
+                num_warmup_steps=100,
+                num_training_steps=len(dataloader) * epochs
         )
-        
-        self.model.train()
-        for epoch in range(epochs):
-            total_loss = 0
-            for batch in dataloader:
-                optimizer.zero_grad()
-                
-                inputs = batch["input_ids"].to(self.device)
-                masks = batch["attention_mask"].to(self.device)
-                
-                outputs = self.model(inputs, attention_mask=masks)
-                loss = F.cross_entropy(
-                    outputs.view(-1, outputs.size(-1)),
-                    inputs.view(-1),
-                    ignore_index=self.model.tokenizer.pad_token_id
-                )
-                
-                loss.backward()
-                torch.nn.utils.clip_grad_norm_(self.model.parameters(), 1.0)
-                optimizer.step()
-                scheduler.step()
-                
-                total_loss += loss.item()
+
+        # 5. Цикл обучения
+            self.model.train()
+            for epoch in range(epochs):
+                self.logger.info(f"Starting epoch {epoch+1}/{epochs}")
+                total_loss = 0
+                processed_batches = 0
             
-            print(f"Epoch {epoch+1}/{epochs} | Loss: {total_loss/len(dataloader):.4f}")
-            
-            # Логирование после каждой эпохи
-            epoch_metrics = self.evaluate(dataset)
-            if self.monitor is not None:
-                self.monitor.log_epoch(epoch+1, total_loss/len(dataloader), epoch_metrics)
+                try:
+                    for batch_idx, batch in enumerate(dataloader):
+                    # Проверка наличия необходимых ключей
+                        if 'input_ids' not in batch or 'attention_mask' not in batch:
+                            self.logger.warning(f"Skipping invalid batch at index {batch_idx}")
+                            continue
+
+                        optimizer.zero_grad()
+                    
+                    # Перенос данных на устройство
+                        inputs = batch["input_ids"].to(self.device)
+                        masks = batch["attention_mask"].to(self.device)
+                    
+                    # Прямой проход
+                        outputs = self.model(inputs, attention_mask=masks)
+                    
+                    # Расчет потерь
+                        loss = F.cross_entropy(
+                            outputs.view(-1, outputs.size(-1)),
+                            inputs.view(-1),
+                            ignore_index=self.model.tokenizer.pad_token_id
+                    )
+                    
+                    # Обратный проход
+                        loss.backward()
+                        torch.nn.utils.clip_grad_norm_(self.model.parameters(), 1.0)
+                        optimizer.step()
+                        scheduler.step()
+                    
+                        total_loss += loss.item()
+                        processed_batches += 1
+                    
+                    # Логирование каждые 10% батчей
+                        if (batch_idx + 1) % max(1, len(dataloader) // 10) == 0:
+                            avg_loss = total_loss / processed_batches
+                            self.logger.debug(
+                                f"Epoch {epoch+1} | Batch {batch_idx+1}/{len(dataloader)} "
+                                f"| Loss: {avg_loss:.4f}"
+                        )
+
+                # 6. Логирование после эпохи
+                    avg_epoch_loss = total_loss / len(dataloader)
+                    self.logger.info(f"Epoch {epoch+1} complete | Avg Loss: {avg_epoch_loss:.4f}")
+                    print(f"Epoch {epoch+1}/{epochs} | Loss: {avg_epoch_loss:.4f}")
+                
+                # Валидация после эпохи
+                    epoch_metrics = self.evaluate(dataset)
+                    self.logger.info(f"Epoch {epoch+1} metrics: {epoch_metrics}")
+                
+                    if self.monitor is not None:
+                        self.monitor.log_epoch(epoch+1, avg_epoch_loss, epoch_metrics)
+                    
+                except RuntimeError as e:
+                    if 'CUDA out of memory' in str(e):
+                        self.logger.error("CUDA out of memory - try reducing batch size")
+                        print("\nОшибка: Недостаточно памяти GPU. Попробуйте уменьшить batch_size.")
+                        return {
+                            'status': 'error',
+                            'message': 'CUDA out of memory',
+                            'suggestion': 'Try reducing batch size'
+                    }
+                    raise
+
+        # 7. Финальная оценка
+            self.model.eval()
+            self.logger.info("Training complete. Running final evaluation...")
+            final_metrics = self.evaluate(dataset)
         
-        self.model.eval()
+        # 8. Формирование отчета
+            report = {
+                'initial_metrics': initial_metrics,
+                'final_metrics': final_metrics,
+                'improvement': {
+                    'loss': initial_metrics['loss'] - final_metrics['loss'],
+                    'accuracy': final_metrics['accuracy'] - initial_metrics['accuracy']
+            },
+                'epochs_trained': epochs,
+                'status': 'success'
+        }
         
-        # Оценка после обучения
-        final_metrics = self.evaluate(dataset)
-        print(f"\nTraining complete!")
-        print(f"Initial loss: {initial_metrics['loss']:.4f}")
-        print(f"Final loss: {final_metrics['loss']:.4f}")
-        print(f"Improvement: {initial_metrics['loss'] - final_metrics['loss']:.4f}")
+            self.logger.info(f"Training report: {report}")
+            print("\nTraining complete!")
+            print(f"Initial loss: {initial_metrics['loss']:.4f}")
+            print(f"Final loss: {final_metrics['loss']:.4f}")
+            print(f"Improvement: {initial_metrics['loss'] - final_metrics['loss']:.4f}")
         
-        return final_metrics
+            return report
+        
+        except Exception as e:
+            self.logger.error(f"Training failed: {str(e)}", exc_info=True)
+            print(f"\nОшибка обучения: {str(e)}")
+            return {
+                'status': 'error',
+                'message': str(e),
+                'exception_type': type(e).__name__
+        }
