@@ -254,3 +254,45 @@ def load(self):
         except Exception as e:
             self.model.load_state_dict(original_state)
             raise e
+
+  def save_model(self, model_name=None):
+    """Ручное сохранение модели с указанием имени"""
+    try:
+        if not model_name:
+            model_name = f"sin_model_{datetime.now().strftime('%Y%m%d_%H%M%S')}.pt"
+        elif not model_name.endswith('.pt'):
+            model_name += '.pt'
+        
+        model_path = self.models_dir / model_name
+        self.model.save(model_path)
+        self.logger.info(f"Model manually saved to {model_path}")
+        
+        # Очистка старых моделей (сохраняем последние 5)
+        self._cleanup_old_models(max_models=5)
+        return str(model_path)
+    except Exception as e:
+        self.logger.error(f"Manual save failed: {str(e)}", exc_info=True)
+        raise
+
+def _cleanup_old_models(self, max_models=5):
+    """Удаление старых моделей, кроме max_models последних"""
+    models = sorted(
+        [f for f in self.models_dir.glob('*.pt') if f.is_file()],
+        key=lambda f: f.stat().st_mtime,
+        reverse=True
+    )
+    
+    for old_model in models[max_models:]:
+        try:
+            old_model.unlink()
+            self.logger.info(f"Removed old model: {old_model}")
+        except Exception as e:
+            self.logger.error(f"Failed to remove {old_model}: {str(e)}")
+
+def list_models(self):
+    """Список доступных моделей"""
+    return [f.name for f in sorted(
+        self.models_dir.glob('*.pt'),
+        key=lambda f: f.stat().st_mtime,
+        reverse=True
+    )]
