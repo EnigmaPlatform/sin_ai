@@ -45,6 +45,9 @@ class Sin:
     
     def train(self):
         """Обучение на доступных данных"""
+        dataset = self._load_all_datasets()
+        if dataset is None:
+            raise ValueError("No training data found")
         loss = self.trainer.train(self.conversations_dir)
         self.save()
         return loss
@@ -59,3 +62,24 @@ class Sin:
         memory_path = self.data_dir / "memory.json"
         if memory_path.exists():
             self.memory.load(memory_path)
+
+   def _load_all_datasets(self):
+        datasets = []
+        for filename in os.listdir(self.conversations_dir):
+            if filename.endswith('.json'):
+                try:
+                    # Загрузка нового формата JSON
+                    with open(os.path.join(self.conversations_dir, filename), 'r') as f:
+                        data = json.load(f)
+                        if 'dialogues' in data:  # Проверка нового формата
+                            datasets.append(self.trainer.load_json_data(
+                                os.path.join(self.conversations_dir, filename)
+                            ))
+                            # Добавляем в память
+                            for dialogue in data['dialogues']:
+                                self.memory.add_dialogue(dialogue)
+                except Exception as e:
+                    print(f"Error loading {filename}: {str(e)}")
+            
+            elif filename.endswith('.txt'):
+return torch.utils.data.ConcatDataset(datasets) if datasets else None
