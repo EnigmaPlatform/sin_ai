@@ -42,6 +42,7 @@ def main():
             break
         except Exception as e:
             logger.error(f"Error: {str(e)}")
+            print("Sin: Произошла ошибка, попробуйте другой вопрос")
 
 if __name__ == "__main__":
     main()
