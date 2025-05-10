@@ -1,11 +1,14 @@
-torch>=2.2.1
-transformers>=4.34.0
-sentence-transformers>=2.2.2
-numpy>=1.26.0  # Минимальная версия для Python 3.12
-tqdm>=4.65.0
-jsonschema>=4.17.3
-accelerate>=0.21.0
-safetensors>=0.3.3
-python-dotenv>=1.0.0
-matplotlib>=3.7.0
-scikit-learn>=1.2.0
+torch==2.2.1
+transformers==4.34.0
+sentence-transformers==2.2.2
+numpy==1.26.0
+tqdm==4.65.0
+jsonschema==4.17.3
+accelerate==0.21.0
+safetensors==0.3.3
+python-dotenv==1.0.0
+matplotlib==3.7.0
+scikit-learn==1.2.0
+scipy==1.11.1
+sentencepiece==0.1.99
+protobuf==3.20.3
