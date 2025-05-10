@@ -93,3 +93,16 @@ def generate_response_with_style(user_input, emotion="neutral"):
     context = ai.memory.get_context()
     prompt = f"[{emotion}] {context}\nUser: {user_input}\nSin:"
     return ai.model.generate_response(prompt)
+    
+def detect_data_level(data):
+    if not data.get('dialogues'):
+        return "invalid"
+    
+    first_dialogue = data['dialogues'][0]
+    
+    if 'meta' in first_dialogue.get('responses', [{}])[0]:
+        return "full_meta"
+    elif 'category' in first_dialogue:
+        return "with_categories"
+    else:
+        return "basic"
