@@ -31,15 +31,14 @@ def main():
                 ai.save()
                 break
                 
-            response = ai.chat(user_input)
-            print(f"Sin: {response}")
-            
-        except KeyboardInterrupt:
-            print("\nSin: Сохраняю данные перед выходом...")
-            ai.save()
-            sys.exit(0)
-        except Exception as e:
-            print(f"Sin: Произошла ошибка: {str(e)}")
-
+            # Определение эмоции запроса (упрощенный вариант)
+    emotion = "neutral"
+    if '?' in user_input:
+        emotion = "educational"
+    elif any(word in user_input for word in ['шутка', 'прикол']):
+        emotion = "funny"
+    
+    response = generate_response_with_style(user_input, emotion)
+    print(f"Sin: {response}")
 if __name__ == "__main__":
     main()
