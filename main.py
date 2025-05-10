@@ -1,6 +1,8 @@
 from sin import Sin
 import argparse
 import logging
+from logging.handlers import RotatingFileHandler
+import sys
 import torch
 print(f"PyTorch version: {torch.__version__}")
 print(f"CUDA available: {torch.cuda.is_available()}")
@@ -67,3 +69,31 @@ def handle_command(self, command):
                 "/reset - очистить историю\n"
                 "/help - справка")
     return None
+
+def setup_logging():
+    logger = logging.getLogger()
+    logger.setLevel(logging.INFO)
+    
+    # Формат логов
+    formatter = logging.Formatter(
+        '%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+    )
+    
+    # Логи в файл с ротацией
+    file_handler = RotatingFileHandler(
+        'data/logs/sin.log',
+        maxBytes=5*1024*1024,
+        backupCount=3
+    )
+    file_handler.setFormatter(formatter)
+    
+    # Логи в консоль
+    console_handler = logging.StreamHandler(sys.stdout)
+    console_handler.setFormatter(formatter)
+    
+    logger.addHandler(file_handler)
+    logger.addHandler(console_handler)
+    
+    return logger
+
+logger = setup_logging()
