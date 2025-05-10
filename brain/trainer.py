@@ -47,6 +47,21 @@ class SinTrainer:
     def __init__(self, model):
         self.model = model
         self.device = model.device
+
+    def load_json_data(self, file_path):
+        """Специальная загрузка для нового формата JSON"""
+        with open(file_path, 'r', encoding='utf-8') as f:
+            data = json.load(f)
+        
+        texts = []
+        for dialogue in data['dialogues']:
+            for response in dialogue['responses']:
+                texts.append(
+                    f"Пользователь: {dialogue['user_query']}\n"
+                    f"Sin: {response['text']}"
+                )
+        
+        return self.ConversationDataset(texts, self.model.tokenizer)
         
     class ConversationDataset(Dataset):
         def __init__(self, texts, tokenizer, block_size=128):
