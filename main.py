@@ -40,14 +40,26 @@ def main():
                 
             response = ai.chat(user_input)
             print(f"Sin: {response}")
-            
-        except KeyboardInterrupt:
-            print("\nSin: Сохраняю данные перед выходом...")
+
+            if user_input.startswith('/'):
+            if handle_command(ai, user_input):
+                continue
+                
+        if user_input.lower() in ('выход', 'exit', 'quit', '/exit'):
+            print("Sin: До новых встреч!")
             ai.save()
             break
-        except Exception as e:
-            logger.error(f"Error: {str(e)}")
-            print("Sin: Произошла ошибка, попробуйте другой вопрос")
+            
+        response = ai.chat(user_input)
+        print(f"Sin: {response}")
+        
+    except KeyboardInterrupt:
+        print("\nSin: Сохраняю данные перед выходом...")
+        ai.save()
+        break
+    except Exception as e:
+        logger.error(f"Error: {str(e)}")
+        print("Sin: Произошла ошибка, попробуйте другой вопрос")
 
 if __name__ == "__main__":
     main()
