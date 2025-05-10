@@ -2,6 +2,8 @@ import matplotlib.pyplot as plt
 import numpy as np
 import json
 from pathlib import Path
+import logging
+logger = logging.getLogger(__name__)
 
 class TrainingMonitor:
     def __init__(self, log_dir="data/logs"):
