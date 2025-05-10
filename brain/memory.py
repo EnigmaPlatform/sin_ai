@@ -3,6 +3,8 @@ import numpy as np
 from collections import deque
 from datetime import datetime
 from sentence_transformers import SentenceTransformer
+import logging
+logger = logging.getLogger(__name__)
 
 class SinMemory:
     def __init__(self, max_context=5):
