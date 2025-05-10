@@ -38,19 +38,25 @@ class Sin:
         return SinModel()
 
     def chat(self, user_input):
-        """Обновленный метод с обработкой ошибок"""
+        """Улучшенная версия с очисткой контекста"""
         try:
-            prompt = f"{self.memory.get_context()}\nТы: {user_input}\nSin:"
-            response = self.model.generate_response(
-                prompt,
-                max_new_tokens=150,
-                temperature=0.7
-        )
-            self.memory.add_interaction(user_input, response)
-            return response
+            # Ограничиваем историю диалога
+            self.memory.add_interaction(user_input, "")
+            context = "\n".join(list(self.memory.context)[-4:])  # Берем последние 4 реплики
+        
+            prompt = f"{context}\nSin:"
+            response = self.model.generate_response(prompt)
+        
+        # Очищаем ответ от мусора
+            clean_response = response.split("Sin:")[-1].strip()
+            clean_response = clean_response.split("\n")[0].strip()
+        
+            self.memory.add_interaction(user_input, clean_response)
+            return clean_response if clean_response else "Не могу сформулировать ответ"
+        
         except Exception as e:
             print(f"Ошибка в chat(): {str(e)}")
-            return "Произошла ошибка при обработке запроса"
+            return "Произошла ошибка"
 
     def train(self, epochs=3, val_dataset=None):
         """Обучение с валидацией"""
