@@ -8,6 +8,8 @@ from brain.trainer import SinTrainer
 from brain.evaluator import ModelEvaluator
 from brain.monitor import TrainingMonitor
 from torch.optim.lr_scheduler import CosineAnnealingLR
+import logging
+logger = logging.getLogger(__name__)
 
 class Sin:
     def __init__(self):
