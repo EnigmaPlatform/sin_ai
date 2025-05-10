@@ -45,14 +45,30 @@ class SinModel(nn.Module):
         return self.tokenizer.decode(outputs[0], skip_special_tokens=True)
 
     def save(self, path):
+        """Безопасное сохранение только необходимых данных"""
         torch.save({
             'model_state': self.state_dict(),
-            'tokenizer_config': self.tokenizer.get_vocab()
+            'tokenizer_config': {
+                'vocab': self.tokenizer.get_vocab(),
+                'special_tokens': self.tokenizer.special_tokens_map
+            }
         }, path)
 
-    @classmethod
+    @classmethod 
     def load(cls, path):
+        """Безопасная загрузка"""
         model = cls()
-        state = torch.load(path, map_location=model.device, weights_only=False)  # Добавьте weights_only=False
+        try:
+        # Сначала пробуем безопасный режим
+            state = torch.load(path, map_location=model.device, weights_only=True)
+        except:
+        # Если не получается, пробуем небезопасный (только для доверенных файлов!)
+            state = torch.load(path, map_location=model.device, weights_only=False)
+    
         model.load_state_dict(state['model_state'])
+    
+    # Восстанавливаем токенизатор
+        if 'tokenizer_config' in state:
+            model.tokenizer.add_special_tokens(state['tokenizer_config']['special_tokens'])
+    
         return model
