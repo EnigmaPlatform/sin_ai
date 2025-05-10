@@ -2,7 +2,8 @@ import os
 import json
 import torch
 from torch.utils.data import Dataset, DataLoader
-from transformers import AdamW, get_linear_schedule_with_warmup
+from torch.optim import AdamW
+from transformers import get_linear_schedule_with_warmup
 from torch.nn import functional as F
 from brain.evaluator import ModelEvaluator
 
