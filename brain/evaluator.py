@@ -4,6 +4,8 @@ from scipy.spatial.distance import cosine
 from sklearn.metrics import precision_score, recall_score, accuracy_score
 from tqdm import tqdm
 from torch.nn.functional import cross_entropy
+import logging
+logger = logging.getLogger(__name__)
 
 class ModelEvaluator:
     def __init__(self, model, tokenizer):
