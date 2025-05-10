@@ -7,3 +7,5 @@ jsonschema>=4.17.3
 accelerate>=0.21.0
 safetensors>=0.3.3
 python-dotenv>=1.0.0
+matplotlib>=3.7.0  # Для визуализации прогресса
+scikit-learn>=1.2.0  # Для дополнительных метрик
