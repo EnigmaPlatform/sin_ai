@@ -7,6 +7,7 @@ from brain.memory import SinMemory
 from brain.trainer import SinTrainer
 from brain.evaluator import ModelEvaluator
 from brain.monitor import TrainingMonitor
+from torch.optim.lr_scheduler import CosineAnnealingLR
 
 class Sin:
     def __init__(self):
