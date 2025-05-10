@@ -17,3 +17,79 @@ def manage_models(models_dir, max_models=5):
 def prepare_device():
     """Определение доступного устройства"""
     return torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
+def validate_custom_json(filepath):
+    schema = {
+        "type": "object",
+        "properties": {
+            "dialogues": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "category": {"type": "string"},
+                        "subcategory": {"type": "string"},
+                        "user_query": {"type": "string"},
+                        "responses": {
+                            "type": "array",
+                            "items": {
+                                "type": "object",
+                                "properties": {
+                                    "text": {"type": "string"},
+                                    "meta": {
+                                        "type": "object",
+                                        "properties": {
+                                            "difficulty": {
+                                                "type": "string",
+                                                "enum": ["easy", "medium", "hard"]
+                                            },
+                                            "emotion": {
+                                                "type": "string",
+                                                "enum": ["neutral", "playful", "educational", 
+                                                        "funny", "serious", "friendly"]
+                                            },
+                                            "slang": {"type": "boolean"}
+                                        },
+                                        "required": ["difficulty", "emotion"]
+                                    }
+                                },
+                                "required": ["text", "meta"]
+                            }
+                        }
+                    },
+                    "required": ["category", "user_query", "responses"]
+                }
+            },
+            "metadata": {
+                "type": "object",
+                "properties": {
+                    "total_dialogues": {"type": "number"},
+                    "categories_distribution": {"type": "object"},
+                    "slang_usage": {"type": "string"},
+                    "emotions_distribution": {"type": "object"}
+                }
+            }
+        },
+        "required": ["dialogues"]
+    }
+
+    try:
+        with open(filepath, 'r', encoding='utf-8') as f:
+            data = json.load(f)
+        validate(instance=data, schema=schema)
+        return True
+    except Exception as e:
+        print(f"Invalid JSON format in {filepath}: {str(e)}")
+        return False
+
+# Инициализация
+ai = Sin()
+
+# Обучение на новом JSON
+ai.train()
+
+# Использование метаданных в генерации ответа
+def generate_response_with_style(user_input, emotion="neutral"):
+    context = ai.memory.get_context()
+    prompt = f"[{emotion}] {context}\nUser: {user_input}\nSin:"
+    return ai.model.generate_response(prompt)
