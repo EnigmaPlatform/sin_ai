@@ -70,3 +70,29 @@ class Sin:
         memory_path = self.data_dir / "memory.json"
         if memory_path.exists():
             self.memory.load(memory_path)
+
+   def get_training_report(self):
+       """Получение отчета о последнем обучении"""
+        report_path = Path("data/logs/training_log.json")
+        if report_path.exists():
+            with open(report_path, "r") as f:
+                return json.load(f)
+        return None
+
+def compare_models(self, model_a, model_b, test_data):
+    """Сравнение двух версий модели"""
+    original_model = self.model
+    try:
+        self.model = SinModel.load(Path(f"data/models/{model_a}"))
+        metrics_a = self.trainer.evaluate(test_data)
+        
+        self.model = SinModel.load(Path(f"data/models/{model_b}"))
+        metrics_b = self.trainer.evaluate(test_data)
+        
+        return {
+            model_a: metrics_a,
+            model_b: metrics_b,
+            "difference": {k: v2 - v1 for (k, v1), (_, v2) in zip(metrics_a.items(), metrics_b.items())}
+        }
+    finally:
+        self.model = original_model
