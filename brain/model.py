@@ -30,19 +30,26 @@ class SinModel(nn.Module):
         adapted = self.adaptation(outputs.hidden_states[-1])
         return self.base_model.lm_head(adapted)
 
-    def generate_response(self, prompt, max_length=100, temperature=0.7):
-        inputs = self.tokenizer(prompt, return_tensors="pt").to(self.device)
-        with torch.no_grad():
-            outputs = self.base_model.generate(
-                **inputs,
-                max_length=max_length,
-                temperature=temperature,
-                top_k=50,
-                top_p=0.9,
-                do_sample=True,
-                pad_token_id=self.tokenizer.eos_token_id
-            )
-        return self.tokenizer.decode(outputs[0], skip_special_tokens=True)
+def generate_response(self, prompt, max_new_tokens=100, **kwargs):
+    inputs = self.tokenizer(
+        prompt, 
+        return_tensors="pt",
+        max_length=512,
+        truncation=True
+    ).to(self.device)
+    
+    with torch.no_grad():
+        outputs = self.base_model.generate(
+            **inputs,
+            max_new_tokens=max_new_tokens,
+            pad_token_id=self.tokenizer.eos_token_id,
+            **kwargs
+        )
+    
+    return self.tokenizer.decode(
+        outputs[0][inputs.input_ids.shape[-1]:], 
+        skip_special_tokens=True
+    )
 
 def save(self, path):
     # Убедитесь, что сохраняете только state_dict
