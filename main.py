@@ -1,6 +1,9 @@
 from sin import Sin
 import argparse
-import sys
+import logging
+
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
 def main():
     parser = argparse.ArgumentParser(description="Sin - Russian AI Assistant")
@@ -10,15 +13,14 @@ def main():
     ai = Sin()
     
     if args.train:
-        print("🔧 Starting training process...")
+        logger.info("Starting training process...")
         try:
             loss = ai.train()
-            print(f"✅ Training complete | Final loss: {loss:.4f}")
+            logger.info(f"Training complete | Loss: {loss:.4f}")
         except Exception as e:
-            print(f"❌ Training failed: {str(e)}")
+            logger.error(f"Training failed: {str(e)}")
         return
     
-    # Режим чата
     print("Sin: Привет! Я Sin, твой русскоязычный ИИ помощник.")
     print("     Напиши 'выход' чтобы завершить диалог.\n")
     
@@ -31,14 +33,15 @@ def main():
                 ai.save()
                 break
                 
-            # Определение эмоции запроса (упрощенный вариант)
-    emotion = "neutral"
-    if '?' in user_input:
-        emotion = "educational"
-    elif any(word in user_input for word in ['шутка', 'прикол']):
-        emotion = "funny"
-    
-    response = generate_response_with_style(user_input, emotion)
-    print(f"Sin: {response}")
+            response = ai.chat(user_input)
+            print(f"Sin: {response}")
+            
+        except KeyboardInterrupt:
+            print("\nSin: Сохраняю данные перед выходом...")
+            ai.save()
+            break
+        except Exception as e:
+            logger.error(f"Error: {str(e)}")
+
 if __name__ == "__main__":
     main()
