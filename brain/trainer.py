@@ -3,6 +3,46 @@ from torch.utils.data import Dataset, DataLoader
 from transformers import AdamW, get_linear_schedule_with_warmup
 import os
 
+class JsonDataset(Dataset):
+    def __init__(self, file_path, tokenizer, max_length=128):
+        with open(file_path, 'r', encoding='utf-8') as f:
+            data = json.load(f)
+        
+        self.examples = []
+        for item in data.get('dialogues', []):
+            # Базовые обязательные поля
+            user_query = item.get('user_query', '')
+            responses = item.get('responses', [])
+            
+            for response in responses:
+                if isinstance(response, dict):
+                    answer = response.get('text', '')
+                else:
+                    answer = str(response)
+                
+                if user_query and answer:
+                    text = f"Пользователь: {user_query}\nSin: {answer}"
+                    self._add_example(text)
+
+    def _add_example(self, text):
+        encodings = self.tokenizer(
+            text,
+            max_length=self.max_length,
+            padding='max_length',
+            truncation=True,
+            return_tensors='pt'
+        )
+        self.examples.append(encodings)
+
+    def __len__(self):
+        return len(self.examples)
+
+    def __getitem__(self, idx):
+        return {
+            'input_ids': self.examples[idx]['input_ids'].squeeze(),
+            'attention_mask': self.examples[idx]['attention_mask'].squeeze()
+        }
+
 class SinTrainer:
     def __init__(self, model):
         self.model = model
