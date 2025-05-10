@@ -192,14 +192,33 @@ class Sin:
 
     def save(self):
         """Сохранение модели и памяти"""
-        self.model.save(self.models_dir / "sin_model.pt")
-        self.memory.save(self.data_dir / "memory.json")
+        try:
+            self.logger.info("Saving model...")
+            model_path = self.models_dir / "sin_model.pt"
+            self.model.save(model_path)
+            self.logger.info(f"Model saved to {model_path}")
+        
+            self.logger.info("Saving memory...")
+            memory_path = self.data_dir / "memory.json"
+            self.memory.save(memory_path)
+            self.logger.info(f"Memory saved to {memory_path}")
+        
+        except Exception as e:
+            self.logger.error(f"Failed to save: {str(e)}", exc_info=True)
+            raise
 
-    def load(self):
-        """Загрузка сохраненного состояния"""
+def load(self):
+    """Загрузка сохраненного состояния"""
+    try:
         memory_path = self.data_dir / "memory.json"
         if memory_path.exists():
+            self.logger.info("Loading memory...")
             self.memory.load(memory_path)
+            self.logger.info("Memory loaded successfully")
+    except Exception as e:
+        self.logger.error(f"Failed to load memory: {str(e)}", exc_info=True)
+        # Не прерываем работу, продолжаем с пустой памятью
+        self.memory = SinMemory()
 
     def get_training_report(self):
         """Получение отчета о последнем обучении"""
