@@ -51,6 +51,44 @@ class SinTrainer:
         self.device = model.device
         self.monitor = None  # Добавим атрибут monitor для совместимости
 
+    def evaluate(self, dataset, sample_size=100):
+        """Оценка модели на датасете с вычислением различных метрик"""
+        # Инициализация ModelEvaluator
+        evaluator = ModelEvaluator(self.model, self.model.tokenizer)
+        
+        # Вычисление метрик на датасете
+        metrics = evaluator.evaluate_dataset(dataset, sample_size)
+        
+        # Дополнительные вычисления для loss
+        dataloader = DataLoader(dataset, batch_size=4)
+        total_loss = 0
+        count = 0
+        
+        self.model.eval()
+        with torch.no_grad():
+            for batch in dataloader:
+                inputs = batch['input_ids'].to(self.device)
+                masks = batch['attention_mask'].to(self.device)
+                
+                outputs = self.model(inputs, attention_mask=masks)
+                loss = F.cross_entropy(
+                    outputs.view(-1, outputs.size(-1)),
+                    inputs.view(-1),
+                    ignore_index=self.model.tokenizer.pad_token_id
+                )
+                
+                total_loss += loss.item()
+                count += 1
+        
+        metrics['loss'] = total_loss / count if count > 0 else 0.0
+        
+        return {
+            'loss': metrics['loss'],
+            'accuracy': metrics.get('accuracy', 0.0),
+            'perplexity': metrics.get('perplexity', 0.0),
+            'similarity': metrics.get('semantic_similarity', 0.0)
+        }
+
     def get_data_loader(self, dataset, batch_size=4):
         return DataLoader(dataset, batch_size=batch_size, shuffle=True)
 
