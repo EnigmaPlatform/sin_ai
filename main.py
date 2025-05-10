@@ -46,3 +46,21 @@ def main():
 
 if __name__ == "__main__":
     main()
+
+def handle_command(self, command):
+    """Обработка специальных команд"""
+    if command == "/save":
+        try:
+            self.save()
+            return "Данные сохранены"
+        except Exception as e:
+            return f"Ошибка сохранения: {str(e)}"
+    elif command == "/reset":
+        self.memory.context.clear()
+        return "Контекст очищен"
+    elif command == "/help":
+        return ("Доступные команды:\n"
+                "/save - сохранить состояние\n"
+                "/reset - очистить историю\n"
+                "/help - справка")
+    return None
