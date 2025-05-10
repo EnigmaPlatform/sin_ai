@@ -1,4 +1,6 @@
 import os
+import json
+import torch
 from pathlib import Path
 from brain.model import SinModel
 from brain.memory import SinMemory
@@ -10,76 +12,61 @@ class Sin:
         self.models_dir = self.data_dir / "models"
         self.conversations_dir = self.data_dir / "conversations"
         
-        # Создание директорий
         self.models_dir.mkdir(parents=True, exist_ok=True)
         self.conversations_dir.mkdir(exist_ok=True)
         
-        # Инициализация компонентов
         self.model = self._load_model()
         self.memory = SinMemory()
         self.trainer = SinTrainer(self.model)
-        
-        # Загрузка состояния
         self.load()
-    
+
     def _load_model(self):
         model_path = self.models_dir / "sin_model.pt"
         if model_path.exists():
             return SinModel.load(model_path)
         return SinModel()
-    
+
     def chat(self, user_input):
-        """Обработка пользовательского ввода"""
         self.memory.add_interaction(user_input, "")
-        
-        # Формирование контекста
         context = self.memory.get_context()
         prompt = f"{context}\nSin:"
-        
-        # Генерация ответа
         response = self.model.generate_response(prompt)
-        
-        # Обновление памяти
         self.memory.add_interaction(user_input, response)
         return response
-    
+
     def train(self):
-        """Обучение на доступных данных"""
         dataset = self._load_all_datasets()
         if dataset is None:
             raise ValueError("No training data found")
-        loss = self.trainer.train(self.conversations_dir)
+        
+        loss = self.trainer.train(dataset)
         self.save()
         return loss
-    
+
+    def _load_all_datasets(self):
+        datasets = []
+        for filename in os.listdir(self.conversations_dir):
+            filepath = os.path.join(self.conversations_dir, filename)
+            try:
+                if filename.endswith('.json'):
+                    with open(filepath, 'r') as f:
+                        data = json.load(f)
+                        if 'dialogues' in data:
+                            datasets.append(self.trainer.load_json_data(filepath))
+                            for dialogue in data['dialogues']:
+                                self.memory.add_dialogue(dialogue)
+                elif filename.endswith('.txt'):
+                    datasets.append(self.trainer.load_text_data(filepath))
+            except Exception as e:
+                print(f"Error loading {filename}: {str(e)}")
+        
+        return torch.utils.data.ConcatDataset(datasets) if datasets else None
+
     def save(self):
-        """Сохранение состояния"""
         self.model.save(self.models_dir / "sin_model.pt")
         self.memory.save(self.data_dir / "memory.json")
-    
+
     def load(self):
-        """Загрузка состояния"""
         memory_path = self.data_dir / "memory.json"
         if memory_path.exists():
             self.memory.load(memory_path)
-
-   def _load_all_datasets(self):
-        datasets = []
-        for filename in os.listdir(self.conversations_dir):
-            if filename.endswith('.json'):
-                try:
-                    # Загрузка нового формата JSON
-                    with open(os.path.join(self.conversations_dir, filename), 'r') as f:
-                        data = json.load(f)
-                        if 'dialogues' in data:  # Проверка нового формата
-                            datasets.append(self.trainer.load_json_data(
-                                os.path.join(self.conversations_dir, filename)
-                            ))
-                            # Добавляем в память
-                            for dialogue in data['dialogues']:
-                                self.memory.add_dialogue(dialogue)
-                except Exception as e:
-                    print(f"Error loading {filename}: {str(e)}")
-            
-            elif filename.endswith('.txt'):
-return torch.utils.data.ConcatDataset(datasets) if datasets else None
