@@ -72,24 +72,39 @@ class Sin:
 
     def chat(self, user_input):
         """Улучшенная версия с очисткой контекста"""
+        self.logger.info(f"Received user input: {user_input}")
+    
         try:
-            # Ограничиваем историю диалога
+        # Логируем добавление в память
+            self.logger.debug("Adding interaction to memory")
             self.memory.add_interaction(user_input, "")
-            context = "\n".join(list(self.memory.context)[-4:])  # Берем последние 4 реплики
+        
+        # Формируем контекст
+            context = "\n".join(list(self.memory.context)[-4:])
+            self.logger.debug(f"Current context: {context}")
         
             prompt = f"{context}\nSin:"
-            response = self.model.generate_response(prompt)
+            self.logger.debug(f"Generated prompt: {prompt}")
         
-        # Очищаем ответ от мусора
+        # Генерация ответа
+            self.logger.info("Generating response...")
+            response = self.model.generate_response(prompt)
+            self.logger.debug(f"Raw response: {response}")
+        
+        # Очистка ответа
             clean_response = response.split("Sin:")[-1].strip()
             clean_response = clean_response.split("\n")[0].strip()
+            self.logger.debug(f"Cleaned response: {clean_response}")
         
+        # Сохранение в память
             self.memory.add_interaction(user_input, clean_response)
+            self.logger.info(f"Returning response: {clean_response}")
+        
             return clean_response if clean_response else "Не могу сформулировать ответ"
         
         except Exception as e:
-            print(f"Ошибка в chat(): {str(e)}")
-            return "Произошла ошибка"
+            self.logger.error(f"Error in chat(): {str(e)}", exc_info=True)
+            return "Произошла ошибка при генерации ответа"
 
     def train(self, epochs=3, val_dataset=None):
         """Обучение с валидацией"""
