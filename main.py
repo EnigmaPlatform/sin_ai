@@ -52,23 +52,59 @@ def main():
 if __name__ == "__main__":
     main()
 
-def handle_command(self, command):
-    """Обработка специальных команд"""
-    if command == "/save":
-        try:
-            self.save()
-            return "Данные сохранены"
-        except Exception as e:
-            return f"Ошибка сохранения: {str(e)}"
-    elif command == "/reset":
-        self.memory.context.clear()
-        return "Контекст очищен"
-    elif command == "/help":
-        return ("Доступные команды:\n"
-                "/save - сохранить состояние\n"
-                "/reset - очистить историю\n"
-                "/help - справка")
-    return None
+def print_help():
+    print("\nДоступные команды:")
+    print("  /help - показать это сообщение")
+    print("  /save [имя] - сохранить модель (с опциональным именем)")
+    print("  /models - список доступных моделей")
+    print("  /load <имя> - загрузить другую модель")
+    print("  /reset - очистить историю диалога")
+    print("  /train - начать обучение")
+    print("  /exit - выйти из программы\n")
+
+def handle_command(ai, command):
+    """Обработка команд пользователя"""
+    try:
+        parts = command.split()
+        cmd = parts[0].lower()
+        
+        if cmd == "/help":
+            print_help()
+            return True
+            
+        elif cmd == "/save":
+            model_name = parts[1] if len(parts) > 1 else None
+            save_path = ai.save_model(model_name)
+            print(f"Модель сохранена как: {save_path}")
+            return True
+            
+        elif cmd == "/models":
+            models = ai.list_models()
+            print("\nДоступные модели:")
+            for i, model in enumerate(models, 1):
+                print(f"{i}. {model}")
+            return True
+            
+        elif cmd == "/load" and len(parts) > 1:
+            ai.model = ai._load_model(ai.models_dir / parts[1])
+            print(f"Модель {parts[1]} загружена")
+            return True
+            
+        elif cmd == "/reset":
+            ai.memory.context.clear()
+            print("История диалога очищена")
+            return True
+            
+        elif cmd == "/train":
+            print("Начинаем обучение...")
+            ai.train(epochs=3)
+            return True
+            
+    except Exception as e:
+        print(f"Ошибка выполнения команды: {str(e)}")
+        return True
+        
+    return False
 
 def setup_logging():
     logger = logging.getLogger()
