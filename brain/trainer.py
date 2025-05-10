@@ -4,6 +4,7 @@ import torch
 from torch.utils.data import Dataset, DataLoader
 from transformers import AdamW, get_linear_schedule_with_warmup
 from torch.nn import functional as F
+from brain.evaluator import ModelEvaluator
 
 class JsonDataset(Dataset):
     def __init__(self, file_path, tokenizer, max_length=128):
