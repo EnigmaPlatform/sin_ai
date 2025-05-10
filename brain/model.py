@@ -8,20 +8,25 @@ class SinModel(nn.Module):
         super().__init__()
         self.name = "Sin"
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        
+        # 1. Сначала инициализируем токенизатор
+        self.tokenizer = GPT2Tokenizer.from_pretrained("sberbank-ai/rugpt3medium_based_on_gpt2")
+        self.tokenizer.add_special_tokens({'pad_token': '[PAD]'})
+        
+        # 2. Затем загружаем модель
+        self.base_model = GPT2LMHeadModel.from_pretrained("sberbank-ai/rugpt3medium_based_on_gpt2").to(self.device)
+        self.base_model.resize_token_embeddings(len(self.tokenizer))
+        
+        # 3. Настраиваем параметры модели
         self.base_model.config.pad_token_id = self.tokenizer.eos_token_id
         self.base_model.config.max_length = 512
-
-        self.tokenizer = GPT2Tokenizer.from_pretrained("sberbank-ai/rugpt3medium_based_on_gpt2")
-        self.base_model = GPT2LMHeadModel.from_pretrained("sberbank-ai/rugpt3medium_based_on_gpt2").to(self.device)
-
+        
+        # 4. Дополнительные слои
         self.adaptation = nn.Sequential(
             nn.Linear(1024, 2048),
             nn.GELU(),
             nn.Linear(2048, 1024)
         ).to(self.device)
-
-        self.tokenizer.add_special_tokens({'pad_token': '[PAD]'})
-        self.base_model.resize_token_embeddings(len(self.tokenizer))
 
     def forward(self, input_ids, attention_mask=None):
         outputs = self.base_model(
