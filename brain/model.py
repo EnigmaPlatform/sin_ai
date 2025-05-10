@@ -44,31 +44,27 @@ class SinModel(nn.Module):
             )
         return self.tokenizer.decode(outputs[0], skip_special_tokens=True)
 
-    def save(self, path):
-        """Безопасное сохранение только необходимых данных"""
-        torch.save({
-            'model_state': self.state_dict(),
-            'tokenizer_config': {
-                'vocab': self.tokenizer.get_vocab(),
-                'special_tokens': self.tokenizer.special_tokens_map
-            }
-        }, path)
+def save(self, path):
+    # Убедитесь, что сохраняете только state_dict
+    torch.save({
+        'model_state': self.state_dict(),
+        'tokenizer_config': self.tokenizer.get_vocab()
+    }, path)
 
-    @classmethod 
-    def load(cls, path):
-        """Безопасная загрузка"""
-        model = cls()
+@classmethod
+def load(cls, path):
+    model = cls()
+    try:
+        # Сначала пробуем безопасную загрузку
+        state = torch.load(path, map_location=model.device, weights_only=True)
+    except:
         try:
-        # Сначала пробуем безопасный режим
-            state = torch.load(path, map_location=model.device, weights_only=True)
-        except:
-        # Если не получается, пробуем небезопасный (только для доверенных файлов!)
+            # Затем пробуем legacy-загрузку
             state = torch.load(path, map_location=model.device, weights_only=False)
+        except Exception as e:
+            # Если всё равно ошибка - файл повреждён
+            print(f"Файл модели повреждён. Удалите {path} и перезапустите программу")
+            raise e
     
-        model.load_state_dict(state['model_state'])
-    
-    # Восстанавливаем токенизатор
-        if 'tokenizer_config' in state:
-            model.tokenizer.add_special_tokens(state['tokenizer_config']['special_tokens'])
-    
-        return model
+    model.load_state_dict(state['model_state'])
+    return model
