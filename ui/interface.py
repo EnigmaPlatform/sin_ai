@@ -186,33 +186,15 @@ class CommandLineInterface(cmd.Cmd):
         except Exception as e:
             print(f"Ошибка тренировки: {str(e)}")
     
-    def do_load(self, arg):
-        """Загрузка модели: load [имя_модели или номер]"""
-        if not arg:
-            print("Пожалуйста, укажите имя модели или номер")
-            return
-        
-        models = self.model_manager.list_models()
-        if not models:
-            print("Нет сохраненных моделей для загрузки")
-            return
-        
-        # Попытка интерпретировать аргумент как номер
+   def do_load(self, arg):
         try:
-            model_num = int(arg)
-            if 1 <= model_num <= len(models):
-                model_name = models[model_num - 1]['model_name']
-            else:
-                print(f"Недопустимый номер модели. Допустимо от 1 до {len(models)}")
-                return
-        except ValueError:
-            model_name = arg
-        
-        print(f"Загрузка модели {model_name}...")
-        loaded_model = self.model_manager.load_model(model_name, SinNetwork)
-        if loaded_model:
-            self.sin = loaded_model
-            print("Модель успешно загружена")
+            from core.network import SinNetwork  # Добавьте этот импорт
+            loaded_model = self.model_manager.load_model(arg, SinNetwork)
+            if loaded_model:
+                self.sin = loaded_model
+                print("Модель успешно загружена")
+        except Exception as e:
+            logger.error(f"Load error: {str(e)}")
     
     def do_delete(self, arg):
         """Удаление модели: delete [имя_модели или номер]"""
