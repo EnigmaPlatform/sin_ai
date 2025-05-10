@@ -7,10 +7,39 @@ from sentence_transformers import SentenceTransformer
 class SinMemory:
     def __init__(self, max_context=5):
         self.context = deque(maxlen=max_context)
+        self.knowledge_graph = []
         self.long_term = []
         self.embedder = SentenceTransformer(
             'sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2'
         )
+
+    def add_dialogue(self, dialogue):
+        """Добавление диалога с метаданными"""
+        entry = {
+            'category': dialogue['category'],
+            'subcategory': dialogue['subcategory'],
+            'query': dialogue['user_query'],
+            'responses': [],
+            'metadata': {
+                'difficulty_distribution': {},
+                'emotion_distribution': {}
+            }
+        }
+        
+        for response in dialogue['responses']:
+            entry['responses'].append(response['text'])
+            
+            # Анализ метаданных
+            meta = response['meta']
+            entry['metadata']['difficulty_distribution'][meta['difficulty']] = \
+                entry['metadata']['difficulty_distribution'].get(meta['difficulty'], 0) + 1
+            entry['metadata']['emotion_distribution'][meta['emotion']] = \
+                entry['metadata']['emotion_distribution'].get(meta['emotion'], 0) + 1
+        
+        self.knowledge_graph.append(entry)
+    
+    def get_by_category(self, category):
+        return [item for item in self.knowledge_graph if item['category'] == category]
         
     def add_interaction(self, user_text, ai_text):
         self.context.append(f"User: {user_text}")
