@@ -90,8 +90,11 @@ class SinMemory:
             "relevance": float(similarities[i])
         } for i in top_indices]
 
-    def get_context(self):
-        return "\n".join(self.context)
+    def get_context(self, max_length=500):
+        context = "\n".join(self.context)
+        return self.embedder.tokenizer.decode(
+            self.embedder.tokenizer.encode(context, max_length=max_length, truncation=True)
+    )
 
     def save(self, path):
         with open(path, 'w', encoding='utf-8') as f:
