@@ -24,6 +24,39 @@ class Sin:
         self.evaluator = ModelEvaluator(self.model, self.model.tokenizer)
         self.monitor = TrainingMonitor()
         self.load()
+        
+        self.logger = logging.getLogger(__name__)
+        try:
+            self.data_dir = Path("data")
+            self.models_dir = self.data_dir / "models"
+            self.conversations_dir = self.data_dir / "conversations"
+            
+            self.models_dir.mkdir(parents=True, exist_ok=True)
+            self.conversations_dir.mkdir(exist_ok=True)
+            
+            self.logger.info("Initializing model...")
+            self.model = self._load_model()
+            
+            self.logger.info("Initializing memory...")
+            self.memory = SinMemory()
+            
+            self.logger.info("Initializing trainer...")
+            self.trainer = SinTrainer(self.model)
+            
+            self.logger.info("Initializing evaluator...")
+            self.evaluator = ModelEvaluator(self.model, self.model.tokenizer)
+            
+            self.logger.info("Initializing monitor...")
+            self.monitor = TrainingMonitor()
+            
+            self.logger.info("Loading saved state...")
+            self.load()
+            
+            self.logger.info("Sin initialization complete")
+            
+        except Exception as e:
+            self.logger.critical(f"Initialization failed: {str(e)}", exc_info=True)
+            raise
 
     def evaluate(self, dataset, sample_size=100):
         """Оценка модели на датасете"""
