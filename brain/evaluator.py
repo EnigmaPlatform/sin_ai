@@ -1,7 +1,7 @@
 import torch
 import numpy as np
 from scipy.spatial.distance import cosine
-from sklearn.metrics import precision_score, recall_score
+from sklearn.metrics import precision_score, recall_score, accuracy_score
 from tqdm import tqdm
 from torch.nn.functional import cross_entropy
 
