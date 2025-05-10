@@ -3,6 +3,7 @@ import numpy as np
 import json
 from pathlib import Path
 
+
 class TrainingMonitor:
     def __init__(self, log_dir="data/logs"):
         self.log_dir = Path(log_dir)
