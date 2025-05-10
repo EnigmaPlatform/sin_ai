@@ -161,8 +161,8 @@ class SinTrainer:
         return total_loss / len(dataloader)
 
 # Логирование после каждой эпохи
-            epoch_metrics = self.evaluate(dataset)
-            self.monitor.log_epoch(epoch+1, total_loss/len(dataloader), epoch_metrics)
+        epoch_metrics = self.evaluate(dataset)
+        self.monitor.log_epoch(epoch+1, total_loss/len(dataloader), epoch_metrics)
         
         # Оценка после обучения
         final_metrics = self.evaluate(dataset)

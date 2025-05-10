@@ -52,7 +52,7 @@ def validate_json(filepath):
 def manage_models(models_dir, max_models=5):
     models = sorted(
         [f for f in os.listdir(models_dir) if f.startswith('sin_model') and f.endswith('.pt')],
-        key=lambda f: os.path.getmtime(os.path.join(models_dir, f))
+        key=lambda f: os.path.getmtime(os.path.join(models_dir, f)))
     
     if len(models) > max_models:
         for old_model in models[:-max_models]:

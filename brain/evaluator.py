@@ -1,3 +1,4 @@
+from sklearn.base import accuracy_score
 import torch
 import numpy as np
 from scipy.spatial.distance import cosine
