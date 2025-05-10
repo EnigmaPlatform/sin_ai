@@ -2,7 +2,6 @@ import torch
 import torch.nn as nn
 from transformers import GPT2Tokenizer, GPT2LMHeadModel
 
-
 class SinModel(nn.Module):
     def __init__(self):
         super().__init__()
@@ -17,11 +16,11 @@ class SinModel(nn.Module):
         self.base_model = GPT2LMHeadModel.from_pretrained("sberbank-ai/rugpt3medium_based_on_gpt2").to(self.device)
         self.base_model.resize_token_embeddings(len(self.tokenizer))
         
-        # 3. Настройка параметров модели
+        # 3. Настройка параметров
         self.base_model.config.pad_token_id = self.tokenizer.eos_token_id
         self.base_model.config.max_length = 512
         
-        # 4. Дополнительные адаптационные слои
+        # 4. Адаптационные слои
         self.adaptation = nn.Sequential(
             nn.Linear(1024, 2048),
             nn.GELU(),
@@ -38,15 +37,9 @@ class SinModel(nn.Module):
         return self.base_model.lm_head(adapted)
 
     def generate_response(self, prompt, max_new_tokens=100, temperature=0.7, top_p=0.9, repetition_penalty=1.2):
-        """Генерация ответа на основе промпта с обработкой ошибок"""
+        """Генерация ответа с обработкой ошибок"""
         try:
-            inputs = self.tokenizer(
-                prompt, 
-                return_tensors="pt",
-                max_length=512,
-                truncation=True
-            ).to(self.device)
-            
+            inputs = self.tokenizer(prompt, return_tensors="pt", truncation=True, max_length=512).to(self.device)
             with torch.no_grad():
                 outputs = self.base_model.generate(
                     **inputs,
@@ -57,18 +50,13 @@ class SinModel(nn.Module):
                     do_sample=True,
                     pad_token_id=self.tokenizer.eos_token_id
                 )
-            
-            full_response = self.tokenizer.decode(outputs[0], skip_special_tokens=True)
-            # Удаляем промпт из ответа
-            response = full_response.replace(prompt, "").strip()
-            return response.split("\n")[0]  # Берем первую строку ответа
-            
+            return self.tokenizer.decode(outputs[0], skip_special_tokens=True).replace(prompt, "").strip()
         except Exception as e:
-            print(f"Ошибка генерации ответа: {str(e)}")
-            return "Извините, не могу сформировать ответ"
+            print(f"Ошибка генерации: {str(e)}")
+            return "Извините, возникла ошибка при формировании ответа"
 
     def save(self, path):
-        """Безопасное сохранение модели"""
+        """Сохранение модели с обработкой ошибок"""
         try:
             torch.save({
                 'model_state': self.state_dict(),
@@ -79,7 +67,7 @@ class SinModel(nn.Module):
             }, path)
             return True
         except Exception as e:
-            print(f"Ошибка сохранения модели: {str(e)}")
+            print(f"Ошибка сохранения: {str(e)}")
             return False
 
     @classmethod
@@ -87,20 +75,11 @@ class SinModel(nn.Module):
         """Безопасная загрузка модели"""
         model = cls()
         try:
-            # Пробуем безопасную загрузку
-            state = torch.load(path, map_location=model.device, weights_only=True)
-        except:
-            try:
-                # Пробуем небезопасную загрузку (только для доверенных файлов)
-                state = torch.load(path, map_location=model.device, weights_only=False)
-            except Exception as e:
-                print(f"Файл модели повреждён. Удалите {path} и перезапустите программу")
-                raise e
-        
-        model.load_state_dict(state['model_state'])
-        
-        # Восстановление токенизатора
-        if 'tokenizer_config' in state:
-            model.tokenizer.add_special_tokens(state['tokenizer_config']['special_tokens'])
-        
-        return model
+            state = torch.load(path, map_location=model.device, weights_only=False)
+            model.load_state_dict(state['model_state'])
+            if 'tokenizer_config' in state:
+                model.tokenizer.add_special_tokens(state['tokenizer_config']['special_tokens'])
+            return model
+        except Exception as e:
+            print(f"Ошибка загрузки: {str(e)}\nУдалите файл модели и создайте новую")
+            raise
