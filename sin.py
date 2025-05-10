@@ -5,6 +5,7 @@ from pathlib import Path
 from brain.model import SinModel
 from brain.memory import SinMemory
 from brain.trainer import SinTrainer
+from brain.evaluator import ModelEvaluator
 
 class Sin:
     def __init__(self):
@@ -19,6 +20,11 @@ class Sin:
         self.memory = SinMemory()
         self.trainer = SinTrainer(self.model)
         self.load()
+        self.evaluator = ModelEvaluator(self.model, self.model.tokenizer)
+
+     def evaluate(self, test_data):
+        """Публичный метод для оценки"""
+        return self.evaluator.evaluate_dataset(test_data)
 
     def _load_model(self):
         model_path = self.models_dir / "sin_model.pt"
