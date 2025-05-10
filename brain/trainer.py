@@ -49,36 +49,57 @@ class SinTrainer:
     def __init__(self, model):
         self.model = model
         self.device = model.device
-        self.monitor = TrainingMonitor()
 
-    def evaluate(self, dataset, sample_size=100):
-        """Оценка качества модели"""
-        self.model.eval()
-        total_loss = 0
-        correct = 0
-        
-        dataloader = DataLoader(dataset, batch_size=4, shuffle=True)
-        with torch.no_grad():
-            for i, batch in enumerate(dataloader):
-                if i > sample_size // 4:
-                    break
-                
-                inputs = batch["input_ids"].to(self.device)
-                outputs = self.model(inputs)
-                loss = F.cross_entropy(outputs.view(-1, outputs.size(-1)),
-                                      inputs.view(-1),
-                                      ignore_index=self.model.tokenizer.pad_token_id)
-                total_loss += loss.item()
-        
-        return {"loss": total_loss / (sample_size // 4)}
+    def get_data_loader(self, dataset, batch_size=4):
+        return DataLoader(dataset, batch_size=batch_size, shuffle=True)
+
+    def train_step(self, batch):
+        inputs = batch['input_ids'].to(self.device)
+        masks = batch['attention_mask'].to(self.device)
+        outputs = self.model(inputs, attention_mask=masks)
+        return torch.nn.functional.cross_entropy(
+            outputs.view(-1, outputs.size(-1)),
+            inputs.view(-1),
+            ignore_index=self.model.tokenizer.pad_token_id
+        )
 
     def load_json_data(self, file_path):
-        return JsonDataset(file_path, self.model.tokenizer)
+        with open(file_path, 'r') as f:
+            data = json.load(f)
+        return self._create_dataset(data['dialogues'])
 
     def load_text_data(self, file_path):
-        with open(file_path, 'r', encoding='utf-8') as f:
+        with open(file_path, 'r') as f:
             texts = [line.strip() for line in f if line.strip()]
-        return self.ConversationDataset(texts, self.model.tokenizer)
+        return self._create_dataset([{'user_query': t, 'responses': ['']} for t in texts])
+
+    def _create_dataset(self, dialogues):
+        texts = []
+        for dialogue in dialogues:
+            query = dialogue.get('user_query', '')
+            for response in dialogue.get('responses', []):
+                text = response.get('text', '') if isinstance(response, dict) else str(response)
+                texts.append(f"Пользователь: {query}\nSin: {text}")
+        return self.TextDataset(texts, self.model.tokenizer)
+
+    class TextDataset(torch.utils.data.Dataset):
+        def __init__(self, texts, tokenizer, max_length=128):
+            self.encodings = tokenizer(
+                texts, 
+                max_length=max_length,
+                padding='max_length',
+                truncation=True,
+                return_tensors='pt'
+            )
+
+        def __len__(self):
+            return len(self.encodings['input_ids'])
+
+        def __getitem__(self, idx):
+            return {
+                'input_ids': self.encodings['input_ids'][idx],
+                'attention_mask': self.encodings['attention_mask'][idx]
+            }
 
     class ConversationDataset(Dataset):
         def __init__(self, texts, tokenizer, block_size=128):
