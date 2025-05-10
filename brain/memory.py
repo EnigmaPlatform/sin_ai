@@ -23,8 +23,12 @@ class SinMemory:
             'metadata': {
                 'difficulty_distribution': {},
                 'emotion_distribution': {}
+                'has_meta': False
             }
         }
+
+        if 'category' in dialogue:
+        entry['category'] = dialogue['category']
         
         for response in dialogue['responses']:
             entry['responses'].append(response['text'])
@@ -37,6 +41,18 @@ class SinMemory:
                 entry['metadata']['emotion_distribution'].get(meta['emotion'], 0) + 1
         
         self.knowledge_graph.append(entry)
+
+        if 'category' in dialogue:
+        entry['category'] = dialogue['category']
+    
+    for response in dialogue.get('responses', []):
+        if isinstance(response, dict):
+            entry['responses'].append(response.get('text', ''))
+            
+            # Обработка метаданных (если есть)
+            if 'meta' in response:
+                entry['metadata']['has_meta'] = True
+                # ... обработка meta ...
     
     def get_by_category(self, category):
         return [item for item in self.knowledge_graph if item['category'] == category]
