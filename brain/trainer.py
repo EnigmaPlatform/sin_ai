@@ -6,6 +6,8 @@ from torch.optim import AdamW
 from transformers import get_linear_schedule_with_warmup
 from torch.nn import functional as F
 from brain.evaluator import ModelEvaluator
+import logging
+logger = logging.getLogger(__name__)
 
 class JsonDataset(Dataset):
     def __init__(self, file_path, tokenizer, max_length=128):
