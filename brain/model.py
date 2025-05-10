@@ -2,21 +2,22 @@ import torch
 import torch.nn as nn
 from transformers import GPT2Tokenizer, GPT2LMHeadModel
 
+
 class SinModel(nn.Module):
     def __init__(self):
         super().__init__()
         self.name = "Sin"
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-        
+
         self.tokenizer = GPT2Tokenizer.from_pretrained("sberbank-ai/rugpt3medium_based_on_gpt2")
         self.base_model = GPT2LMHeadModel.from_pretrained("sberbank-ai/rugpt3medium_based_on_gpt2").to(self.device)
-        
+
         self.adaptation = nn.Sequential(
             nn.Linear(1024, 2048),
             nn.GELU(),
             nn.Linear(2048, 1024)
         ).to(self.device)
-        
+
         self.tokenizer.add_special_tokens({'pad_token': '[PAD]'})
         self.base_model.resize_token_embeddings(len(self.tokenizer))
 
