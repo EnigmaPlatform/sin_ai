@@ -98,54 +98,21 @@ class LearningEngine:
         self.network.eval()
     
     def train_on_code(self, code_analysis: Dict) -> None:
-        """Специализированное обучение на анализе кода"""
         try:
-            language = code_analysis['language'].lower()
-            code = code_analysis['code']
-            analysis = code_analysis['analysis']
-            
-            # 1. Создаем специализированные примеры для обучения
-            examples = []
-            
-            # Примеры для синтаксиса языка
-            examples.append(f"Синтаксис {language}:\n{self._generate_syntax_examples(language)}")
-            
-            # Примеры из конкретного кода
-            examples.append(f"Пример кода на {language}:\n{code}")
-            
-            # Примеры с объяснениями
-            if analysis:
-                examples.append(f"Анализ кода:\n{analysis}")
-            
-            # Добавляем примеры использования
-            examples.append(f"Примеры использования конструкций из кода:\n{self._generate_usage_examples(code, language)}")
-            
-            # 2. Специальная обработка для разных языков
-            if language == 'python':
-                # Добавляем документацию Python
-                examples.append("Python documentation:\n" + self._extract_python_docs(code))
-            elif language == 'javascript':
-                # Добавляем примеры JS специфичные
-                examples.append("JavaScript специфика:\n" + self._extract_js_specifics(code))
-            
-            # 3. Создаем специализированные задачи для обучения
-            training_text = "\n\n".join(examples)
-            
-            # 4. Настраиваем специальные параметры обучения для кода
-            original_lr = self.learning_rate
-            self.learning_rate = 3e-5  # Более высокая скорость обучения для кода
-            
-            # 5. Обучаем на подготовленных данных
-            self.train_on_text(training_text)
-            
-            # Возвращаем исходную скорость обучения
-            self.learning_rate = original_lr
-            
-            logger.info(f"Специализированное обучение на {language} коде завершено")
-            
+            inputs = self.tokenizer(
+                code_analysis['code'],
+                return_tensors="pt",
+                max_length=512,
+                truncation=True
+            ).to(self.network.device)
+        
+            outputs = self.network.model(**inputs, labels=inputs["input_ids"])
+            loss = outputs.loss
+            loss.backward()
+            self.optimizer.step()
+            self.optimizer.zero_grad()
         except Exception as e:
-            logger.error(f"Ошибка при обучении на коде: {str(e)}")
-            raise
+            logger.error(f"Code training error: {str(e)}")
 
     def _generate_syntax_examples(self, language: str) -> str:
         """Генерация примеров синтаксиса для языка"""
