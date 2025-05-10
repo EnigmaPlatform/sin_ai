@@ -141,41 +141,29 @@ class SinNetwork(nn.Module):
         return outputs.last_hidden_state
     
     def communicate(self, message: str) -> str:
-        """Улучшенный метод общения"""
         try:
-            self.current_context.append(f"User: {message}")
-            input_text = "\n".join(self.current_context[-3:])  # Ограничиваем контекст
-        
             inputs = self.tokenizer(
-                input_text,
+                message, 
                 return_tensors="pt",
                 max_length=512,
                 truncation=True
             ).to(self.device)
         
-        # Генерация с правильными параметрами
             outputs = self.model.generate(
-                input_ids=inputs.input_ids,
+                inputs.input_ids,
                 attention_mask=inputs.attention_mask,
-                max_new_tokens=100,  # Ограничиваем длину ответа
-                temperature=0.9,     # Контроль случайности
-                top_k=50,            # Ограничиваем словарь
-                top_p=0.95,          # Nucleus sampling
+                max_new_tokens=100,
+                temperature=0.7,
+                top_k=50,
+                top_p=0.9,
                 do_sample=True,
                 pad_token_id=self.tokenizer.eos_token_id
         )
         
-            response = self.tokenizer.decode(
-                outputs[0][inputs.input_ids.shape[-1]:], 
-                skip_special_tokens=True
-            ).strip()
-        
-            self.current_context.append(f"Sin: {response}")
-            return response
-        
+            return self.tokenizer.decode(outputs[0], skip_special_tokens=True)
         except Exception as e:
             logger.error(f"Communication error: {str(e)}")
-            return "Извините, произошла ошибка при обработке вашего сообщения"
+            return "Извините, произошла ошибка"
     
     @validate_input(text=validate_text)
     def learn_from_text(self, text: str) -> None:
