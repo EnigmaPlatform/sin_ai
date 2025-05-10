@@ -110,3 +110,12 @@ class SinMemory:
                 self.knowledge_graph = data.get("knowledge_graph", [])
         except FileNotFoundError:
             pass
+
+   def get_recent_topics(self, top_k=3):
+       """Получение последних тем"""
+        return [item['query'] for item in self.knowledge_graph[-top_k:]]
+
+def get_by_emotion(self, emotion):
+    """Фильтрация по эмоциональной окраске"""
+    return [item for item in self.knowledge_graph 
+            if emotion in item['metadata']['emotion_distribution']]
