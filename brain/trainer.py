@@ -1,7 +1,9 @@
+import os
+import json
 import torch
 from torch.utils.data import Dataset, DataLoader
 from transformers import AdamW, get_linear_schedule_with_warmup
-import os
+from torch.nn import functional as F
 
 class JsonDataset(Dataset):
     def __init__(self, file_path, tokenizer, max_length=128):
@@ -9,12 +11,12 @@ class JsonDataset(Dataset):
             data = json.load(f)
         
         self.examples = []
-        for item in data.get('dialogues', []):
-            # Базовые обязательные поля
-            user_query = item.get('user_query', '')
-            responses = item.get('responses', [])
-            
-            for response in responses:
+        self.tokenizer = tokenizer
+        self.max_length = max_length
+        
+        for dialogue in data.get('dialogues', []):
+            user_query = dialogue.get('user_query', '')
+            for response in dialogue.get('responses', []):
                 if isinstance(response, dict):
                     answer = response.get('text', '')
                 else:
@@ -49,20 +51,13 @@ class SinTrainer:
         self.device = model.device
 
     def load_json_data(self, file_path):
-        """Специальная загрузка для нового формата JSON"""
+        return JsonDataset(file_path, self.model.tokenizer)
+
+    def load_text_data(self, file_path):
         with open(file_path, 'r', encoding='utf-8') as f:
-            data = json.load(f)
-        
-        texts = []
-        for dialogue in data['dialogues']:
-            for response in dialogue['responses']:
-                texts.append(
-                    f"Пользователь: {dialogue['user_query']}\n"
-                    f"Sin: {response['text']}"
-                )
-        
+            texts = [line.strip() for line in f if line.strip()]
         return self.ConversationDataset(texts, self.model.tokenizer)
-        
+
     class ConversationDataset(Dataset):
         def __init__(self, texts, tokenizer, block_size=128):
             self.encodings = tokenizer(
@@ -81,21 +76,8 @@ class SinTrainer:
                 "input_ids": self.encodings["input_ids"][idx],
                 "attention_mask": self.encodings["attention_mask"][idx]
             }
-    
-    def prepare_data(self, data_dir):
-        texts = []
-        for filename in os.listdir(data_dir):
-            if filename.endswith('.txt'):
-                with open(os.path.join(data_dir, filename), 'r', encoding='utf-8') as f:
-                    texts.extend(line.strip() for line in f if line.strip())
-        return texts
-    
-    def train(self, data_dir, epochs=3, batch_size=4, lr=5e-5):
-        texts = self.prepare_data(data_dir)
-        if not texts:
-            raise ValueError("No training data found")
-            
-        dataset = self.ConversationDataset(texts, self.model.tokenizer)
+
+    def train(self, dataset, epochs=3, batch_size=4, lr=5e-5):
         dataloader = DataLoader(dataset, batch_size=batch_size, shuffle=True)
         
         optimizer = AdamW(self.model.parameters(), lr=lr)
