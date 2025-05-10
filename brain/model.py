@@ -1,6 +1,8 @@
 import torch
 import torch.nn as nn
 from transformers import GPT2Tokenizer, GPT2LMHeadModel
+import logging
+logger = logging.getLogger(__name__)
 
 class SinModel(nn.Module):
     def __init__(self):
