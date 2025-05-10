@@ -3,35 +3,36 @@ import numpy as np
 import json
 from pathlib import Path
 
-
 class TrainingMonitor:
     def __init__(self, log_dir="data/logs"):
+        self.logger = logging.getLogger(__name__)
         self.log_dir = Path(log_dir)
-        self.log_dir.mkdir(exist_ok=True, parents=True)
-        self.reset_logs()
-    
-    def reset_logs(self):
-        self.current_log = {
-            "epochs": [],
-            "train_loss": [],
-            "val_loss": [],
-            "metrics": {
-                "accuracy": [],
-                "similarity": []
-            }
-        }
-    
+        
+        try:
+            self.log_dir.mkdir(exist_ok=True, parents=True)
+            self.reset_logs()
+            self.logger.info("Training monitor initialized")
+        except Exception as e:
+            self.logger.critical(f"Failed to initialize monitor: {str(e)}")
+            raise
+
     def log_epoch(self, epoch, train_loss, val_metrics=None):
-        self.current_log["epochs"].append(epoch)
-        self.current_log["train_loss"].append(train_loss)
-        
-        if val_metrics:
-            for metric, value in val_metrics.items():
-                if metric in self.current_log["metrics"]:
-                    self.current_log["metrics"][metric].append(value)
-        
-        self._save_log()
-        self._plot_progress()
+        try:
+            self.current_log["epochs"].append(epoch)
+            self.current_log["train_loss"].append(train_loss)
+            
+            if val_metrics:
+                for metric, value in val_metrics.items():
+                    if metric in self.current_log["metrics"]:
+                        self.current_log["metrics"][metric].append(value)
+            
+            self._save_log()
+            self._plot_progress()
+            self.logger.debug(f"Logged epoch {epoch} data")
+            
+        except Exception as e:
+            self.logger.error(f"Failed to log epoch {epoch}: {str(e)}", exc_info=True)
+            raise
     
     def _save_log(self):
         with open(self.log_dir / "training_log.json", "w") as f:
