@@ -41,10 +41,31 @@ class Sin:
         """Генерация ответа с учетом контекста"""
         self.memory.add_interaction(user_input, "")
         context = self.memory.get_context()
+    
+    # Подготовка промта с ограничением длины
         prompt = f"{context}\nSin:"
-        response = self.model.generate_response(prompt)
+        prompt = self.model.tokenizer.decode(
+            self.model.tokenizer.encode(prompt, max_length=512, truncation=True)[-512:],
+            skip_special_tokens=True
+    )
+    
+    # Генерация с разумными параметрами
+        response = self.model.generate_response(
+            prompt,
+            max_new_tokens=100,  # Ограничение новых токенов
+            temperature=0.7,
+            do_sample=True,
+            top_p=0.9,
+            repetition_penalty=1.2
+    )
+    
+    # Очистка ответа
+        response = response.replace(prompt, "").strip()
+        response = response.split("Sin:")[-1].strip()
+        response = response.split("\n")[0].strip()
+    
         self.memory.add_interaction(user_input, response)
-        return response
+        return response if response else "Извините, не могу сформулировать ответ"
 
     def train(self, epochs=3, val_dataset=None):
         """Обучение с валидацией"""
