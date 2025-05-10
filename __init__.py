@@ -1,3 +1,3 @@
-from .helpers import validate_json, manage_models
+from utils.helpers import validate_json, manage_models
 
 __all__ = ['validate_json', 'manage_models']
