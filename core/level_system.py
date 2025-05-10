@@ -14,15 +14,8 @@ class LevelSystem:
         
         self._load_level_data()
     
-    def add_experience(self, amount: int) -> None:
-        """Добавление опыта пользователю.
-        
-        Args:
-            amount: Количество добавляемого опыта (должно быть положительным)
-        """
-        if amount <= 0:
-            raise ValueError("Amount of experience must be positive")
-            
+    def add_experience(self, amount):
+        self.experience += amount
         self.current_experience += amount
         self._check_level_up()
         self.total_learning_sessions += 1
