@@ -49,6 +49,7 @@ class SinTrainer:
     def __init__(self, model):
         self.model = model
         self.device = model.device
+        self.monitor = None  # Добавим атрибут monitor для совместимости
 
     def get_data_loader(self, dataset, batch_size=4):
         return DataLoader(dataset, batch_size=batch_size, shuffle=True)
@@ -64,12 +65,12 @@ class SinTrainer:
         )
 
     def load_json_data(self, file_path):
-        with open(file_path, 'r') as f:
+        with open(file_path, 'r', encoding='utf-8') as f:
             data = json.load(f)
         return self._create_dataset(data['dialogues'])
 
     def load_text_data(self, file_path):
-        with open(file_path, 'r') as f:
+        with open(file_path, 'r', encoding='utf-8') as f:
             texts = [line.strip() for line in f if line.strip()]
         return self._create_dataset([{'user_query': t, 'responses': ['']} for t in texts])
 
@@ -82,7 +83,7 @@ class SinTrainer:
                 texts.append(f"Пользователь: {query}\nSin: {text}")
         return self.TextDataset(texts, self.model.tokenizer)
 
-    class TextDataset(torch.utils.data.Dataset):
+    class TextDataset(Dataset):
         def __init__(self, texts, tokenizer, max_length=128):
             self.encodings = tokenizer(
                 texts, 
@@ -120,6 +121,44 @@ class SinTrainer:
                 "attention_mask": self.encodings["attention_mask"][idx]
             }
 
+    def evaluate(self, dataset, sample_size=100):
+        """Оценка модели на датасете с вычислением различных метрик"""
+    # Инициализация ModelEvaluator
+        evaluator = ModelEvaluator(self.model, self.model.tokenizer)
+    
+    # Вычисление метрик на датасете
+        metrics = evaluator.evaluate_dataset(dataset, sample_size)
+    
+    # Дополнительные вычисления для loss (если нужно)
+        dataloader = DataLoader(dataset, batch_size=4)
+        total_loss = 0
+        count = 0
+    
+        self.model.eval()
+        with torch.no_grad():
+            for batch in dataloader:
+                inputs = batch['input_ids'].to(self.device)
+                masks = batch['attention_mask'].to(self.device)
+            
+                outputs = self.model(inputs, attention_mask=masks)
+                loss = F.cross_entropy(
+                    outputs.view(-1, outputs.size(-1)),
+                    inputs.view(-1),
+                    ignore_index=self.model.tokenizer.pad_token_id
+            )
+            
+                total_loss += loss.item()
+                count += 1
+    
+        metrics['loss'] = total_loss / count if count > 0 else 0.0
+    
+        return {
+            'loss': metrics['loss'],
+            'accuracy': metrics.get('accuracy', 0.0),
+            'perplexity': metrics.get('perplexity', 0.0),
+            'similarity': metrics.get('semantic_similarity', 0.0)
+    }
+
     def train(self, dataset, epochs=3, batch_size=4, lr=5e-5):
         dataloader = DataLoader(dataset, batch_size=batch_size, shuffle=True)
         initial_metrics = self.evaluate(dataset)
@@ -156,13 +195,13 @@ class SinTrainer:
                 total_loss += loss.item()
             
             print(f"Epoch {epoch+1}/{epochs} | Loss: {total_loss/len(dataloader):.4f}")
+            
+            # Логирование после каждой эпохи
+            epoch_metrics = self.evaluate(dataset)
+            if self.monitor is not None:
+                self.monitor.log_epoch(epoch+1, total_loss/len(dataloader), epoch_metrics)
         
         self.model.eval()
-        return total_loss / len(dataloader)
-
-# Логирование после каждой эпохи
-            epoch_metrics = self.evaluate(dataset)
-            self.monitor.log_epoch(epoch+1, total_loss/len(dataloader), epoch_metrics)
         
         # Оценка после обучения
         final_metrics = self.evaluate(dataset)
