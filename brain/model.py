@@ -53,6 +53,6 @@ class SinModel(nn.Module):
     @classmethod
     def load(cls, path):
         model = cls()
-        state = torch.load(path, map_location=model.device)
+        state = torch.load(path, map_location=model.device, weights_only=False)  # Добавьте weights_only=False
         model.load_state_dict(state['model_state'])
         return model
