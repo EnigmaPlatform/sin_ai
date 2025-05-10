@@ -1,6 +1,7 @@
 import numpy as np
 from sin import Sin
 
+
 def main():
     # Инициализация
     ai = Sin()
@@ -27,6 +28,7 @@ def main():
         print(f"\n{name}:")
         print(f"Accuracy: {metrics['accuracy']:.2%}")
         print(f"Improvement: {metrics.get('improvement', {}).get('accuracy', 0):+.2%}")
+
 
 if __name__ == "__main__":
     main()
