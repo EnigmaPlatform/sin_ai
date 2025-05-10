@@ -3,3 +3,4 @@ transformers>=4.30.0
 sentence-transformers>=2.2.0
 numpy>=1.20.0
 tqdm>=4.60.0
+PyPDF2>=2.0.0  # Только если нужна поддержка PDF
