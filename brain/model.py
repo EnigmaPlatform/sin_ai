@@ -8,6 +8,8 @@ class SinModel(nn.Module):
         super().__init__()
         self.name = "Sin"
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        self.base_model.config.pad_token_id = self.tokenizer.eos_token_id
+        self.base_model.config.max_length = 512
 
         self.tokenizer = GPT2Tokenizer.from_pretrained("sberbank-ai/rugpt3medium_based_on_gpt2")
         self.base_model = GPT2LMHeadModel.from_pretrained("sberbank-ai/rugpt3medium_based_on_gpt2").to(self.device)
