@@ -1,5 +1,6 @@
 import torch
 import logging
+from .file_manager import FileManager
 from transformers import GPT2LMHeadModel, GPT2Tokenizer
 
 logger = logging.getLogger(__name__)
@@ -11,6 +12,16 @@ class SinNetwork:
         self.tokenizer = GPT2Tokenizer.from_pretrained("ai-forever/rugpt3small_based_on_gpt2")
         self.context = []
         self.optimizer = torch.optim.AdamW(self.model.parameters(), lr=5e-5)
+
+    def learn_from_file(self, file_path: str):
+        """Обучение из файла с использованием FileManager"""
+        try:
+            text = FileManager.extract_text_from_file(file_path)
+            self.learn_from_text(text)
+            logger.info(f"Успешно обучено из файла: {file_path}")
+        except Exception as e:
+            logger.error(f"Ошибка обучения из файла: {str(e)}")
+            raise
         
     def communicate(self, message: str) -> str:
         try:
