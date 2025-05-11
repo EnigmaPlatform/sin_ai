@@ -7,6 +7,7 @@ import torch
 import json
 import os
 import io
+from datetime import datetime
 
 print(f"PyTorch version: {torch.__version__}")
 print(f"CUDA available: {torch.cuda.is_available()}")
@@ -67,6 +68,9 @@ def handle_command(ai, command):
     """Обработка команд пользователя"""
     try:
         parts = command.split()
+        if not parts:
+            return False
+            
         cmd = parts[0].lower()
         
         if cmd == "/help":
@@ -90,13 +94,19 @@ def handle_command(ai, command):
             models_info = ai.get_model_info()
             print("\nИнформация о моделях:")
             for i, info in enumerate(models_info, 1):
-                print(f"\n{i}. {info['name']}")
-                print(f"  Размер: {info['size'] / 1024 / 1024:.2f} MB")
-                print(f"  Изменена: {info['modified'].strftime('%Y-%m-%d %H:%M:%S')}")
-                if 'metadata' in info:
+                print(f"\n{i}. {info.get('name', 'N/A')}")
+                print(f"  Размер: {info.get('size', 0) / 1024 / 1024:.2f} MB")
+                modified = info.get('modified', datetime.now())
+                if isinstance(modified, datetime):
+                    print(f"  Изменена: {modified.strftime('%Y-%m-%d %H:%M:%S')}")
+                else:
+                    print(f"  Изменена: {modified}")
+                
+                metadata = info.get('metadata', {})
+                if metadata:
                     print("  Метаданные:")
-                    print(f"    Версия: {info['metadata'].get('version', 'N/A')}")
-                    print(f"    Сохранена: {info['metadata'].get('saved_at', 'N/A')}")
+                    print(f"    Версия: {metadata.get('version', 'N/A')}")
+                    print(f"    Сохранена: {metadata.get('saved_at', 'N/A')}")
             return True
             
         elif cmd == "/load" and len(parts) > 1:
@@ -113,7 +123,11 @@ def handle_command(ai, command):
         elif cmd == "/train":
             print("Начинаем обучение...")
             train_log = ai.train(epochs=3)
-            print(f"Обучение завершено. Лучшая эпоха: {ai.monitor.get_best_epoch()}")
+            if hasattr(ai, 'monitor'):
+                best_epoch = ai.monitor.get_best_epoch() if hasattr(ai.monitor, 'get_best_epoch') else 'N/A'
+                print(f"Обучение завершено. Лучшая эпоха: {best_epoch}")
+            else:
+                print("Обучение завершено")
             return True
             
         elif cmd == "/eval":
@@ -165,6 +179,7 @@ def handle_command(ai, command):
             
     except Exception as e:
         print(f"Ошибка выполнения команды: {str(e)}")
+        logger.error(f"Command error: {command}", exc_info=True)
         return True
         
     return False
@@ -175,6 +190,8 @@ def main():
     parser.add_argument('--model', type=str, help="Path to specific model to load")
     parser.add_argument('--data', type=str, default='data/conversations', 
                       help="Path to training data directory")
+    parser.add_argument('--epochs', type=int, default=3,
+                      help="Number of training epochs")
     args = parser.parse_args()
     
     ai = Sin(args.model) if args.model else Sin()
@@ -182,6 +199,7 @@ def main():
     if args.train:
         try:
             print(f"Starting training with data from: {args.data}")
+            start_time = datetime.now()
             
             # Загрузка валидационного датасета (если есть)
             val_dataset = None
@@ -206,8 +224,9 @@ def main():
                 }
             }
             
-            with open("data/training_report.json", "w") as f:
-                json.dump(report, f, indent=2)
+            os.makedirs('data', exist_ok=True)
+            with open("data/training_report.json", "w", encoding='utf-8') as f:
+                json.dump(report, f, indent=2, ensure_ascii=False)
                 
             print("\nTraining complete!")
             print(f"Best validation accuracy: {metrics.get('accuracy', 0):.4f}")
