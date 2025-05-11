@@ -2,8 +2,11 @@ import os
 import json
 import torch
 import logging
+import tempfile
+import sys
 from pathlib import Path
 from datetime import datetime
+from collections import deque
 from brain.model import SinModel
 from brain.memory import SinMemory
 from brain.trainer import SinTrainer
@@ -14,18 +17,28 @@ from torch.optim.lr_scheduler import CosineAnnealingLR
 logger = logging.getLogger(__name__)
 
 class Sin:
-    def __init__(self):
+    def __init__(self, model_path=None):
+        """
+        Инициализация Sin AI
+        
+        Args:
+            model_path (str, optional): Путь к конкретной модели для загрузки. 
+                                      Если None, загрузит последнюю доступную модель.
+        """
         self.logger = logging.getLogger(__name__)
         try:
             self.data_dir = Path("data")
             self.models_dir = self.data_dir / "models"
             self.conversations_dir = self.data_dir / "conversations"
+            self.logs_dir = self.data_dir / "logs"
             
+            # Создаем необходимые директории
             self.models_dir.mkdir(parents=True, exist_ok=True)
             self.conversations_dir.mkdir(exist_ok=True)
+            self.logs_dir.mkdir(exist_ok=True)
             
             self.logger.info("Initializing model...")
-            self.model = self._load_model()
+            self.model = self._load_model(model_path)
             
             self.logger.info("Initializing memory...")
             self.memory = SinMemory()
@@ -48,17 +61,85 @@ class Sin:
             self.logger.critical(f"Initialization failed: {str(e)}", exc_info=True)
             raise
 
+    def _load_model(self, model_path=None):
+        """
+        Загружает модель из указанного пути или находит последнюю версию
+        
+        Args:
+            model_path (str, optional): Путь к конкретной модели. Если None, ищет последнюю.
+            
+        Returns:
+            SinModel: Загруженная или новая модель
+        """
+        if model_path:
+            model_path = Path(model_path)
+            if not model_path.exists():
+                raise FileNotFoundError(f"Model file not found: {model_path}")
+            return self._load_single_model(model_path)
+        
+        # Автоматический поиск последней модели
+        model_files = list(self.models_dir.glob('*.pt'))
+        if not model_files:
+            self.logger.info("No models found, creating new one")
+            return SinModel()
+            
+        # Сортировка по timestamp в имени файла
+        def extract_timestamp(path):
+            try:
+                name = path.stem
+                if '_' in name:
+                    ts_part = name.split('_')[-1]
+                    return datetime.strptime(ts_part, "%Y%m%d%H%M%S")
+            except:
+                return datetime.fromtimestamp(0)
+            
+        model_files.sort(key=lambda x: extract_timestamp(x), reverse=True)
+        
+        # Попробуем загрузить модели по порядку
+        for model_file in model_files:
+            try:
+                model = self._load_single_model(model_file)
+                self.logger.info(f"Successfully loaded model: {model_file.name}")
+                return model
+            except Exception as e:
+                self.logger.warning(f"Failed to load {model_file.name}: {str(e)}")
+                continue
+                
+        self.logger.info("All model loading attempts failed, creating new model")
+        return SinModel()
+
+    def _load_single_model(self, model_path):
+        """Загружает одну модель с проверкой целостности"""
+        self.logger.info(f"Loading model from {model_path}")
+        
+        # Проверка размера файла
+        file_size = model_path.stat().st_size
+        if file_size < 1024:
+            raise ValueError(f"Model file too small ({file_size} bytes), likely corrupted")
+            
+        # Загрузка данных
+        data = torch.load(model_path, map_location='cpu')
+        
+        # Проверка структуры данных
+        required_keys = {'model_state', 'tokenizer_config'}
+        if not all(k in data for k in required_keys):
+            raise ValueError("Model file missing required data")
+            
+        # Создание и загрузка модели
+        model = SinModel()
+        model.load_state_dict(data['model_state'])
+        
+        # Загрузка токенизатора
+        if hasattr(model, 'tokenizer'):
+            model.tokenizer.add_special_tokens(data['tokenizer_config'].get('special_tokens', {}))
+            
+        return model
+
     def evaluate(self, dataset, sample_size=100):
         """Оценка модели на датасете"""
         if not dataset:
             return {}
         return self.evaluator.evaluate_dataset(dataset, sample_size)
-
-    def _load_model(self):
-        model_path = self.models_dir / "sin_model.pt"
-        if model_path.exists():
-            return SinModel.load(model_path)
-        return SinModel()
 
     def chat(self, user_input):
         """Улучшенная версия с очисткой контекста"""
@@ -181,20 +262,72 @@ class Sin:
         return torch.utils.data.ConcatDataset(datasets) if datasets else None
 
     def save(self):
-        """Сохранение модели и памяти"""
+        """Автоматическое сохранение модели с timestamp"""
+        timestamp = datetime.now().strftime("%Y%m%d%H%M%S")
+        model_path = self.models_dir / f"model_{timestamp}.pt"
+        
+        # Подготовка данных для сохранения
+        save_data = {
+            'model_state': self.model.state_dict(),
+            'tokenizer_config': {
+                'vocab': getattr(self.model.tokenizer, 'get_vocab', lambda: {})(),
+                'special_tokens': getattr(self.model.tokenizer, 'special_tokens_map', {}),
+                'added_tokens': getattr(self.model.tokenizer, 'added_tokens_encoder', {})
+            },
+            'metadata': {
+                'saved_at': timestamp,
+                'version': '2.0',
+                'training_stats': getattr(self.monitor, 'current_log', None),
+                'system': {
+                    'python': sys.version,
+                    'torch': torch.__version__,
+                    'transformers': getattr(transformers, '__version__', 'unknown')
+                }
+            }
+        }
+        
+        # Атомарное сохранение через временный файл
+        temp_file = tempfile.NamedTemporaryFile(delete=False, dir=self.models_dir, suffix='.tmp')
         try:
-            self.logger.info("Saving model...")
-            model_path = self.models_dir / "sin_model.pt"
-            self.model.save(model_path)
-            self.logger.info(f"Model saved to {model_path}")
-        
-            self.logger.info("Saving memory...")
-            memory_path = self.data_dir / "memory.json"
-            self.memory.save(memory_path)
-            self.logger.info(f"Memory saved to {memory_path}")
-        
+            torch.save(save_data, temp_file)
+            temp_file.close()
+            
+            # Атомарная операция переименования
+            os.replace(temp_file.name, model_path)
+            self.logger.info(f"Model successfully saved to {model_path.name}")
+            
+            # Очистка старых моделей
+            self._cleanup_old_models(max_models=5)
+            
+            # Сохраняем память
+            self._save_memory()
+            
+            return str(model_path)
         except Exception as e:
-            self.logger.error(f"Failed to save: {str(e)}", exc_info=True)
+            self.logger.error(f"Failed to save model: {str(e)}")
+            if os.path.exists(temp_file.name):
+                os.unlink(temp_file.name)
+            raise
+
+    def _save_memory(self):
+        """Сохраняет память в атомарном режиме"""
+        memory_path = self.data_dir / "memory.json"
+        temp_path = memory_path.with_suffix('.tmp')
+        
+        try:
+            with open(temp_path, 'w') as f:
+                json.dump({
+                    "context": list(self.memory.context),
+                    "long_term": self.memory.long_term,
+                    "knowledge_graph": self.memory.knowledge_graph
+                }, f)
+                
+            os.replace(temp_path, memory_path)
+            self.logger.info("Memory saved successfully")
+        except Exception as e:
+            self.logger.error(f"Failed to save memory: {str(e)}")
+            if temp_path.exists():
+                temp_path.unlink()
             raise
 
     def load(self):
@@ -203,7 +336,11 @@ class Sin:
             memory_path = self.data_dir / "memory.json"
             if memory_path.exists():
                 self.logger.info("Loading memory...")
-                self.memory.load(memory_path)
+                with open(memory_path, 'r') as f:
+                    data = json.load(f)
+                    self.memory.context = deque(data.get("context", []), maxlen=self.memory.context.maxlen)
+                    self.memory.long_term = data.get("long_term", [])
+                    self.memory.knowledge_graph = data.get("knowledge_graph", [])
                 self.logger.info("Memory loaded successfully")
         except Exception as e:
             self.logger.error(f"Failed to load memory: {str(e)}", exc_info=True)
@@ -212,7 +349,7 @@ class Sin:
 
     def get_training_report(self):
         """Получение отчета о последнем обучении"""
-        report_path = Path("data/logs/training_log.json")
+        report_path = self.logs_dir / "training_log.json"
         if report_path.exists():
             with open(report_path, "r") as f:
                 return json.load(f)
@@ -264,18 +401,33 @@ class Sin:
 
     def _cleanup_old_models(self, max_models=5):
         """Удаление старых моделей, кроме max_models последних"""
-        models = sorted(
-            [f for f in self.models_dir.glob('*.pt') if f.is_file()],
-            key=lambda f: f.stat().st_mtime,
-            reverse=True
-        )
-        
-        for old_model in models[max_models:]:
-            try:
-                old_model.unlink()
-                self.logger.info(f"Removed old model: {old_model}")
-            except Exception as e:
-                self.logger.error(f"Failed to remove {old_model}: {str(e)}")
+        try:
+            model_files = list(self.models_dir.glob('*.pt'))
+            if len(model_files) <= max_models:
+                return
+                
+            # Сортировка по timestamp в имени
+            def extract_timestamp(path):
+                try:
+                    name = path.stem
+                    if '_' in name:
+                        ts_part = name.split('_')[-1]
+                        return datetime.strptime(ts_part, "%Y%m%d%H%M%S")
+                except:
+                    return datetime.fromtimestamp(0)
+                    
+            model_files.sort(key=lambda x: extract_timestamp(x))
+            
+            # Удаляем самые старые
+            for old_model in model_files[:-max_models]:
+                try:
+                    old_model.unlink()
+                    self.logger.info(f"Removed old model: {old_model.name}")
+                except Exception as e:
+                    self.logger.warning(f"Failed to remove {old_model.name}: {str(e)}")
+                    
+        except Exception as e:
+            self.logger.error(f"Error during model cleanup: {str(e)}")
 
     def list_models(self):
         """Список доступных моделей"""
@@ -284,3 +436,31 @@ class Sin:
             key=lambda f: f.stat().st_mtime,
             reverse=True
         )]
+
+    def get_model_info(self):
+        """Возвращает информацию о всех доступных моделях"""
+        models = []
+        for model_file in self.models_dir.glob('*.pt'):
+            try:
+                # Читаем только метаданные без загрузки всей модели
+                data = torch.load(model_file, map_location='cpu', weights_only=True)
+                models.append({
+                    'path': str(model_file),
+                    'name': model_file.name,
+                    'size': model_file.stat().st_size,
+                    'modified': datetime.fromtimestamp(model_file.stat().st_mtime),
+                    'metadata': data.get('metadata', {})
+                })
+            except Exception as e:
+                self.logger.warning(f"Could not read metadata from {model_file.name}: {str(e)}")
+                models.append({
+                    'path': str(model_file),
+                    'name': model_file.name,
+                    'size': model_file.stat().st_size,
+                    'modified': datetime.fromtimestamp(model_file.stat().st_mtime),
+                    'error': str(e)
+                })
+        
+        # Сортировка по дате изменения (новые сначала)
+        models.sort(key=lambda x: x['modified'], reverse=True)
+        return models
