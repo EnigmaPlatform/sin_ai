@@ -174,16 +174,40 @@ def main():
     ai = Sin(args.model) if args.model else Sin()
     
     if args.train:
-        logger.info(f"Starting training process with data from: {args.data}")
         try:
-            if not os.path.exists(args.data):
-                logger.error(f"Data directory not found: {args.data}")
-                return
+            print(f"Starting training with data from: {args.data}")
+            
+            # Загрузка валидационного датасета (если есть)
+            val_dataset = None
+            if os.path.exists(args.data + "_val"):
+                val_dataset = ai._load_all_datasets(args.data + "_val")
+            
+            # Запуск обучения
+            metrics = ai.train(
+                epochs=args.epochs,
+                val_dataset=val_dataset
+            )
+            
+            # Сохранение финального отчета
+            report = {
+                "best_metrics": metrics,
+                "training_time": str(datetime.now() - start_time),
+                "data_path": args.data,
+                "system_info": {
+                    "python": sys.version,
+                    "torch": torch.__version__,
+                    "cuda_available": torch.cuda.is_available()
+                }
+            }
+            
+            with open("data/training_report.json", "w") as f:
+                json.dump(report, f, indent=2)
                 
-            train_log = ai.train(data_path=args.data, epochs=3)
-            logger.info(f"Training complete | Best epoch: {ai.monitor.get_best_epoch()}")
+            print("\nTraining complete!")
+            print(f"Best validation accuracy: {metrics.get('accuracy', 0):.4f}")
+            
         except Exception as e:
-            logger.error(f"Training failed: {str(e)}")
+            logger.error(f"Training failed: {str(e)}", exc_info=True)
         return
     
     print("Sin: Привет! Я Sin, твой русскоязычный ИИ помощник.")
