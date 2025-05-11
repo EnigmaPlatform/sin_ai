@@ -6,9 +6,15 @@ import sys
 import torch
 import json
 import os
+import io
 
 print(f"PyTorch version: {torch.__version__}")
 print(f"CUDA available: {torch.cuda.is_available()}")
+
+# Установка стандартных потоков ввода-вывода в UTF-8
+sys.stdin = io.TextIOWrapper(sys.stdin.buffer, encoding='utf-8')
+sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8')
+sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding='utf-8')
 
 def setup_logging():
     logger = logging.getLogger()
