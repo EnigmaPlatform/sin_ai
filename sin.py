@@ -198,6 +198,9 @@ class Sin:
             # Обработка команд
             if user_input.startswith('/'):
                 return self._handle_command(user_input)
+
+            if not user_input or not user_input.strip():
+                return "Пожалуйста, введите осмысленный запрос"
                 
             self.logger.info(f"Received user input: {user_input}")
             
