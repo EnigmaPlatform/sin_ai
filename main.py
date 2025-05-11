@@ -5,6 +5,7 @@ from logging.handlers import RotatingFileHandler
 import sys
 import torch
 import json
+import os
 
 print(f"PyTorch version: {torch.__version__}")
 print(f"CUDA available: {torch.cuda.is_available()}")
@@ -12,6 +13,9 @@ print(f"CUDA available: {torch.cuda.is_available()}")
 def setup_logging():
     logger = logging.getLogger()
     logger.setLevel(logging.INFO)
+    
+    # Создаем директорию для логов если ее нет
+    os.makedirs('data/logs', exist_ok=True)
     
     # Формат логов
     formatter = logging.Formatter(
@@ -163,14 +167,20 @@ def main():
     parser = argparse.ArgumentParser(description="Sin - Russian AI Assistant")
     parser.add_argument('--train', action='store_true', help="Enable training mode")
     parser.add_argument('--model', type=str, help="Path to specific model to load")
+    parser.add_argument('--data', type=str, default='data/conversations', 
+                      help="Path to training data directory")
     args = parser.parse_args()
     
     ai = Sin(args.model) if args.model else Sin()
     
     if args.train:
-        logger.info("Starting training process...")
+        logger.info(f"Starting training process with data from: {args.data}")
         try:
-            train_log = ai.train(epochs=3)
+            if not os.path.exists(args.data):
+                logger.error(f"Data directory not found: {args.data}")
+                return
+                
+            train_log = ai.train(data_path=args.data, epochs=3)
             logger.info(f"Training complete | Best epoch: {ai.monitor.get_best_epoch()}")
         except Exception as e:
             logger.error(f"Training failed: {str(e)}")
