@@ -13,6 +13,7 @@ from brain.trainer import SinTrainer
 from brain.evaluator import ModelEvaluator
 from brain.monitor import TrainingMonitor
 from torch.optim.lr_scheduler import CosineAnnealingLR
+from brain.monitor import TrainingMonitor
 
 logger = logging.getLogger(__name__)
 
@@ -180,30 +181,33 @@ class Sin:
     def train(self, epochs=3, val_dataset=None):
         """Обучение с валидацией"""
         self.logger.info(f"Starting training for {epochs} epochs")
-    
+
         try:
             train_dataset = self._load_all_datasets()
             if not train_dataset:
                 error_msg = "No training data found"
                 self.logger.error(error_msg)
                 raise ValueError(error_msg)
-        
+    
             self.logger.info(f"Loaded dataset with {len(train_dataset)} samples")
+    
+        # Инициализация монитора
+            self.monitor = TrainingMonitor(log_dir="data/training_logs")
         
-            # Валидация перед обучением
+        # Валидация перед обучением
             if val_dataset:
                 self.logger.info("Running initial validation...")
                 init_metrics = self.evaluate(val_dataset)
                 self.logger.info(f"Initial metrics: {init_metrics}")
-        
+    
             optimizer = torch.optim.AdamW(self.model.parameters(), lr=5e-5)
             scheduler = CosineAnnealingLR(optimizer, epochs)
-        
+    
             for epoch in range(epochs):
                 self.logger.info(f"Starting epoch {epoch+1}/{epochs}")
                 self.model.train()
                 total_loss = 0
-            
+        
                 try:
                     for batch_idx, batch in enumerate(self.trainer.get_data_loader(train_dataset)):
                         optimizer.zero_grad()
@@ -211,35 +215,47 @@ class Sin:
                         loss.backward()
                         optimizer.step()
                         total_loss += loss.item()
-                    
+                
                         if batch_idx % 50 == 0:
                             self.logger.debug(
                                 f"Epoch {epoch+1} | Batch {batch_idx} | Loss: {loss.item():.4f}"
-                            )
-                
+                        )
+            
                     scheduler.step()
-                
-                    # Валидация после эпохи
+            
+                # Валидация после эпохи
                     val_metrics = None
                     if val_dataset:
                         self.logger.info("Running validation...")
                         val_metrics = self.evaluate(val_dataset)
                         self.logger.info(f"Validation metrics: {val_metrics}")
-                
-                    self.monitor.log_epoch(epoch+1, total_loss, val_metrics)
+            
+                # Логирование прогресса
+                    self.monitor.log_epoch(
+                        epoch=epoch+1,
+                        train_loss=total_loss/len(train_dataset),
+                        val_metrics=val_metrics
+                )
+            
                     self.logger.info(
                         f"Epoch {epoch+1} complete | Avg Loss: {total_loss/len(train_dataset):.4f}"
-                    )
-                
+                )
+            
                 except Exception as e:
                     self.logger.error(f"Error during epoch {epoch+1}: {str(e)}", exc_info=True)
                     raise
-        
-            best_epoch = self.monitor.get_best_epoch()
-            self.logger.info(f"Training complete! Best epoch: {best_epoch}")
-            self.save()
-            return self.monitor.current_log
     
+        # После завершения обучения
+            best_epoch = self.monitor.get_best_epoch()
+            best_metrics = self.monitor.get_best_metrics()
+        
+            self.logger.info(f"Training complete! Best epoch: {best_epoch}")
+            self.logger.info(f"Best metrics: {best_metrics}")
+        
+        # Сохранение модели и отчетов
+            self.save()
+            return best_metrics
+
         except Exception as e:
             self.logger.critical(f"Training failed: {str(e)}", exc_info=True)
             raise
