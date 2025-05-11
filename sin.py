@@ -77,7 +77,7 @@ class Sin:
             self.logger.info("Initializing model...")
             self.model = self._load_model(model_path)
             
-            # Инициализация специальных токенов, если их нет
+            # Инициализация специальных токенов
             self._initialize_special_tokens()
             
             self.logger.info("Initializing memory...")
@@ -196,8 +196,8 @@ class Sin:
         """Улучшенная версия чата с обработкой команд и ошибок"""
         try:
             # Обработка команд
-            if user_input.lower().startswith('/train') or user_input.lower() == 'train':
-                return self._handle_train_command()
+            if user_input.startswith('/'):
+                return self._handle_command(user_input)
                 
             self.logger.info(f"Received user input: {user_input}")
             
@@ -236,6 +236,74 @@ class Sin:
             self.logger.error(f"Error in chat(): {str(e)}", exc_info=True)
             return "Произошла ошибка при генерации ответа"
 
+    def _handle_command(self, command):
+        """Обработка всех команд чата"""
+        parts = command.split()
+        if not parts:
+            return "Неизвестная команда"
+            
+        cmd = parts[0].lower()
+        
+        if cmd == "/train":
+            return self._handle_train_command()
+        elif cmd == "/save":
+            model_name = parts[1] if len(parts) > 1 else None
+            save_path = self.save_model(model_name)
+            return f"Модель сохранена как: {save_path}"
+        elif cmd == "/models":
+            models = self.list_models()
+            return "\nДоступные модели:\n" + "\n".join(f"{i}. {m}" for i, m in enumerate(models, 1))
+        elif cmd == "/model_info":
+            models_info = self.get_model_info()
+            report = []
+            for info in models_info:
+                model_info = f"{info.get('name', 'N/A')}\n"
+                model_info += f"  Размер: {info.get('size', 0) / 1024 / 1024:.2f} MB\n"
+                modified = info.get('modified', datetime.now())
+                model_info += f"  Изменена: {modified.strftime('%Y-%m-%d %H:%M:%S') if isinstance(modified, datetime) else modified}\n"
+                report.append(model_info)
+            return "\nИнформация о моделях:\n" + "\n".join(report)
+        elif cmd == "/load" and len(parts) > 1:
+            model_name = parts[1]
+            self.model = self._load_model(self.models_dir / model_name)
+            return f"Модель {model_name} загружена"
+        elif cmd == "/reset":
+            self.memory.context.clear()
+            return "История диалога очищена"
+        elif cmd == "/memory":
+            return "\nТекущая память:\n" + "\n".join(f"{i}. {msg}" for i, msg in enumerate(self.memory.context, 1))
+        elif cmd == "/report":
+            report = self.get_training_report()
+            if report:
+                return "\nОтчет о последнем обучении:\n" + json.dumps(report, indent=2, ensure_ascii=False)
+            return "Отчет об обучении не найден"
+        elif cmd == "/config":
+            config_info = [
+                f"Размер словаря: {len(self.model.tokenizer)}",
+                f"Параметры модели: {sum(p.numel() for p in self.model.parameters())}",
+                f"CUDA доступно: {torch.cuda.is_available()}",
+                f"Устройство модели: {next(self.model.parameters()).device}"
+            ]
+            return "\nКонфигурация модели:\n" + "\n".join(f"  {info}" for info in config_info)
+        elif cmd == "/help":
+            help_text = [
+                "\nДоступные команды:",
+                "  /help - показать это сообщение",
+                "  /save [имя] - сохранить модель (с опциональным именем)",
+                "  /models - список доступных моделей",
+                "  /model_info - подробная информация о моделях",
+                "  /load <имя> - загрузить другую модель",
+                "  /reset - очистить историю диалога",
+                "  /train - начать обучение",
+                "  /memory - показать текущую память",
+                "  /report - показать отчет о последнем обучении",
+                "  /config - показать конфигурацию модели",
+                "  /exit - выйти из программы"
+            ]
+            return "\n".join(help_text)
+        else:
+            return "Неизвестная команда. Напишите /help для списка команд"
+
     def _handle_train_command(self):
         """Обработка команды обучения из чата"""
         try:
@@ -243,13 +311,6 @@ class Sin:
             train_log = self.train(epochs=3)
             best_epoch = self.monitor.get_best_epoch("accuracy")
             best_metrics = self.monitor.get_best_metrics()
-            
-            report = {
-                "best_epoch": best_epoch,
-                "best_accuracy": best_metrics.get("accuracy", 0),
-                "best_loss": best_metrics.get("val_loss", 0),
-                "training_time": str(datetime.now() - self.monitor.start_time)
-            }
             
             return (f"Обучение завершено!\n"
                    f"Лучшая эпоха: {best_epoch}\n"
@@ -350,12 +411,13 @@ class Sin:
             filepath = os.path.join(self.conversations_dir, filename)
             try:
                 if filename.endswith('.json'):
-                    with open(filepath, 'r', encoding='utf-8') as f:
-                        data = json.load(f)
-                        if 'dialogues' in data:
-                            datasets.append(self.trainer.load_json_data(filepath))
+                    dataset = self.trainer.load_dataset(filepath)
+                    if dataset:
+                        datasets.append(dataset)
                 elif filename.endswith('.txt'):
-                    datasets.append(self.trainer.load_text_data(filepath))
+                    dataset = self.trainer.load_text_data(filepath)
+                    if dataset:
+                        datasets.append(dataset)
             except Exception as e:
                 self.logger.error(f"Error loading {filename}: {str(e)}")
         
