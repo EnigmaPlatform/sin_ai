@@ -1,5 +1,6 @@
+--extra-index-url https://download.pytorch.org/whl/cu118
 setuptools==67.8.0
-torch==2.2.1+cu118 --extra-index-url https://download.pytorch.org/whl/cu118
+torch==2.2.1+cu118
 transformers==4.36.0
 sentence-transformers==2.2.2
 numpy==1.26.0
