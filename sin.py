@@ -4,18 +4,54 @@ import torch
 import logging
 import tempfile
 import sys
+import numpy as np
 from pathlib import Path
 from datetime import datetime
 from collections import deque
+from logging.handlers import RotatingFileHandler
+import transformers
 from brain.model import SinModel
 from brain.memory import SinMemory
 from brain.trainer import SinTrainer
 from brain.evaluator import ModelEvaluator
 from brain.monitor import TrainingMonitor
 from torch.optim.lr_scheduler import CosineAnnealingLR
-from brain.monitor import TrainingMonitor
+
+# Настройка кодировки для Windows
+sys.stdin.reconfigure(encoding='utf-8')
+sys.stdout.reconfigure(encoding='utf-8')
+sys.stderr.reconfigure(encoding='utf-8')
 
 logger = logging.getLogger(__name__)
+
+def setup_logging():
+    """Настройка системы логирования с UTF-8"""
+    logger = logging.getLogger()
+    logger.setLevel(logging.INFO)
+    
+    # Формат логов
+    formatter = logging.Formatter(
+        '%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+    )
+    
+    # Логи в файл с ротацией (с UTF-8)
+    os.makedirs('data/logs', exist_ok=True)
+    file_handler = RotatingFileHandler(
+        'data/logs/sin.log',
+        encoding='utf-8',
+        maxBytes=5*1024*1024,
+        backupCount=3
+    )
+    file_handler.setFormatter(formatter)
+    
+    # Логи в консоль
+    console_handler = logging.StreamHandler(sys.stdout)
+    console_handler.setFormatter(formatter)
+    
+    logger.addHandler(file_handler)
+    logger.addHandler(console_handler)
+    
+    return logger
 
 class Sin:
     def __init__(self, model_path=None):
@@ -41,6 +77,9 @@ class Sin:
             self.logger.info("Initializing model...")
             self.model = self._load_model(model_path)
             
+            # Инициализация специальных токенов, если их нет
+            self._initialize_special_tokens()
+            
             self.logger.info("Initializing memory...")
             self.memory = SinMemory()
             
@@ -51,7 +90,7 @@ class Sin:
             self.evaluator = ModelEvaluator(self.model, self.model.tokenizer)
             
             self.logger.info("Initializing monitor...")
-            self.monitor = TrainingMonitor()
+            self.monitor = TrainingMonitor(log_dir="data/training_logs")
             
             self.logger.info("Loading saved state...")
             self.load()
@@ -61,6 +100,16 @@ class Sin:
         except Exception as e:
             self.logger.critical(f"Initialization failed: {str(e)}", exc_info=True)
             raise
+
+    def _initialize_special_tokens(self):
+        """Инициализация специальных токенов, если их нет"""
+        if hasattr(self.model, 'tokenizer'):
+            if not hasattr(self.model.tokenizer, 'sep_token') or not self.model.tokenizer.sep_token:
+                self.model.tokenizer.add_special_tokens({'sep_token': '[SEP]'})
+                self.logger.info("Added missing SEP token")
+            if not hasattr(self.model.tokenizer, 'cls_token') or not self.model.tokenizer.cls_token:
+                self.model.tokenizer.add_special_tokens({'cls_token': '[CLS]'})
+                self.logger.info("Added missing CLS token")
 
     def _load_model(self, model_path=None):
         """
@@ -74,9 +123,13 @@ class Sin:
         """
         if model_path:
             model_path = Path(model_path)
-            if not model_path.exists():
-                raise FileNotFoundError(f"Model file not found: {model_path}")
-            return self._load_single_model(model_path)
+            if model_path.exists():
+                if model_path.stat().st_size < 1024:  # Если файл слишком маленький
+                    model_path.unlink()  # Удаляем поврежденный файл
+                    self.logger.warning(f"Removed corrupted model: {model_path}")
+                    return SinModel()
+                return self._load_single_model(model_path)
+            raise FileNotFoundError(f"Model file not found: {model_path}")
         
         # Автоматический поиск последней модели
         model_files = list(self.models_dir.glob('*.pt'))
@@ -132,23 +185,23 @@ class Sin:
         
         # Загрузка токенизатора
         if hasattr(model, 'tokenizer'):
-            model.tokenizer.add_special_tokens(data['tokenizer_config'].get('special_tokens', {}))
+            special_tokens = data['tokenizer_config'].get('special_tokens', {})
+            if special_tokens:
+                model.tokenizer.add_special_tokens(special_tokens)
+                self.logger.info(f"Added {len(special_tokens)} special tokens")
             
         return model
 
-    def evaluate(self, dataset, sample_size=100):
-        """Оценка модели на датасете"""
-        if not dataset:
-            return {}
-        return self.evaluator.evaluate_dataset(dataset, sample_size)
-
     def chat(self, user_input):
-        """Улучшенная версия с очисткой контекста"""
-        self.logger.info(f"Received user input: {user_input}")
-    
+        """Улучшенная версия чата с обработкой команд и ошибок"""
         try:
+            # Обработка команд
+            if user_input.lower().startswith('/train') or user_input.lower() == 'train':
+                return self._handle_train_command()
+                
+            self.logger.info(f"Received user input: {user_input}")
+            
             # Логируем добавление в память
-            self.logger.debug("Adding interaction to memory")
             self.memory.add_interaction(user_input, "")
         
             # Формируем контекст
@@ -166,17 +219,46 @@ class Sin:
             # Очистка ответа
             clean_response = response.split("Sin:")[-1].strip()
             clean_response = clean_response.split("\n")[0].strip()
-            self.logger.debug(f"Cleaned response: {clean_response}")
+            
+            # Логирование с обработкой Unicode
+            try:
+                self.logger.debug(f"Cleaned response: {clean_response}")
+                self.logger.info(f"Returning response: {clean_response}")
+            except UnicodeEncodeError:
+                self.logger.info("Returning response (unicode characters omitted)")
         
             # Сохранение в память
             self.memory.add_interaction(user_input, clean_response)
-            self.logger.info(f"Returning response: {clean_response}")
-        
+            
             return clean_response if clean_response else "Не могу сформулировать ответ"
         
         except Exception as e:
             self.logger.error(f"Error in chat(): {str(e)}", exc_info=True)
             return "Произошла ошибка при генерации ответа"
+
+    def _handle_train_command(self):
+        """Обработка команды обучения из чата"""
+        try:
+            self.logger.info("Starting training from chat command")
+            train_log = self.train(epochs=3)
+            best_epoch = self.monitor.get_best_epoch("accuracy")
+            best_metrics = self.monitor.get_best_metrics()
+            
+            report = {
+                "best_epoch": best_epoch,
+                "best_accuracy": best_metrics.get("accuracy", 0),
+                "best_loss": best_metrics.get("val_loss", 0),
+                "training_time": str(datetime.now() - self.monitor.start_time)
+            }
+            
+            return (f"Обучение завершено!\n"
+                   f"Лучшая эпоха: {best_epoch}\n"
+                   f"Точность: {best_metrics.get('accuracy', 0):.4f}\n"
+                   f"Потери: {best_metrics.get('val_loss', 0):.4f}")
+                   
+        except Exception as e:
+            self.logger.error(f"Training failed: {str(e)}", exc_info=True)
+            return "Ошибка при обучении модели. Проверьте логи для деталей."
 
     def train(self, epochs=3, val_dataset=None):
         """Обучение с валидацией"""
@@ -191,10 +273,7 @@ class Sin:
     
             self.logger.info(f"Loaded dataset with {len(train_dataset)} samples")
     
-        # Инициализация монитора
-            self.monitor = TrainingMonitor(log_dir="data/training_logs")
-        
-        # Валидация перед обучением
+            # Валидация перед обучением
             if val_dataset:
                 self.logger.info("Running initial validation...")
                 init_metrics = self.evaluate(val_dataset)
@@ -213,47 +292,51 @@ class Sin:
                         optimizer.zero_grad()
                         loss = self.trainer.train_step(batch)
                         loss.backward()
+                        torch.nn.utils.clip_grad_norm_(self.model.parameters(), 1.0)
                         optimizer.step()
                         total_loss += loss.item()
                 
                         if batch_idx % 50 == 0:
                             self.logger.debug(
                                 f"Epoch {epoch+1} | Batch {batch_idx} | Loss: {loss.item():.4f}"
-                        )
+                            )
             
                     scheduler.step()
             
-                # Валидация после эпохи
+                    # Валидация после эпохи
                     val_metrics = None
                     if val_dataset:
                         self.logger.info("Running validation...")
                         val_metrics = self.evaluate(val_dataset)
                         self.logger.info(f"Validation metrics: {val_metrics}")
             
-                # Логирование прогресса
+                    # Логирование прогресса
                     self.monitor.log_epoch(
                         epoch=epoch+1,
                         train_loss=total_loss/len(train_dataset),
-                        val_metrics=val_metrics
-                )
+                        val_metrics=val_metrics,
+                        learning_rate=scheduler.get_last_lr()[0]
+                    )
             
                     self.logger.info(
                         f"Epoch {epoch+1} complete | Avg Loss: {total_loss/len(train_dataset):.4f}"
-                )
+                    )
             
                 except Exception as e:
                     self.logger.error(f"Error during epoch {epoch+1}: {str(e)}", exc_info=True)
                     raise
     
-        # После завершения обучения
-            best_epoch = self.monitor.get_best_epoch()
+            # После завершения обучения
+            best_epoch = self.monitor.get_best_epoch("accuracy")
             best_metrics = self.monitor.get_best_metrics()
         
             self.logger.info(f"Training complete! Best epoch: {best_epoch}")
             self.logger.info(f"Best metrics: {best_metrics}")
         
-        # Сохранение модели и отчетов
+            # Сохранение модели и отчетов
             self.save()
+            self.monitor.save_report()
+            
             return best_metrics
 
         except Exception as e:
@@ -261,12 +344,13 @@ class Sin:
             raise
 
     def _load_all_datasets(self):
+        """Загружает все доступные датасеты для обучения"""
         datasets = []
         for filename in os.listdir(self.conversations_dir):
             filepath = os.path.join(self.conversations_dir, filename)
             try:
                 if filename.endswith('.json'):
-                    with open(filepath, 'r') as f:
+                    with open(filepath, 'r', encoding='utf-8') as f:
                         data = json.load(f)
                         if 'dialogues' in data:
                             datasets.append(self.trainer.load_json_data(filepath))
@@ -276,6 +360,12 @@ class Sin:
                 self.logger.error(f"Error loading {filename}: {str(e)}")
         
         return torch.utils.data.ConcatDataset(datasets) if datasets else None
+
+    def evaluate(self, dataset, sample_size=100):
+        """Оценка модели на датасете"""
+        if not dataset:
+            return {}
+        return self.evaluator.evaluate_dataset(dataset, sample_size)
 
     def save(self):
         """Автоматическое сохранение модели с timestamp"""
@@ -297,7 +387,7 @@ class Sin:
                 'system': {
                     'python': sys.version,
                     'torch': torch.__version__,
-                    'transformers': getattr(transformers, '__version__', 'unknown')
+                    'transformers': transformers.__version__
                 }
             }
         }
@@ -331,12 +421,12 @@ class Sin:
         temp_path = memory_path.with_suffix('.tmp')
         
         try:
-            with open(temp_path, 'w') as f:
+            with open(temp_path, 'w', encoding='utf-8') as f:
                 json.dump({
                     "context": list(self.memory.context),
                     "long_term": self.memory.long_term,
                     "knowledge_graph": self.memory.knowledge_graph
-                }, f)
+                }, f, ensure_ascii=False, indent=2)
                 
             os.replace(temp_path, memory_path)
             self.logger.info("Memory saved successfully")
@@ -352,7 +442,7 @@ class Sin:
             memory_path = self.data_dir / "memory.json"
             if memory_path.exists():
                 self.logger.info("Loading memory...")
-                with open(memory_path, 'r') as f:
+                with open(memory_path, 'r', encoding='utf-8') as f:
                     data = json.load(f)
                     self.memory.context = deque(data.get("context", []), maxlen=self.memory.context.maxlen)
                     self.memory.long_term = data.get("long_term", [])
@@ -365,9 +455,9 @@ class Sin:
 
     def get_training_report(self):
         """Получение отчета о последнем обучении"""
-        report_path = self.logs_dir / "training_log.json"
+        report_path = self.logs_dir / "training_report.json"
         if report_path.exists():
-            with open(report_path, "r") as f:
+            with open(report_path, "r", encoding='utf-8') as f:
                 return json.load(f)
         return None
 
