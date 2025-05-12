@@ -412,34 +412,64 @@ class Sin:
         """Загружает все доступные датасеты для обучения"""
         datasets = []
     
-        # Проверяем существование папки
+    # Проверяем существование папки
         if not self.conversations_dir.exists():
             self.logger.error(f"Directory not found: {self.conversations_dir}")
             return None
 
         for file in self.conversations_dir.glob('*'):
             try:
-                if file.suffix == '.json':
-                    # Используем create_dataloader для загрузки данных
-                    dataloader = self.trainer.create_dataloader(file)
-                    dataset = dataloader.dataset
-                    self.logger.info(f"Successfully loaded JSON dataset from {file.name}")
-                elif file.suffix == '.txt':
-                    dataloader = self.trainer.create_dataloader(file)
-                    dataset = dataloader.dataset
-                    self.logger.info(f"Successfully loaded text dataset from {file.name}")
-                else:
+                if file.suffix.lower() not in ['.json', '.txt']:
                     self.logger.warning(f"Skipping unsupported file type: {file.name}")
                     continue
                 
-                if dataset and len(dataset) > 0:
-                    datasets.append(dataset)
-                    self.logger.info(f"Loaded {len(dataset)} samples from {file.name}")
-                else:
-                    self.logger.warning(f"No valid data found in {file.name}")
+                self.logger.info(f"Processing file: {file.name}")
+            
+            # Читаем содержимое файла
+                with open(file, 'r', encoding='utf-8') as f:
+                    content = f.read().strip()
                 
+                # Пропускаем пустые файлы
+                    if not content:
+                        self.logger.warning(f"Empty file: {file.name}")
+                        continue
+                    
+                # Пытаемся загрузить JSON
+                    if file.suffix.lower() == '.json':
+                        try:
+                            data = json.loads(content)
+                            if not isinstance(data, list):
+                                data = [data]  # Преобразуем в список, если это не список
+                        except json.JSONDecodeError as e:
+                            self.logger.error(f"Invalid JSON in {file.name}: {str(e)}")
+                            continue
+                    else:  # TXT файл
+                        data = [{"user_query": line, "responses": [""]} 
+                               for line in content.split('\n') if line.strip()]
+                
+                    # Проверяем структуру данных
+                    valid_data = []
+                    for item in data:
+                        if isinstance(item, dict) and 'user_query' in item:
+                            valid_data.append(item)
+                        else:
+                            self.logger.warning(f"Invalid item format in {file.name}")
+                
+                    if not valid_data:
+                        self.logger.warning(f"No valid data found in {file.name}")
+                        continue
+                    
+                # Создаем датасет
+                    try:
+                        dataset = DialogDataset(valid_data, self.model.tokenizer)
+                        datasets.append(dataset)
+                        self.logger.info(f"Successfully loaded {len(valid_data)} samples from {file.name}")
+                    except Exception as e:
+                        self.logger.error(f"Error creating dataset from {file.name}: {str(e)}")
+                        continue
+                    
             except Exception as e:
-                self.logger.error(f"Error loading {file.name}: {str(e)}", exc_info=True)
+                self.logger.error(f"Error processing {file.name}: {str(e)}", exc_info=True)
                 continue
     
         if datasets:
