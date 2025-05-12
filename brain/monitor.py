@@ -19,6 +19,7 @@ class TrainingMonitor:
         """
         self.logger = logging.getLogger(__name__)
         self.log_dir = Path(log_dir)
+        self.log_dir.mkdir(parents=True, exist_ok=True)
         self.current_log: Dict[str, Union[List, Dict]] = {}
         self.best_metrics: Dict[str, float] = {}
         self.start_time = datetime.now()
