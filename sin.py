@@ -419,8 +419,8 @@ class Sin:
 
         for file in self.conversations_dir.glob('*'):
             try:
-                if file.suffix.lower() not in ['.json', '.txt']:
-                    self.logger.warning(f"Skipping unsupported file type: {file.name}")
+                if file.suffix.lower() != '.json':
+                    self.logger.warning(f"Skipping non-JSON file: {file.name}")
                     continue
                 
                 self.logger.info(f"Processing file: {file.name}")
@@ -434,38 +434,60 @@ class Sin:
                         self.logger.warning(f"Empty file: {file.name}")
                         continue
                     
-                # Пытаемся загрузить JSON
-                    if file.suffix.lower() == '.json':
-                        try:
-                            data = json.loads(content)
-                            if not isinstance(data, list):
-                                data = [data]  # Преобразуем в список, если это не список
-                        except json.JSONDecodeError as e:
-                            self.logger.error(f"Invalid JSON in {file.name}: {str(e)}")
-                            continue
-                    else:  # TXT файл
-                        data = [{"user_query": line, "responses": [""]} 
-                               for line in content.split('\n') if line.strip()]
-                
-                    # Проверяем структуру данных
-                    valid_data = []
-                    for item in data:
-                        if isinstance(item, dict) and 'user_query' in item:
-                            valid_data.append(item)
-                        else:
-                            self.logger.warning(f"Invalid item format in {file.name}")
-                
-                    if not valid_data:
-                        self.logger.warning(f"No valid data found in {file.name}")
-                        continue
-                    
-                # Создаем датасет
                     try:
-                        dataset = DialogDataset(valid_data, self.model.tokenizer)
-                        datasets.append(dataset)
-                        self.logger.info(f"Successfully loaded {len(valid_data)} samples from {file.name}")
-                    except Exception as e:
-                        self.logger.error(f"Error creating dataset from {file.name}: {str(e)}")
+                        data = json.loads(content)
+                    
+                    # Проверяем структуру данных
+                        if isinstance(data, dict) and 'dialogues' in data:
+                            dialogues = data['dialogues']
+                            if not isinstance(dialogues, list):
+                                self.logger.warning(f"Invalid 'dialogues' format in {file.name}")
+                                continue
+                            
+                        # Преобразуем в нужный формат
+                            processed_data = []
+                            for dialogue in dialogues:
+                                if not isinstance(dialogue, dict):
+                                    continue
+                                
+                                user_query = dialogue.get('user_query', '').strip()
+                                responses = dialogue.get('responses', [])
+                            
+                                if not user_query and not responses:
+                                    continue
+                                
+                            # Обрабатываем все ответы
+                                for response in responses:
+                                    if isinstance(response, dict):
+                                        answer = response.get('text', '').strip()
+                                    else:
+                                        answer = str(response).strip()
+                                
+                                    if answer:  # Добавляем только если есть ответ
+                                        processed_data.append({
+                                            'user_query': user_query,
+                                            'responses': [answer]
+                                    })
+                        
+                            if not processed_data:
+                                self.logger.warning(f"No valid dialogues found in {file.name}")
+                                continue
+                            
+                        # Создаем датасет
+                            try:
+                                dataset = DialogDataset(processed_data, self.model.tokenizer)
+                                datasets.append(dataset)
+                                self.logger.info(f"Successfully loaded {len(processed_data)} samples from {file.name}")
+                            except Exception as e:
+                                self.logger.error(f"Error creating dataset from {file.name}: {str(e)}")
+                                continue
+                            
+                        else:
+                            self.logger.warning(f"Invalid JSON structure in {file.name} - missing 'dialogues' field")
+                            continue
+                        
+                    except json.JSONDecodeError as e:
+                        self.logger.error(f"Invalid JSON in {file.name}: {str(e)}")
                         continue
                     
             except Exception as e:
