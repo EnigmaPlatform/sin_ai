@@ -329,6 +329,7 @@ class Sin:
 
     def train(self, epochs=3, val_dataset=None):
         """Обучение с валидацией"""
+        torch.set_num_threads(4)  # Оптимальное количество потоков
         self.logger.info(f"Starting training for {epochs} epochs")
 
         try:
