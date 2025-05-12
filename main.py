@@ -132,7 +132,8 @@ def handle_command(ai, command):
             
         elif cmd == "/eval":
             print("Оценка модели...")
-            metrics = ai.evaluate(None)  # Можно передать тестовый датасет
+            test_dataset = ai._load_all_datasets()  # Или загрузите специальный тестовый датасет
+            metrics = ai.evaluate(test_dataset)
             print("Метрики модели:")
             for k, v in metrics.items():
                 print(f"  {k}: {v:.4f}")
