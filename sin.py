@@ -338,7 +338,7 @@ class Sin:
             
             self.logger.info(f"Loaded dataset with {len(train_dataset)} samples")
         
-        # Создаем DataLoader через метод trainera
+        # Создаем DataLoader
             train_loader = self.trainer.get_data_loader(train_dataset)
         
             optimizer = torch.optim.AdamW(self.model.parameters(), lr=5e-5)
@@ -350,12 +350,13 @@ class Sin:
                 total_loss = 0
     
                 try:
-                    for batch_idx, batch in enumerate(train_loader):  # Используем train_loader
+                    for batch_idx, batch in enumerate(train_loader):
                         optimizer.zero_grad()
                         loss = self.trainer.train_step(batch)
                         loss.backward()
                         torch.nn.utils.clip_grad_norm_(self.model.parameters(), 1.0)
                         optimizer.step()
+                        scheduler.step()
                         total_loss += loss.item()
             
                         if batch_idx % 50 == 0:
@@ -363,25 +364,23 @@ class Sin:
                                 f"Epoch {epoch+1} | Batch {batch_idx} | Loss: {loss.item():.4f}"
                         )
         
-                    scheduler.step()
-        
                 # Валидация после эпохи
                     val_metrics = None
                     if val_dataset:
                         self.logger.info("Running validation...")
-                        val_metrics = self.evaluate(val_dataset)
+                        val_metrics = self.trainer.evaluate(val_dataset)
                         self.logger.info(f"Validation metrics: {val_metrics}")
         
                 # Логирование прогресса
                     self.monitor.log_epoch(
                         epoch=epoch+1,
-                        train_loss=total_loss/len(train_loader.dataset),
+                        train_loss=total_loss/len(train_loader),
                         val_metrics=val_metrics,
                         learning_rate=scheduler.get_last_lr()[0]
                 )
         
                     self.logger.info(
-                        f"Epoch {epoch+1} complete | Avg Loss: {total_loss/len(train_loader.dataset):.4f}"
+                        f"Epoch {epoch+1} complete | Avg Loss: {total_loss/len(train_loader):.4f}"
                 )
         
                 except Exception as e:
