@@ -12,7 +12,7 @@ from logging.handlers import RotatingFileHandler
 import transformers
 from brain.model import SinModel
 from brain.memory import SinMemory
-from brain.trainer import SinTrainer
+from brain.trainer import SinTrainer, DialogDataset
 from brain.evaluator import ModelEvaluator
 from brain.monitor import TrainingMonitor
 from torch.optim.lr_scheduler import CosineAnnealingLR
@@ -427,69 +427,30 @@ class Sin:
             
             # Читаем содержимое файла
                 with open(file, 'r', encoding='utf-8') as f:
-                    content = f.read().strip()
+                    content = json.load(f)
                 
-                # Пропускаем пустые файлы
-                    if not content:
-                        self.logger.warning(f"Empty file: {file.name}")
-                        continue
-                    
-                    try:
-                        data = json.loads(content)
-                    
-                    # Проверяем структуру данных
-                        if isinstance(data, dict) and 'dialogues' in data:
-                            dialogues = data['dialogues']
-                            if not isinstance(dialogues, list):
-                                self.logger.warning(f"Invalid 'dialogues' format in {file.name}")
-                                continue
-                            
-                        # Преобразуем в нужный формат
-                            processed_data = []
-                            for dialogue in dialogues:
-                                if not isinstance(dialogue, dict):
-                                    continue
-                                
-                                user_query = dialogue.get('user_query', '').strip()
-                                responses = dialogue.get('responses', [])
-                            
-                                if not user_query and not responses:
-                                    continue
-                                
-                            # Обрабатываем все ответы
-                                for response in responses:
-                                    if isinstance(response, dict):
-                                        answer = response.get('text', '').strip()
-                                    else:
-                                        answer = str(response).strip()
-                                
-                                    if answer:  # Добавляем только если есть ответ
-                                        processed_data.append({
-                                            'user_query': user_query,
-                                            'responses': [answer]
-                                    })
-                        
-                            if not processed_data:
-                                self.logger.warning(f"No valid dialogues found in {file.name}")
-                                continue
-                            
-                        # Создаем датасет
-                            try:
-                                dataset = DialogDataset(processed_data, self.model.tokenizer)
-                                datasets.append(dataset)
-                                self.logger.info(f"Successfully loaded {len(processed_data)} samples from {file.name}")
-                            except Exception as e:
-                                self.logger.error(f"Error creating dataset from {file.name}: {str(e)}")
-                                continue
-                            
-                        else:
-                            self.logger.warning(f"Invalid JSON structure in {file.name} - missing 'dialogues' field")
+                # Проверяем структуру данных
+                    if isinstance(content, dict) and 'dialogues' in content:
+                        dialogues = content['dialogues']
+                        if not isinstance(dialogues, list):
+                            self.logger.warning(f"Invalid 'dialogues' format in {file.name}")
                             continue
-                        
-                    except json.JSONDecodeError as e:
-                        self.logger.error(f"Invalid JSON in {file.name}: {str(e)}")
+                    
+                    # Создаем датасет
+                        try:
+                            dataset = DialogDataset(dialogues, self.model.tokenizer)
+                            datasets.append(dataset)
+                            self.logger.info(f"Successfully loaded {len(dialogues)} dialogues from {file.name}")
+                        except Exception as e:
+                            self.logger.error(f"Error creating dataset from {file.name}: {str(e)}")
+                            continue
+                    else:
+                        self.logger.warning(f"Invalid JSON structure in {file.name} - missing 'dialogues' field")
                         continue
                     
+            except json.JSONDecodeError as e:
+                self.logger.error(f"Invalid JSON in {file.name}: {str(e)}")
+                continue
             except Exception as e:
                 self.logger.error(f"Error processing {file.name}: {str(e)}", exc_info=True)
                 continue
@@ -501,6 +462,7 @@ class Sin:
     
         self.logger.error("No valid datasets found after processing all files")
         return None
+
 
     def evaluate(self, dataset, sample_size=100):
         """Оценка модели на датасете"""
