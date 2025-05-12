@@ -335,73 +335,70 @@ class Sin:
                 error_msg = "No training data found"
                 self.logger.error(error_msg)
                 raise ValueError(error_msg)
-    
+            
             self.logger.info(f"Loaded dataset with {len(train_dataset)} samples")
-    
-            # Валидация перед обучением
-            if val_dataset:
-                self.logger.info("Running initial validation...")
-                init_metrics = self.evaluate(val_dataset)
-                self.logger.info(f"Initial metrics: {init_metrics}")
-    
+        
+        # Создаем DataLoader через метод trainera
+            train_loader = self.trainer.get_data_loader(train_dataset)
+        
             optimizer = torch.optim.AdamW(self.model.parameters(), lr=5e-5)
             scheduler = CosineAnnealingLR(optimizer, epochs)
-    
+        
             for epoch in range(epochs):
                 self.logger.info(f"Starting epoch {epoch+1}/{epochs}")
                 self.model.train()
                 total_loss = 0
-        
+    
                 try:
-                    for batch_idx, batch in enumerate(self.trainer.get_data_loader(train_dataset)):
+                    for batch_idx, batch in enumerate(train_loader):  # Используем train_loader
                         optimizer.zero_grad()
                         loss = self.trainer.train_step(batch)
                         loss.backward()
                         torch.nn.utils.clip_grad_norm_(self.model.parameters(), 1.0)
                         optimizer.step()
                         total_loss += loss.item()
-                
+            
                         if batch_idx % 50 == 0:
                             self.logger.debug(
                                 f"Epoch {epoch+1} | Batch {batch_idx} | Loss: {loss.item():.4f}"
-                            )
-            
+                        )
+        
                     scheduler.step()
-            
-                    # Валидация после эпохи
+        
+                # Валидация после эпохи
                     val_metrics = None
                     if val_dataset:
                         self.logger.info("Running validation...")
                         val_metrics = self.evaluate(val_dataset)
                         self.logger.info(f"Validation metrics: {val_metrics}")
-            
-                    # Логирование прогресса
+        
+                # Логирование прогресса
                     self.monitor.log_epoch(
                         epoch=epoch+1,
-                        train_loss=total_loss/len(train_dataset),
+                        train_loss=total_loss/len(train_loader.dataset),
                         val_metrics=val_metrics,
                         learning_rate=scheduler.get_last_lr()[0]
-                    )
-            
+                )
+        
                     self.logger.info(
-                        f"Epoch {epoch+1} complete | Avg Loss: {total_loss/len(train_dataset):.4f}"
-                    )
-            
+                        f"Epoch {epoch+1} complete | Avg Loss: {total_loss/len(train_loader.dataset):.4f}"
+                )
+        
                 except Exception as e:
                     self.logger.error(f"Error during epoch {epoch+1}: {str(e)}", exc_info=True)
                     raise
     
-            # После завершения обучения
+        # После завершения обучения
             best_epoch = self.monitor.get_best_epoch("accuracy")
             best_metrics = self.monitor.get_best_metrics()
-        
+    
             self.logger.info(f"Training complete! Best epoch: {best_epoch}")
             self.logger.info(f"Best metrics: {best_metrics}")
-        
-            # Сохранение модели и отчетов
+    
+        # Сохранение модели и отчетов
             self.save()
             self.monitor.save_report()
-            
+        
             return best_metrics
 
         except Exception as e:
