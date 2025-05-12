@@ -6,292 +6,254 @@ from torch.optim import AdamW
 from transformers import get_linear_schedule_with_warmup
 from torch.nn import functional as F
 from brain.evaluator import ModelEvaluator
-from typing import Optional, Dict, List, Union
+from typing import Optional, Dict, List, Union, Tuple
 import logging
 from pathlib import Path
+from tqdm import tqdm
 
 logger = logging.getLogger(__name__)
 
-class JsonDataset(Dataset):
-    """Dataset для загрузки и обработки данных диалогов из JSON файлов"""
-    def __init__(self, file_path: Union[str, Path], tokenizer, max_length: int = 128):
+class DialogDataset(Dataset):
+    """Универсальный Dataset для обработки диалоговых данных"""
+    def __init__(self, 
+                 data: Union[List[Dict], str, Path], 
+                 tokenizer, 
+                 max_length: int = 128,
+                 format: str = "json"):
         """
         Args:
-            file_path: Путь к JSON файлу с диалогами
+            data: Может быть путем к файлу или готовым списком диалогов
             tokenizer: Токенизатор для обработки текста
             max_length: Максимальная длина последовательности
+            format: Формат данных ('json' или 'text')
         """
-        with open(file_path, 'r', encoding='utf-8') as f:
-            data = json.load(f)
-        
-        self.examples = []
         self.tokenizer = tokenizer
         self.max_length = max_length
+        self.examples = []
         
-        # Обработка каждого диалога в файле
-        for dialogue in data.get('dialogues', []):
-            user_query = dialogue.get('user_query', '')
-            for response in dialogue.get('responses', []):
-                if isinstance(response, dict):
-                    answer = response.get('text', '')
+        # Загрузка данных
+        if isinstance(data, (str, Path)):
+            self._load_from_file(data, format)
+        else:
+            self._process_data(data)
+    
+    def _load_from_file(self, file_path: Union[str, Path], format: str):
+        """Загружает данные из файла"""
+        try:
+            with open(file_path, 'r', encoding='utf-8') as f:
+                if format == "json":
+                    data = json.load(f)
+                elif format == "text":
+                    data = [{"user_query": line.strip(), "responses": [""]} 
+                           for line in f if line.strip()]
                 else:
-                    answer = str(response)
+                    raise ValueError(f"Unsupported format: {format}")
                 
-                if user_query and answer:
-                    text = f"Пользователь: {user_query}\nSin: {answer}"
+                self._process_data(data)
+        except Exception as e:
+            logger.error(f"Error loading {file_path}: {str(e)}")
+            raise
+
+    def _process_data(self, data: List[Dict]):
+        """Обрабатывает данные диалогов"""
+        for dialog in data:
+            query = dialog.get('user_query', '').strip()
+            responses = dialog.get('responses', [])
+            
+            if not query and not responses:
+                continue
+                
+            # Обработка всех ответов
+            for response in responses:
+                if isinstance(response, dict):
+                    answer = response.get('text', '').strip()
+                else:
+                    answer = str(response).strip()
+                
+                if query or answer:
+                    text = f"User: {query}\nAssistant: {answer}" if query else answer
                     self._add_example(text)
 
-    def _add_example(self, text: str) -> None:
+    def _add_example(self, text: str):
         """Токенизирует и добавляет текст в датасет"""
-        encodings = self.tokenizer(
+        encoding = self.tokenizer(
             text,
             max_length=self.max_length,
             padding='max_length',
             truncation=True,
             return_tensors='pt'
         )
-        self.examples.append(encodings)
+        self.examples.append({
+            'input_ids': encoding['input_ids'].squeeze(0),
+            'attention_mask': encoding['attention_mask'].squeeze(0)
+        })
 
-    def __len__(self) -> int:
+    def __len__(self):
         return len(self.examples)
 
-    def __getitem__(self, idx: int) -> Dict[str, torch.Tensor]:
-        return {
-            'input_ids': self.examples[idx]['input_ids'].squeeze(),
-            'attention_mask': self.examples[idx]['attention_mask'].squeeze()
-        }
+    def __getitem__(self, idx):
+        return self.examples[idx]
 
 class SinTrainer:
-    """Класс для обучения модели Sin с поддержкой различных датасетов и мониторинга"""
-    def __init__(self, model):
+    """Улучшенный класс для обучения модели с дополнительными функциями"""
+    def __init__(self, model, device: str = None):
         """
         Args:
-            model: Экземпляр модели Sin для обучения
+            model: Экземпляр модели для обучения
+            device: Устройство для вычислений (auto, cuda, cpu)
         """
         self.model = model
-        self.device = model.device
-        self.monitor = None
-        self.logger = logging.getLogger(__name__)
         self.tokenizer = model.tokenizer
-
-    def evaluate(self, dataset: Dataset, sample_size: int = 100) -> Dict[str, float]:
+        self.device = device or ('cuda' if torch.cuda.is_available() else 'cpu')
+        self.model.to(self.device)
+        self.logger = logging.getLogger(__name__)
+        
+    def create_dataloader(self, 
+                         data: Union[List[Dict], str, Path],
+                         batch_size: int = 4,
+                         shuffle: bool = True,
+                         **kwargs) -> DataLoader:
         """
-        Оценка модели на датасете
+        Создает DataLoader для данных
         
         Args:
-            dataset: Датасет для оценки
-            sample_size: Количество примеров для оценки
+            data: Входные данные (путь или список диалогов)
+            batch_size: Размер батча
+            shuffle: Перемешивать ли данные
+            kwargs: Доп. параметры для Dataset
             
         Returns:
-            Словарь с метриками (loss, accuracy, perplexity, similarity)
+            DataLoader для переданных данных
         """
-        evaluator = ModelEvaluator(self.model, self.model.tokenizer)
-        metrics = evaluator.evaluate_dataset(dataset, sample_size)
-        
-        # Дополнительный расчет loss
-        dataloader = DataLoader(dataset, batch_size=4)
-        total_loss = 0
-        count = 0
-        
-        self.model.eval()
-        with torch.no_grad():
-            for batch in dataloader:
-                inputs = batch['input_ids'].to(self.device)
-                masks = batch['attention_mask'].to(self.device)
-                
-                outputs = self.model(inputs, attention_mask=masks)
-                loss = F.cross_entropy(
-                    outputs.view(-1, outputs.size(-1)),
-                    inputs.view(-1),
-                    ignore_index=self.model.tokenizer.pad_token_id
-                )
-                total_loss += loss.item()
-                count += 1
-        
-        metrics['loss'] = total_loss / count if count > 0 else 0.0
-        
+        dataset = DialogDataset(data, self.tokenizer, **kwargs)
+        return DataLoader(
+            dataset,
+            batch_size=batch_size,
+            shuffle=shuffle,
+            collate_fn=self._collate_fn
+        )
+    
+    def _collate_fn(self, batch):
+        """Функция для объединения примеров в батчи"""
         return {
-            'loss': metrics['loss'],
-            'accuracy': metrics.get('accuracy', 0.0),
-            'perplexity': metrics.get('perplexity', 0.0),
-            'similarity': metrics.get('semantic_similarity', 0.0)
+            'input_ids': torch.stack([item['input_ids'] for item in batch]),
+            'attention_mask': torch.stack([item['attention_mask'] for item in batch])
         }
 
-    def get_data_loader(self, dataset: Dataset, batch_size: int = 4) -> DataLoader:
-        """Создает DataLoader для заданного датасета"""
-        return DataLoader(dataset, batch_size=batch_size, shuffle=True)
-
-    def train_step(self, batch: Dict[str, torch.Tensor]) -> torch.Tensor:
-        """Выполняет один шаг обучения на батче данных"""
-        inputs = batch['input_ids'].to(self.device)
-        masks = batch['attention_mask'].to(self.device)
-        outputs = self.model(inputs, attention_mask=masks)
-        return F.cross_entropy(
-            outputs.view(-1, outputs.size(-1)),
-            inputs.view(-1),
-            ignore_index=self.model.tokenizer.pad_token_id
-        )
-
-    def load_json_data(self, file_path: Union[str, Path]) -> Dataset:
-        """Загружает данные диалогов из JSON файла"""
-        with open(file_path, 'r', encoding='utf-8') as f:
-            data = json.load(f)
-        return self._create_dataset(data['dialogues'])
-
-    def load_text_data(self, file_path: Union[str, Path]) -> Dataset:
-        """Загружает текстовые данные из файла"""
-        with open(file_path, 'r', encoding='utf-8') as f:
-            texts = [line.strip() for line in f if line.strip()]
-        return self._create_dataset([{'user_query': t, 'responses': ['']} for t in texts])
-
-    def _create_dataset(self, dialogues: List[Dict]) -> Dataset:
-        """Создает датасет из списка диалогов"""
-        texts = []
-        for dialogue in dialogues:
-            query = dialogue.get('user_query', '')
-            for response in dialogue.get('responses', []):
-                text = response.get('text', '') if isinstance(response, dict) else str(response)
-                texts.append(f"Пользователь: {query}\nSin: {text}")
-        return self.TextDataset(texts, self.model.tokenizer)
-
-    class TextDataset(Dataset):
-        """Dataset для работы с текстовыми данными"""
-        def __init__(self, texts: List[str], tokenizer, max_length: int = 128):
-            self.encodings = tokenizer(
-                texts, 
-                max_length=max_length,
-                padding='max_length',
-                truncation=True,
-                return_tensors='pt'
-            )
-
-        def __len__(self) -> int:
-            return len(self.encodings['input_ids'])
-
-        def __getitem__(self, idx: int) -> Dict[str, torch.Tensor]:
-            return {
-                'input_ids': self.encodings['input_ids'][idx],
-                'attention_mask': self.encodings['attention_mask'][idx]
-            }
-
-    def train(self, dataset: Dataset, epochs: int = 3, batch_size: int = 4, 
-             lr: float = 5e-5) -> Dict[str, Union[str, float, Dict]]:
+    def train(self, 
+              train_data: Union[List[Dict], str, Path],
+              val_data: Union[List[Dict], str, Path] = None,
+              epochs: int = 3,
+              batch_size: int = 4,
+              learning_rate: float = 5e-5,
+              warmup_steps: int = 100,
+              max_grad_norm: float = 1.0,
+              logging_steps: int = 10,
+              **dataset_kwargs) -> Dict:
         """
-        Основной метод обучения модели
+        Полный цикл обучения модели
         
         Args:
-            dataset: Датасет для обучения
+            train_data: Данные для обучения
+            val_data: Данные для валидации (опционально)
             epochs: Количество эпох
             batch_size: Размер батча
-            lr: Скорость обучения
+            learning_rate: Скорость обучения
+            warmup_steps: Шаги для разогрева
+            max_grad_norm: Макс. норма градиента
+            logging_steps: Частота логирования
+            dataset_kwargs: Доп. параметры для Dataset
             
         Returns:
             Словарь с результатами обучения
         """
         try:
-            # Проверка входных данных
-            if dataset is None or len(dataset) == 0:
-                error_msg = "Dataset is empty or None"
-                self.logger.error(error_msg)
-                raise ValueError(error_msg)
+            # Подготовка данных
+            train_loader = self.create_dataloader(
+                train_data, 
+                batch_size=batch_size,
+                **dataset_kwargs
+            )
             
-            if epochs <= 0 or batch_size <= 0:
-                error_msg = f"Invalid parameters: epochs={epochs}, batch_size={batch_size}"
-                self.logger.error(error_msg)
-                raise ValueError(error_msg)
+            val_loader = None
+            if val_data:
+                val_loader = self.create_dataloader(
+                    val_data,
+                    batch_size=batch_size,
+                    shuffle=False,
+                    **dataset_kwargs
+                )
 
-            # Инициализация
-            self.logger.info(f"Starting training for {epochs} epochs, batch_size={batch_size}, lr={lr}")
-            dataloader = DataLoader(dataset, batch_size=batch_size, shuffle=True)
-        
-            # Начальная оценка
-            self.logger.info("Running initial evaluation...")
-            initial_metrics = self.evaluate(dataset)
-            self.logger.info(f"Initial metrics: {initial_metrics}")
-
-            # Настройка оптимизатора
-            optimizer = AdamW(self.model.parameters(), lr=lr)
+            # Настройка оптимизации
+            optimizer = AdamW(self.model.parameters(), lr=learning_rate)
+            total_steps = len(train_loader) * epochs
             scheduler = get_linear_schedule_with_warmup(
                 optimizer,
-                num_warmup_steps=100,
-                num_training_steps=len(dataloader) * epochs
+                num_warmup_steps=warmup_steps,
+                num_training_steps=total_steps
             )
 
+            # Начальная оценка
+            self.logger.info("Running initial evaluation...")
+            results = {
+                'epochs': [],
+                'train_loss': [],
+                'val_loss': [],
+                'learning_rates': []
+            }
+            
             # Цикл обучения
             self.model.train()
             for epoch in range(epochs):
-                self.logger.info(f"Starting epoch {epoch+1}/{epochs}")
-                total_loss = 0
-                processed_batches = 0
+                epoch_loss = 0
+                self.logger.info(f"Epoch {epoch + 1}/{epochs}")
+                
+                progress_bar = tqdm(train_loader, desc=f"Epoch {epoch + 1}")
+                for step, batch in enumerate(progress_bar):
+                    # Перенос данных на устройство
+                    inputs = batch['input_ids'].to(self.device)
+                    masks = batch['attention_mask'].to(self.device)
+                    
+                    # Прямой проход
+                    outputs = self.model(inputs, attention_mask=masks)
+                    loss = F.cross_entropy(
+                        outputs.logits.view(-1, outputs.logits.size(-1)),
+                        inputs.view(-1),
+                        ignore_index=self.tokenizer.pad_token_id
+                    )
+                    
+                    # Обратный проход
+                    loss.backward()
+                    torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_grad_norm)
+                    optimizer.step()
+                    scheduler.step()
+                    optimizer.zero_grad()
+                    
+                    # Логирование
+                    epoch_loss += loss.item()
+                    if (step + 1) % logging_steps == 0:
+                        progress_bar.set_postfix({'loss': loss.item()})
+                
+                # Сохранение метрик эпохи
+                avg_train_loss = epoch_loss / len(train_loader)
+                results['epochs'].append(epoch + 1)
+                results['train_loss'].append(avg_train_loss)
+                results['learning_rates'].append(scheduler.get_last_lr()[0])
+                
+                self.logger.info(f"Epoch {epoch + 1} Train Loss: {avg_train_loss:.4f}")
+                
+                # Валидация
+                if val_loader:
+                    val_loss = self.evaluate(val_loader)
+                    results['val_loss'].append(val_loss)
+                    self.logger.info(f"Epoch {epoch + 1} Val Loss: {val_loss:.4f}")
             
-                try:
-                    for batch_idx, batch in enumerate(dataloader):
-                        # Проверка наличия необходимых ключей
-                        if 'input_ids' not in batch or 'attention_mask' not in batch:
-                            self.logger.warning(f"Skipping invalid batch at index {batch_idx}")
-                            continue
-
-                        optimizer.zero_grad()
-                    
-                        # Прямой и обратный проход
-                        loss = self.train_step(batch)
-                        loss.backward()
-                        torch.nn.utils.clip_grad_norm_(self.model.parameters(), 1.0)
-                        optimizer.step()
-                        scheduler.step()
-                    
-                        total_loss += loss.item()
-                        processed_batches += 1
-                    
-                        # Логирование прогресса
-                        if (batch_idx + 1) % max(1, len(dataloader) // 10) == 0:
-                            avg_loss = total_loss / processed_batches
-                            self.logger.debug(
-                                f"Epoch {epoch+1} | Batch {batch_idx+1}/{len(dataloader)} "
-                                f"| Loss: {avg_loss:.4f}"
-                            )
-
-                    # Логирование после эпохи
-                    avg_epoch_loss = total_loss / len(dataloader)
-                    self.logger.info(f"Epoch {epoch+1} complete | Avg Loss: {avg_epoch_loss:.4f}")
-                
-                    # Валидация после эпохи
-                    epoch_metrics = self.evaluate(dataset)
-                    self.logger.info(f"Epoch {epoch+1} metrics: {epoch_metrics}")
-                
-                    if self.monitor is not None:
-                        self.monitor.log_epoch(epoch+1, avg_epoch_loss, epoch_metrics)
-                    
-                except RuntimeError as e:
-                    if 'CUDA out of memory' in str(e):
-                        self.logger.error("CUDA out of memory - try reducing batch size")
-                        return {
-                            'status': 'error',
-                            'message': 'CUDA out of memory',
-                            'suggestion': 'Try reducing batch size'
-                        }
-                    raise
-
-            # Финальная оценка
-            self.model.eval()
-            self.logger.info("Training complete. Running final evaluation...")
-            final_metrics = self.evaluate(dataset)
-        
-            # Формирование отчета
-            report = {
-                'initial_metrics': initial_metrics,
-                'final_metrics': final_metrics,
-                'improvement': {
-                    'loss': initial_metrics['loss'] - final_metrics['loss'],
-                    'accuracy': final_metrics['accuracy'] - initial_metrics['accuracy']
-                },
-                'epochs_trained': epochs,
-                'status': 'success'
+            return {
+                'status': 'success',
+                'results': results,
+                'best_epoch': results['val_loss'].index(min(results['val_loss'])) + 1 if val_data else 0
             }
-        
-            self.logger.info(f"Training report: {report}")
-            return report
-        
+            
         except Exception as e:
             self.logger.error(f"Training failed: {str(e)}", exc_info=True)
             return {
@@ -299,3 +261,31 @@ class SinTrainer:
                 'message': str(e),
                 'exception_type': type(e).__name__
             }
+
+    def evaluate(self, dataloader: DataLoader) -> float:
+        """Оценка модели на данных из DataLoader"""
+        self.model.eval()
+        total_loss = 0
+        
+        with torch.no_grad():
+            for batch in dataloader:
+                inputs = batch['input_ids'].to(self.device)
+                masks = batch['attention_mask'].to(self.device)
+                
+                outputs = self.model(inputs, attention_mask=masks)
+                loss = F.cross_entropy(
+                    outputs.logits.view(-1, outputs.logits.size(-1)),
+                    inputs.view(-1),
+                    ignore_index=self.tokenizer.pad_token_id
+                )
+                total_loss += loss.item()
+        
+        return total_loss / len(dataloader)
+
+    def save_model(self, path: Union[str, Path]):
+        """Сохраняет модель и токенизатор"""
+        torch.save({
+            'model_state': self.model.state_dict(),
+            'tokenizer_config': self.tokenizer.get_vocab()
+        }, path)
+        self.logger.info(f"Model saved to {path}")
