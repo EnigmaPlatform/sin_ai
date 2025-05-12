@@ -125,6 +125,23 @@ class SinTrainer:
         self.model.to(self.device)
         self.logger = logging.getLogger(__name__)
 
+    def train_step(self, batch):
+        """
+    Выполняет один шаг обучения
+    
+    Args:
+        batch: Батч данных
+        
+    Returns:
+        Значение функции потерь
+    """
+        inputs = batch['input_ids'].to(self.device)
+        masks = batch['attention_mask'].to(self.device)
+        labels = batch['labels'].to(self.device) if 'labels' in batch else inputs
+    
+        outputs = self.model(inputs, attention_mask=masks, labels=labels)
+        return outputs.loss
+
     def load_dataset(self, file_path: Union[str, Path]) -> Dataset:
         """
         Загружает датасет из файла (для обратной совместимости)
@@ -299,22 +316,25 @@ class SinTrainer:
     def evaluate(self, dataloader: DataLoader) -> float:
         """Оценка модели на данных из DataLoader"""
         self.model.eval()
+        dataloader = self.get_data_loader(dataset, batch_size=4, shuffle=False)
         total_loss = 0
         
         with torch.no_grad():
             for batch in dataloader:
                 inputs = batch['input_ids'].to(self.device)
                 masks = batch['attention_mask'].to(self.device)
+                labels = inputs
                 
                 outputs = self.model(inputs, attention_mask=masks)
                 loss = F.cross_entropy(
-                    outputs.logits.view(-1, outputs.logits.size(-1)),
+                    outputs = self.model(inputs, attention_mask=masks, labels=labels)
+                    total_loss += outputs.loss.item()
                     inputs.view(-1),
                     ignore_index=self.tokenizer.pad_token_id
                 )
                 total_loss += loss.item()
         
-        return total_loss / len(dataloader)
+        return {'loss': total_loss / len(dataloader)}
 
     def save_model(self, path: Union[str, Path]):
         """Сохраняет модель и токенизатор"""
