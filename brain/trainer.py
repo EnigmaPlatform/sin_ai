@@ -72,6 +72,7 @@ class SinTrainer:
         self.device = model.device
         self.monitor = None
         self.logger = logging.getLogger(__name__)
+        self.tokenizer = model.tokenizer
 
     def evaluate(self, dataset: Dataset, sample_size: int = 100) -> Dict[str, float]:
         """
