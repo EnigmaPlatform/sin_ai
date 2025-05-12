@@ -144,9 +144,10 @@ class Sin:
                 if '_' in name:
                     ts_part = name.split('_')[-1]
                     return datetime.strptime(ts_part, "%Y%m%d%H%M%S")
+                return datetime.fromtimestamp(path.stat().st_mtime)  # Используем время модификации файла как fallback
             except:
-                return datetime.fromtimestamp(0)
-            
+                return datetime.fromtimestamp(0)  # Всегда возвращаем datetime
+                
         model_files.sort(key=lambda x: extract_timestamp(x), reverse=True)
         
         # Попробуем загрузить модели по порядку
@@ -411,7 +412,7 @@ class Sin:
         """Загружает все доступные датасеты для обучения"""
         datasets = []
     
-    # Проверяем существование папки
+        # Проверяем существование папки
         if not self.conversations_dir.exists():
             self.logger.error(f"Directory not found: {self.conversations_dir}")
             return None
@@ -419,23 +420,34 @@ class Sin:
         for file in self.conversations_dir.glob('*'):
             try:
                 if file.suffix == '.json':
-                    dataset = self.trainer.load_dataset(file)
+                    # Используем create_dataloader для загрузки данных
+                    dataloader = self.trainer.create_dataloader(file)
+                    dataset = dataloader.dataset
+                    self.logger.info(f"Successfully loaded JSON dataset from {file.name}")
                 elif file.suffix == '.txt':
-                    dataset = self.trainer.load_text_data(file)
+                    dataloader = self.trainer.create_dataloader(file)
+                    dataset = dataloader.dataset
+                    self.logger.info(f"Successfully loaded text dataset from {file.name}")
                 else:
+                    self.logger.warning(f"Skipping unsupported file type: {file.name}")
                     continue
                 
-                if dataset:
+                if dataset and len(dataset) > 0:
                     datasets.append(dataset)
                     self.logger.info(f"Loaded {len(dataset)} samples from {file.name}")
+                else:
+                    self.logger.warning(f"No valid data found in {file.name}")
                 
             except Exception as e:
-                self.logger.error(f"Error loading {file.name}: {str(e)}")
+                self.logger.error(f"Error loading {file.name}: {str(e)}", exc_info=True)
+                continue
     
         if datasets:
-            return torch.utils.data.ConcatDataset(datasets)
+            combined_dataset = torch.utils.data.ConcatDataset(datasets)
+            self.logger.info(f"Combined dataset contains {len(combined_dataset)} samples")
+            return combined_dataset
     
-        self.logger.error("No valid datasets found")
+        self.logger.error("No valid datasets found after processing all files")
         return None
 
     def evaluate(self, dataset, sample_size=100):
@@ -596,8 +608,9 @@ class Sin:
                     if '_' in name:
                         ts_part = name.split('_')[-1]
                         return datetime.strptime(ts_part, "%Y%m%d%H%M%S")
+                    return datetime.fromtimestamp(path.stat().st_mtime)  # Используем время модификации файла как fallback
                 except:
-                    return datetime.fromtimestamp(0)
+                    return datetime.fromtimestamp(0)  # Всегда возвращаем datetime
                     
             model_files.sort(key=lambda x: extract_timestamp(x))
             
