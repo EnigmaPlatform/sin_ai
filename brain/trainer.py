@@ -14,38 +14,44 @@ from tqdm import tqdm
 logger = logging.getLogger(__name__)
 
 class DialogDataset(Dataset):
-    """Универсальный Dataset для обработки диалоговых данных"""
     def __init__(self, 
                  data: Union[List[Dict], str, Path], 
                  tokenizer, 
                  max_length: int = 128,
-                 format: str = "json"):
+                 format: str = None):
         """
         Args:
             data: Может быть путем к файлу или готовым списком диалогов
             tokenizer: Токенизатор для обработки текста
             max_length: Максимальная длина последовательности
-            format: Формат данных ('json' или 'text')
+            format: Формат данных ('json' или 'text'), если data - путь
         """
         self.tokenizer = tokenizer
         self.max_length = max_length
         self.examples = []
         
-        # Загрузка данных
+        # Если data - это путь, загружаем из файла
         if isinstance(data, (str, Path)):
             self._load_from_file(data, format)
         else:
+            # Иначе обрабатываем как готовые данные
             self._process_data(data)
     
     def _load_from_file(self, file_path: Union[str, Path], format: str):
         """Загружает данные из файла"""
         try:
             with open(file_path, 'r', encoding='utf-8') as f:
+                content = f.read().strip()
+                if not content:
+                    raise ValueError("File is empty")
+                
                 if format == "json":
-                    data = json.load(f)
+                    data = json.loads(content)
+                    if not isinstance(data, list):
+                        data = [data]  # Преобразуем в список, если это не список
                 elif format == "text":
                     data = [{"user_query": line.strip(), "responses": [""]} 
-                           for line in f if line.strip()]
+                           for line in content.split('\n') if line.strip()]
                 else:
                     raise ValueError(f"Unsupported format: {format}")
                 
@@ -57,6 +63,9 @@ class DialogDataset(Dataset):
     def _process_data(self, data: List[Dict]):
         """Обрабатывает данные диалогов"""
         for dialog in data:
+            if not isinstance(dialog, dict):
+                continue
+                
             query = dialog.get('user_query', '').strip()
             responses = dialog.get('responses', [])
             
