@@ -410,21 +410,33 @@ class Sin:
     def _load_all_datasets(self):
         """Загружает все доступные датасеты для обучения"""
         datasets = []
-        for filename in os.listdir(self.conversations_dir):
-            filepath = os.path.join(self.conversations_dir, filename)
+    
+    # Проверяем существование папки
+        if not self.conversations_dir.exists():
+            self.logger.error(f"Directory not found: {self.conversations_dir}")
+            return None
+
+        for file in self.conversations_dir.glob('*'):
             try:
-                if filename.endswith('.json'):
-                    dataset = self.trainer.load_dataset(filepath)
-                    if dataset:
-                        datasets.append(dataset)
-                elif filename.endswith('.txt'):
-                    dataset = self.trainer.load_text_data(filepath)
-                    if dataset:
-                        datasets.append(dataset)
+                if file.suffix == '.json':
+                    dataset = self.trainer.load_dataset(file)
+                elif file.suffix == '.txt':
+                    dataset = self.trainer.load_text_data(file)
+                else:
+                    continue
+                
+                if dataset:
+                    datasets.append(dataset)
+                    self.logger.info(f"Loaded {len(dataset)} samples from {file.name}")
+                
             except Exception as e:
-                self.logger.error(f"Error loading {filename}: {str(e)}")
-        
-        return torch.utils.data.ConcatDataset(datasets) if datasets else None
+                self.logger.error(f"Error loading {file.name}: {str(e)}")
+    
+        if datasets:
+            return torch.utils.data.ConcatDataset(datasets)
+    
+        self.logger.error("No valid datasets found")
+        return None
 
     def evaluate(self, dataset, sample_size=100):
         """Оценка модели на датасете"""
