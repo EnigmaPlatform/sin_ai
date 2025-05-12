@@ -33,7 +33,7 @@ class SinModel(nn.Module):
         outputs = self.base_model(
             input_ids=input_ids,
             attention_mask=attention_mask,
-            labels+=labels,
+            labels=labels,
             output_hidden_states=True
         )
         adapted = self.adaptation(outputs.hidden_states[-1])
