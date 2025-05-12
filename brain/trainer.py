@@ -13,31 +13,17 @@ from tqdm import tqdm
 logger = logging.getLogger(__name__)
 
 class DialogDataset(Dataset):
-    def __init__(self, 
-                 data: Union[List[Dict], str, Path], 
-                 tokenizer, 
-                 max_length: int = 128,
-                 format: str = None):
-        """
-        Args:
-            data: Может быть путем к файлу или готовым списком диалогов
-            tokenizer: Токенизатор для обработки текста
-            max_length: Максимальная длина последовательности
-            format: Формат данных ('json' или 'text'), если data - путь
-        """
+    def __init__(self, data: Union[List[Dict], str, Path], tokenizer, max_length: int = 128, format: str = None):
         self.tokenizer = tokenizer
         self.max_length = max_length
         self.examples = []
         
-        # Если data - это путь, загружаем из файла
         if isinstance(data, (str, Path)):
             self._load_from_file(data, format)
         else:
-            # Иначе обрабатываем как готовые данные
             self._process_data(data)
     
     def _load_from_file(self, file_path: Union[str, Path], format: str):
-        """Загружает данные из файла"""
         try:
             with open(file_path, 'r', encoding='utf-8') as f:
                 content = f.read().strip()
@@ -46,11 +32,10 @@ class DialogDataset(Dataset):
                 
                 if format == "json":
                     data = json.loads(content)
-                    # Обрабатываем структуру с полем "dialogues"
                     if isinstance(data, dict) and 'dialogues' in data:
                         data = data['dialogues']
                     elif not isinstance(data, list):
-                        data = [data]  # Преобразуем в список, если это не список
+                        data = [data]
                 elif format == "text":
                     data = [{"user_query": line.strip(), "responses": [""]} 
                            for line in content.split('\n') if line.strip()]
@@ -63,20 +48,16 @@ class DialogDataset(Dataset):
             raise
 
     def _process_data(self, data: List[Dict]):
-        """Обрабатывает данные диалогов"""
         for dialog in data:
             if not isinstance(dialog, dict):
                 continue
                 
-            # Получаем запрос пользователя
             query = dialog.get('user_query', '').strip()
             if not query:
                 continue
                 
-            # Обрабатываем ответы
             responses = dialog.get('responses', [])
             if not responses:
-                # Если нет ответов, добавляем пустой ответ
                 self._add_example(query, "")
                 continue
                 
@@ -89,7 +70,7 @@ class DialogDataset(Dataset):
                 self._add_example(query, answer)
 
     def _add_example(self, query: str, answer: str):
-        """Добавляет пример диалога в датасет"""
+        """Генерирует правильные labels для задачи языкового моделирования"""
         text = f"User: {query}\nAssistant: {answer}"
         encoding = self.tokenizer(
             text,
@@ -98,10 +79,17 @@ class DialogDataset(Dataset):
             truncation=True,
             return_tensors='pt'
         )
+        
+        # Создаем labels, смещенные на 1 токен вперед
+        input_ids = encoding['input_ids'].squeeze(0)
+        labels = input_ids.clone()
+        labels[:-1] = input_ids[1:]  # Сдвигаем на один токен вперед
+        labels[-1] = -100  # Игнорируем последний токен
+        
         self.examples.append({
-            'input_ids': encoding['input_ids'].squeeze(0),
+            'input_ids': input_ids,
             'attention_mask': encoding['attention_mask'].squeeze(0),
-            'labels': encoding['input_ids'].squeeze(0)  # Для языкового моделирования
+            'labels': labels
         })
 
     def __len__(self):
@@ -111,13 +99,7 @@ class DialogDataset(Dataset):
         return self.examples[idx]
 
 class SinTrainer:
-    """Улучшенный класс для обучения модели с дополнительными функциями"""
     def __init__(self, model, device: str = None):
-        """
-        Args:
-            model: Экземпляр модели для обучения
-            device: Устройство для вычислений (auto, cuda, cpu)
-        """
         self.model = model
         self.tokenizer = model.tokenizer
         self.device = device or ('cuda' if torch.cuda.is_available() else 'cpu')
@@ -125,17 +107,6 @@ class SinTrainer:
         self.logger = logging.getLogger(__name__)
 
     def get_data_loader(self, dataset, batch_size=4, shuffle=True):
-        """
-        Создает DataLoader для переданного датасета
-        
-        Args:
-            dataset: Загруженный датасет
-            batch_size: Размер батча
-            shuffle: Перемешивать ли данные
-            
-        Returns:
-            DataLoader для переданного датасета
-        """
         return DataLoader(
             dataset,
             batch_size=batch_size,
@@ -144,7 +115,6 @@ class SinTrainer:
         )
 
     def _collate_fn(self, batch):
-        """Функция для объединения примеров в батчи"""
         return {
             'input_ids': torch.stack([item['input_ids'] for item in batch]),
             'attention_mask': torch.stack([item['attention_mask'] for item in batch]),
@@ -152,13 +122,13 @@ class SinTrainer:
         }
 
     def train_step(self, batch):
-        """Выполняет один шаг обучения"""
+        """Обновленный метод с обработкой возвращаемого значения"""
         inputs = batch['input_ids'].to(self.device)
         masks = batch['attention_mask'].to(self.device)
         labels = batch['labels'].to(self.device)
         
         outputs = self.model(inputs, attention_mask=masks, labels=labels)
-        return outputs.loss
+        return outputs['loss']
 
     def load_dataset(self, file_path: Union[str, Path]) -> Dataset:
         """
@@ -214,7 +184,7 @@ class SinTrainer:
                 labels = batch['labels'].to(self.device)
                 
                 outputs = self.model(inputs, attention_mask=masks, labels=labels)
-                total_loss += outputs.loss.item()
+                total_loss += outputs['loss'].item()
         
         return {'loss': total_loss / len(dataloader)}
 
