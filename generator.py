@@ -1,8 +1,9 @@
 import json
 import random
 from uuid import uuid4
+from datetime import datetime
 
-# Увеличенные категории и подкатегории (12 категорий по 6-12 подкатегорий)
+# Исправлены опечатки в названиях категорий
 CATEGORIES = {
     "Технологии": [
         "смартфоны", "ноутбуки", "искусственный интеллект", "гаджеты", "программирование",
@@ -54,12 +55,10 @@ CATEGORIES = {
     ]
 }
 
-# Увеличенный набор эмоций и уровней сложности
 EMOTIONS = ["нейтральный", "игривый", "образовательный", "смешной", "серьёзный", 
             "дружелюбный", "вдохновляющий", "критический", "саркастичный", "философский"]
 LEVELS = ["лёгкий", "средний", "сложный", "экспертный"]
 
-# Значительно расширенная база фраз (20 вопросов, 16 ответов, 20 мнений)
 PHRASES = {
     "вопросы": [
         "Что ты думаешь о {topic}?",
@@ -71,17 +70,7 @@ PHRASES = {
         "Какое у тебя сложилось мнение о {topic}?",
         "С чего лучше начать знакомство с {topic}?",
         "Какие малоизвестные факты о {topic} ты знаешь?",
-        "Как ты относишься к современному развитию {topic}?",
-        "Что бы ты посоветовал новичку в {topic}?",
-        "Какие главные тенденции в {topic} ты отмечаешь?",
-        "Как изменился {topic} за последние 5 лет?",
-        "Что самое сложное в понимании {topic}?",
-        "Какие мифы о {topic} тебе приходилось слышать?",
-        "Какой самый неожиданный аспект {topic} тебе известен?",
-        "Что тебя больше всего удивило в {topic}?",
-        "Как бы ты объяснил {topic} инопланетянину?",
-        "Какие профессиональные секреты {topic} ты знаешь?",
-        "Что делает {topic} по-настоящему уникальным?"
+        "Как ты относишься к современному развитию {topic}?"
     ],
     "ответы": [
         "Я считаю, что {topic} — это {opinion}",
@@ -91,89 +80,60 @@ PHRASES = {
         "По моему опыту, {topic} {opinion}",
         "Недавние исследования показывают, что {topic} {opinion}",
         "Судя по последним данным, {topic} {opinion}",
-        "Как специалист скажу — {topic} {opinion}",
-        "Исторически сложилось, что {topic} {opinion}",
-        "Если анализировать детально, {topic} {opinion}",
-        "В контексте современных реалий {topic} {opinion}",
-        "Сравнивая с аналогичными направлениями, {topic} {opinion}",
-        "По наблюдениям практиков, {topic} {opinion}",
-        "Если рассматривать под другим углом, {topic} {opinion}",
-        "В перспективе ближайших лет {topic} {opinion}",
-        "С профессиональной точки зрения {topic} {opinion}"
+        "Как специалист скажу — {topic} {opinion}"
     ],
     "мнения": [
         "очень перспективное направление",
         "гораздо сложнее, чем кажется на первый взгляд",
         "заслуживает более пристального внимания",
         "имеет множество неочевидных нюансов",
-        "переживает настоящий расцвет в последние годы",
-        "меня лично никогда не перестает удивлять",
-        "вызывает оживленные дискуссии среди экспертов",
-        "сильно зависит от контекста применения",
-        "требует глубокого изучения для полного понимания",
-        "может кардинально изменить наше будущее",
-        "часто становится предметом необоснованной критики",
-        "демонстрирует удивительную адаптивность",
-        "имеет богатую историю развития",
-        "постоянно эволюционирует и меняется",
-        "открывает новые возможности для человечества",
-        "содержит в себе множество нераскрытых потенциалов",
-        "часто неправильно интерпретируется массовой культурой",
-        "представляет собой синтез науки и искусства",
-        "становится все более доступным для широкой публики",
-        "требует пересмотра традиционных подходов"
+        "переживает настоящий расцвет в последние годы"
     ]
 }
 
 def generate_question(topic):
-    """Генерация более содержательного вопроса"""
     return random.choice(PHRASES["вопросы"]).format(topic=topic)
 
 def generate_answer(topic):
-    """Генерация более развернутого ответа"""
     opinion = random.choice(PHRASES["мнения"])
     answer_template = random.choice(PHRASES["ответы"])
     
-    # Добавляем дополнительные разъяснения в 30% случаев
     if random.random() < 0.3:
         additional_info = [
             f" Например, {random.choice(PHRASES['мнения'])}.",
-            f" Чтобы понять почему, достаточно посмотреть на {random.choice(['последние исследования', 'исторические параллели', 'практические примеры'])}.",
-            f" Это особенно заметно, если рассмотреть {random.choice(['современные тенденции', 'ключевые показатели', 'мнения экспертов'])}."
+            f" Это видно по {random.choice(['последним исследованиям', 'историческим примерам'])}."
         ]
         return answer_template.format(topic=topic, opinion=opinion) + random.choice(additional_info)
     
     return answer_template.format(topic=topic, opinion=opinion)
 
-def generate_responses(topic):
-    """Генерация более содержательных ответов"""
+def generate_responses(topic, category):  # Добавлен параметр category
     responses = []
-    for _ in range(random.randint(1, 4)):  # 1-4 варианта ответа
+    for _ in range(random.randint(1, 4)):
         response = {
             "text": generate_answer(topic),
             "meta": {
                 "difficulty": random.choice(LEVELS),
                 "emotion": random.choice(EMOTIONS),
                 "slang": random.random() > 0.9,
-                "length": random.choice(["краткий", "развернутый", "детализированный"])
+                "length": random.choice(["краткий", "развернутый"]),
+                "category": category  # Добавляем категорию в метаданные
             }
         }
         
-        # Добавляем профессиональный жаргон для сложных ответов
         if response["meta"]["difficulty"] in ["сложный", "экспертный"]:
             jargon = {
-                "Технологии": ["алгоритмизация", "аппаратная часть", "интероперабельность"],
-                "Наука": ["эмпирические данные", "верификация", "методология"],
-                "Экономика": ["диверсификация", "ликвидность", "капитализация"]
+                "Технологии": ["алгоритмизация", "аппаратная часть"],
+                "Наука": ["эмпирические данные", "методология"],
+                "Экономика": ["ликвидность", "капитализация"]
             }
-            if response["meta"]["category"] in jargon:
+            if category in jargon:
                 response["text"] += f" {random.choice(jargon[category])} играет ключевую роль."
         
         responses.append(response)
     return responses
 
 def generate_dialogue():
-    """Генерация более содержательного диалога"""
     category = random.choice(list(CATEGORIES.keys()))
     subcategory = random.choice(CATEGORIES[category])
     
@@ -181,35 +141,28 @@ def generate_dialogue():
         "category": category,
         "subcategory": subcategory,
         "user_query": generate_question(subcategory),
-        "responses": generate_responses(subcategory)
+        "responses": generate_responses(subcategory, category)  # Передаем category
     }
     
-    # Добавляем дополнительные метаданные
     dialogue["meta"] = {
-        "complexity": random.choice(["базовый", "продвинутый", "специализированный"]),
-        "relevance": random.randint(1, 10),
-        "controversy": random.random() > 0.7
+        "complexity": random.choice(["базовый", "продвинутый"]),
+        "relevance": random.randint(1, 10)
     }
     
     return dialogue
 
 def generate_dataset(num_dialogues=10000):
-    """Генерация всего датасета"""
     return {
         "dialogues": [generate_dialogue() for _ in range(num_dialogues)],
         "metadata": {
-            "version": "2.0",
-            "description": "Улучшенный русскоязычный датасет диалогов",
+            "version": "2.1",
             "created_at": datetime.now().isoformat(),
-            "categories_count": len(CATEGORIES),
-            "total_subcategories": sum(len(v) for v in CATEGORIES.values())
+            "categories_count": len(CATEGORIES)
         }
     }
 
-# Генерация и сохранение
 dataset = generate_dataset()
-with open("enhanced_russian_dialogues.json", "w", encoding="utf-8") as f:
+with open("russian_dialogues_fixed.json", "w", encoding="utf-8") as f:
     json.dump(dataset, f, ensure_ascii=False, indent=2)
 
-print(f"Создан улучшенный датасет с {len(dataset['dialogues'])} диалогами")
-print(f"Всего категорий: {len(CATEGORIES)}, подкатегорий: {sum(len(v) for v in CATEGORIES.values())}")
+print(f"Создан исправленный датасет с {len(dataset['dialogues'])} диалогами")
