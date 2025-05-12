@@ -1,6 +1,6 @@
 from .model import SinModel
 from .memory import SinMemory
-from .trainer import SinTrainer
+from .trainer import SinTrainer, DialogDataset
 import logging
 logger = logging.getLogger(__name__)
 
