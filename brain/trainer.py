@@ -126,18 +126,10 @@ class SinTrainer:
         self.logger = logging.getLogger(__name__)
 
     def train_step(self, batch):
-        """
-    Выполняет один шаг обучения
-    
-    Args:
-        batch: Батч данных
-        
-    Returns:
-        Значение функции потерь
-    """
+        """Выполняет один шаг обучения"""
         inputs = batch['input_ids'].to(self.device)
         masks = batch['attention_mask'].to(self.device)
-        labels = batch['labels'].to(self.device) if 'labels' in batch else inputs
+        labels = inputs  # Для языкового моделирования используем inputs как labels
     
         outputs = self.model(inputs, attention_mask=masks, labels=labels)
         return outputs.loss
