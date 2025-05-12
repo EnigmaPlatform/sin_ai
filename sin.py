@@ -520,7 +520,7 @@ class Sin:
 
     def get_training_report(self):
         """Получение отчета о последнем обучении"""
-        report_path = self.logs_dir / "training_report.json"
+        report_path = self.data_dir / "training_logs" / "training_report.json"
         if report_path.exists():
             with open(report_path, "r", encoding='utf-8') as f:
                 return json.load(f)
