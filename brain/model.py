@@ -29,14 +29,23 @@ class SinModel(nn.Module):
             nn.Linear(2048, 1024)
         ).to(self.device)
 
-    def forward(self, input_ids, attention_mask=None):
+    def forward(self, input_ids, attention_mask=None, labels=None):
         outputs = self.base_model(
             input_ids=input_ids,
             attention_mask=attention_mask,
+            labels+=labels,
             output_hidden_states=True
         )
         adapted = self.adaptation(outputs.hidden_states[-1])
         return self.base_model.lm_head(adapted)
+
+        if labels is not None:
+        # Если переданы labels, вычисляем loss
+           loss_fct = torch.nn.CrossEntropyLoss()
+           loss = loss_fct(outputs.view(-1, outputs.size(-1)), labels.view(-1))
+           return {'loss': loss, 'logits': outputs}
+       else:
+           return {'logits': outputs}
 
     def generate_response(self, prompt, max_new_tokens=100, temperature=0.7):
         try:
