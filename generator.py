@@ -2,85 +2,106 @@ import json
 import random
 from uuid import uuid4
 
-# Константы для генерации данных
+# Категории и подкатегории на русском
 CATEGORIES = {
-    "technology": ["smartphones", "laptops", "AI", "gadgets", "programming"],
-    "science": ["physics", "chemistry", "biology", "astronomy", "mathematics"],
-    "entertainment": ["movies", "music", "games", "books", "celebrities"],
-    "daily_life": ["cooking", "shopping", "travel", "health", "fitness"]
+    "Технологии": ["смартфоны", "ноутбуки", "искусственный интеллект", "гаджеты", "программирование"],
+    "Наука": ["физика", "химия", "биология", "астрономия", "математика"],
+    "Развлечения": ["фильмы", "музыка", "игры", "книги", "знаменитости"],
+    "Повседневная жизнь": ["кулинария", "шоппинг", "путешествия", "здоровье", "фитнес"],
+    "Автомобили": ["электромобили", "тюнинг", "гоночные авто", "ремонт", "марки машин"],
+    "Спорт": ["футбол", "хоккей", "теннис", "баскетбол", "бокс"]
 }
 
-EMOTIONS = ["neutral", "playful", "educational", "funny", "serious", "friendly"]
-DIFFICULTIES = ["easy", "medium", "hard"]
+# Варианты эмоциональной окраски
+EMOTIONS = ["нейтральный", "игривый", "образовательный", "смешной", "серьёзный", "дружелюбный"]
+LEVELS = ["лёгкий", "средний", "сложный"]
 
-def generate_response():
-    """Генерация вариантов ответа с метаданными"""
+# База данных для генерации естественных фраз
+PHRASES = {
+    "вопросы": [
+        "Что ты думаешь о {topic}?",
+        "Как тебе {topic}?",
+        "Расскажи про {topic}",
+        "Почему {topic} так популярен?",
+        "Объясни {topic} простыми словами",
+        "В чём особенность {topic}?",
+        "Какое твоё мнение о {topic}?",
+        "С чего начать изучение {topic}?",
+        "Какие есть интересные факты о {topic}?",
+        "Как ты относишься к {topic}?"
+    ],
+    "ответы": [
+        "Я считаю, что {topic} — это {opinion}",
+        "Если честно, {topic} мне {opinion}",
+        "На мой взгляд, {topic} {opinion}",
+        "Многие говорят, что {topic} {opinion}",
+        "По моему опыту, {topic} {opinion}",
+        "Недавно читал, что {topic} {opinion}",
+        "Судя по последним данным, {topic} {opinion}",
+        "Как специалист скажу — {topic} {opinion}"
+    ],
+    "мнения": [
+        "очень интересная тема",
+        "довольно сложный вопрос",
+        "заслуживает внимания",
+        "не так прост, как кажется",
+        "стал популярен не просто так",
+        "меня всегда увлекал",
+        "вызывает много споров",
+        "сильно изменился в последние годы",
+        "важен для современного мира",
+        "лучше один раз попробовать, чем сто раз услышать"
+    ]
+}
+
+def generate_question(topic):
+    """Генерация естественного вопроса"""
+    return random.choice(PHRASES["вопросы"]).format(topic=topic)
+
+def generate_answer(topic):
+    """Генерация естественного ответа"""
+    opinion = random.choice(PHRASES["мнения"])
+    return random.choice(PHRASES["ответы"]).format(topic=topic, opinion=opinion)
+
+def generate_responses(topic):
+    """Генерация вариантов ответов с метаданными"""
     responses = []
     for _ in range(random.randint(1, 3)):  # 1-3 варианта ответа
         response = {
-            "text": generate_text_response(),
+            "text": generate_answer(topic),
             "meta": {
-                "difficulty": random.choice(DIFFICULTIES),
+                "difficulty": random.choice(LEVELS),
                 "emotion": random.choice(EMOTIONS),
-                "slang": random.random() > 0.7  # 30% вероятность сленга
+                "slang": random.random() > 0.9  # 10% вероятность сленга
             }
         }
+        # Добавляем сленг при необходимости
+        if response["meta"]["slang"]:
+            response["text"] = response["text"].replace("Я считаю", "Я щитаю").replace("мнение", "мнение (ну типа)")
         responses.append(response)
     return responses
-
-def generate_text_response():
-    """Генерация текста ответа"""
-    templates = [
-        "Это интересный вопрос. {answer}",
-        "Я думаю, что {answer}",
-        "Насколько мне известно, {answer}",
-        "{answer}, если я правильно понимаю.",
-        "Отличный вопрос! {answer}"
-    ]
-    answers = [
-        "ответ зависит от многих факторов",
-        "можно рассмотреть это с разных точек зрения",
-        "существует несколько подходов к этому вопросу",
-        "современные исследования показывают интересные результаты",
-        "это популярная тема для обсуждения"
-    ]
-    return random.choice(templates).format(answer=random.choice(answers))
-
-def generate_user_query(category, subcategory):
-    """Генерация пользовательского запроса"""
-    queries = [
-        f"Что ты знаешь о {subcategory}?",
-        f"Расскажи мне про {subcategory}",
-        f"Как ты относишься к {subcategory}?",
-        f"Объясни {subcategory} как для новичка",
-        f"Давай обсудим {subcategory}",
-        f"Почему {subcategory} так популярен в {category}?"
-    ]
-    return random.choice(queries)
 
 def generate_dialogue():
     """Генерация одного диалога"""
     category = random.choice(list(CATEGORIES.keys()))
     subcategory = random.choice(CATEGORIES[category])
     
-    dialogue = {
+    return {
         "category": category,
         "subcategory": subcategory,
-        "user_query": generate_user_query(category, subcategory),
-        "responses": generate_response()
+        "user_query": generate_question(subcategory),
+        "responses": generate_responses(subcategory)
     }
-    return dialogue
 
 def generate_dataset(num_dialogues=10000):
     """Генерация всего датасета"""
-    dataset = {
+    return {
         "dialogues": [generate_dialogue() for _ in range(num_dialogues)]
     }
-    return dataset
 
-# Генерация и сохранение датасета
+# Генерация и сохранение
 dataset = generate_dataset()
-with open("dialogues_dataset_schema.json", "w", encoding="utf-8") as f:
-    json.dump(dataset, f, ensure_ascii=False, indent=2)
+with open("russian_dialogues.json", "w", encoding="utf-8") as f:
+    json.dump(dataset, f, ensure_ascii=False, indent=2, ensure_ascii=False)
 
-print(f"Датасет из {len(dataset['dialogues'])} диалогов успешно создан")
+print(f"Создан русскоязычный датасет с {len(dataset['dialogues'])} диалогами")
