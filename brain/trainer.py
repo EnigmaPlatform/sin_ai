@@ -5,7 +5,6 @@ from torch.utils.data import Dataset, DataLoader
 from torch.optim import AdamW
 from transformers import get_linear_schedule_with_warmup
 from torch.nn import functional as F
-from brain.evaluator import ModelEvaluator
 from typing import Optional, Dict, List, Union, Tuple
 import logging
 from pathlib import Path
@@ -102,7 +101,7 @@ class DialogDataset(Dataset):
         self.examples.append({
             'input_ids': encoding['input_ids'].squeeze(0),
             'attention_mask': encoding['attention_mask'].squeeze(0),
-            'labels': encoding['input_ids'].squeeze(0)  # Добавляем labels для обучения
+            'labels': encoding['input_ids'].squeeze(0)  # Для языкового моделирования
         })
 
     def __len__(self):
@@ -125,12 +124,39 @@ class SinTrainer:
         self.model.to(self.device)
         self.logger = logging.getLogger(__name__)
 
+    def get_data_loader(self, dataset, batch_size=4, shuffle=True):
+        """
+        Создает DataLoader для переданного датасета
+        
+        Args:
+            dataset: Загруженный датасет
+            batch_size: Размер батча
+            shuffle: Перемешивать ли данные
+            
+        Returns:
+            DataLoader для переданного датасета
+        """
+        return DataLoader(
+            dataset,
+            batch_size=batch_size,
+            shuffle=shuffle,
+            collate_fn=self._collate_fn
+        )
+
+    def _collate_fn(self, batch):
+        """Функция для объединения примеров в батчи"""
+        return {
+            'input_ids': torch.stack([item['input_ids'] for item in batch]),
+            'attention_mask': torch.stack([item['attention_mask'] for item in batch]),
+            'labels': torch.stack([item['labels'] for item in batch])
+        }
+
     def train_step(self, batch):
         """Выполняет один шаг обучения"""
         inputs = batch['input_ids'].to(self.device)
         masks = batch['attention_mask'].to(self.device)
-        labels = inputs  # Для языкового моделирования используем inputs как labels
-    
+        labels = batch['labels'].to(self.device)
+        
         outputs = self.model(inputs, attention_mask=masks, labels=labels)
         return outputs.loss
 
@@ -175,13 +201,22 @@ class SinTrainer:
             collate_fn=self._collate_fn
         )
 
-    def _collate_fn(self, batch):
-        """Функция для объединения примеров в батчи"""
-        return {
-            'input_ids': torch.stack([item['input_ids'] for item in batch]),
-            'attention_mask': torch.stack([item['attention_mask'] for item in batch]),
-            'labels': torch.stack([item['labels'] for item in batch])  # Добавляем labels
-    }
+    def evaluate(self, dataset: Dataset) -> Dict[str, float]:
+        """Оценка модели на датасете"""
+        self.model.eval()
+        dataloader = self.get_data_loader(dataset, shuffle=False)
+        total_loss = 0
+        
+        with torch.no_grad():
+            for batch in dataloader:
+                inputs = batch['input_ids'].to(self.device)
+                masks = batch['attention_mask'].to(self.device)
+                labels = batch['labels'].to(self.device)
+                
+                outputs = self.model(inputs, attention_mask=masks, labels=labels)
+                total_loss += outputs.loss.item()
+        
+        return {'loss': total_loss / len(dataloader)}
 
     def train(self, 
               train_data: Union[List[Dict], str, Path],
@@ -253,26 +288,13 @@ class SinTrainer:
                 
                 progress_bar = tqdm(train_loader, desc=f"Epoch {epoch + 1}")
                 for step, batch in enumerate(progress_bar):
-                    # Перенос данных на устройство
-                    inputs = batch['input_ids'].to(self.device)
-                    masks = batch['attention_mask'].to(self.device)
-                    
-                    # Прямой проход
-                    outputs = self.model(inputs, attention_mask=masks)
-                    loss = F.cross_entropy(
-                        outputs.logits.view(-1, outputs.logits.size(-1)),
-                        inputs.view(-1),
-                        ignore_index=self.tokenizer.pad_token_id
-                    )
-                    
-                    # Обратный проход
+                    loss = self.train_step(batch)
                     loss.backward()
                     torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_grad_norm)
                     optimizer.step()
                     scheduler.step()
                     optimizer.zero_grad()
                     
-                    # Логирование
                     epoch_loss += loss.item()
                     if (step + 1) % logging_steps == 0:
                         progress_bar.set_postfix({'loss': loss.item()})
@@ -287,9 +309,9 @@ class SinTrainer:
                 
                 # Валидация
                 if val_loader:
-                    val_loss = self.evaluate(val_loader)
-                    results['val_loss'].append(val_loss)
-                    self.logger.info(f"Epoch {epoch + 1} Val Loss: {val_loss:.4f}")
+                    val_metrics = self.evaluate(val_loader.dataset)
+                    results['val_loss'].append(val_metrics['loss'])
+                    self.logger.info(f"Epoch {epoch + 1} Val Loss: {val_metrics['loss']:.4f}")
             
             return {
                 'status': 'success',
@@ -305,29 +327,6 @@ class SinTrainer:
                 'exception_type': type(e).__name__
             }
 
-    def evaluate(self, dataloader: DataLoader) -> float:
-        """Оценка модели на данных из DataLoader"""
-        self.model.eval()
-        dataloader = self.get_data_loader(dataset, batch_size=4, shuffle=False)
-        total_loss = 0
-        
-        with torch.no_grad():
-            for batch in dataloader:
-                inputs = batch['input_ids'].to(self.device)
-                masks = batch['attention_mask'].to(self.device)
-                labels = inputs
-                
-                outputs = self.model(inputs, attention_mask=masks)
-                loss = F.cross_entropy(
-                    outputs = self.model(inputs, attention_mask=masks, labels=labels)
-                    total_loss += outputs.loss.item()
-                    inputs.view(-1),
-                    ignore_index=self.tokenizer.pad_token_id
-                )
-                total_loss += loss.item()
-        
-        return {'loss': total_loss / len(dataloader)}
-
     def save_model(self, path: Union[str, Path]):
         """Сохраняет модель и токенизатор"""
         torch.save({
@@ -335,22 +334,3 @@ class SinTrainer:
             'tokenizer_config': self.tokenizer.get_vocab()
         }, path)
         self.logger.info(f"Model saved to {path}")
-
-   def get_data_loader(self, dataset, batch_size=4, shuffle=True):
-       """
-    Создает DataLoader для переданного датасета
-    
-    Args:
-        dataset: Загруженный датасет
-        batch_size: Размер батча
-        shuffle: Перемешивать ли данные
-        
-    Returns:
-        DataLoader для переданного датасета
-    """
-        return DataLoader(
-            dataset,
-            batch_size=batch_size,
-            shuffle=shuffle,
-            collate_fn=self._collate_fn
-    )
