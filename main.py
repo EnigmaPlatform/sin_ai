@@ -1,3 +1,6 @@
+import torch
+if not torch.cuda.is_available():
+    torch.set_num_threads(4)
 from sin import Sin
 import argparse
 import logging
