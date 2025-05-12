@@ -9,6 +9,8 @@ import sys
 import torch
 import json
 import os
+num_threads = min(4, os.cpu_count() or 1)
+torch.set_num_threads(num_threads)
 import io
 from datetime import datetime
 
