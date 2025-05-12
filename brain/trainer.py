@@ -47,7 +47,10 @@ class DialogDataset(Dataset):
                 
                 if format == "json":
                     data = json.loads(content)
-                    if not isinstance(data, list):
+                    # Обрабатываем структуру с полем "dialogues"
+                    if isinstance(data, dict) and 'dialogues' in data:
+                        data = data['dialogues']
+                    elif not isinstance(data, list):
                         data = [data]  # Преобразуем в список, если это не список
                 elif format == "text":
                     data = [{"user_query": line.strip(), "responses": [""]} 
@@ -66,25 +69,29 @@ class DialogDataset(Dataset):
             if not isinstance(dialog, dict):
                 continue
                 
+            # Получаем запрос пользователя
             query = dialog.get('user_query', '').strip()
-            responses = dialog.get('responses', [])
-            
-            if not query and not responses:
+            if not query:
                 continue
                 
-            # Обработка всех ответов
+            # Обрабатываем ответы
+            responses = dialog.get('responses', [])
+            if not responses:
+                # Если нет ответов, добавляем пустой ответ
+                self._add_example(query, "")
+                continue
+                
             for response in responses:
                 if isinstance(response, dict):
                     answer = response.get('text', '').strip()
                 else:
                     answer = str(response).strip()
                 
-                if query or answer:
-                    text = f"User: {query}\nAssistant: {answer}" if query else answer
-                    self._add_example(text)
+                self._add_example(query, answer)
 
-    def _add_example(self, text: str):
-        """Токенизирует и добавляет текст в датасет"""
+    def _add_example(self, query: str, answer: str):
+        """Добавляет пример диалога в датасет"""
+        text = f"User: {query}\nAssistant: {answer}"
         encoding = self.tokenizer(
             text,
             max_length=self.max_length,
@@ -94,7 +101,8 @@ class DialogDataset(Dataset):
         )
         self.examples.append({
             'input_ids': encoding['input_ids'].squeeze(0),
-            'attention_mask': encoding['attention_mask'].squeeze(0)
+            'attention_mask': encoding['attention_mask'].squeeze(0),
+            'labels': encoding['input_ids'].squeeze(0)  # Добавляем labels для обучения
         })
 
     def __len__(self):
