@@ -165,13 +165,14 @@ class SinTrainer:
             shuffle=shuffle,
             collate_fn=self._collate_fn
         )
-    
+
     def _collate_fn(self, batch):
         """Функция для объединения примеров в батчи"""
         return {
             'input_ids': torch.stack([item['input_ids'] for item in batch]),
-            'attention_mask': torch.stack([item['attention_mask'] for item in batch])
-        }
+            'attention_mask': torch.stack([item['attention_mask'] for item in batch]),
+            'labels': torch.stack([item['labels'] for item in batch])  # Добавляем labels
+    }
 
     def train(self, 
               train_data: Union[List[Dict], str, Path],
