@@ -463,14 +463,14 @@ class Sin:
     def evaluate(self, dataset: Dataset) -> Dict[str, float]:
         """Оценка модели на датасете"""
         self.model.eval()
-        dataloader = self.get_data_loader(dataset, shuffle=False)
+        dataloader = self.trainer.get_data_loader(dataset, shuffle=False)
         total_loss = 0
     
         with torch.no_grad():
             for batch in dataloader:
-                inputs = batch['input_ids'].to(self.device)
-                masks = batch['attention_mask'].to(self.device)
-                labels = batch['labels'].to(self.device)
+                inputs = batch['input_ids'].to(self.model.device)
+                masks = batch['attention_mask'].to(self.model.device)
+                labels = batch['labels'].to(self.model.device)
             
                 outputs = self.model(inputs, attention_mask=masks, labels=labels)
                 total_loss += outputs['loss'].item()
