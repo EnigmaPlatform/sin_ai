@@ -323,3 +323,22 @@ class SinTrainer:
             'tokenizer_config': self.tokenizer.get_vocab()
         }, path)
         self.logger.info(f"Model saved to {path}")
+
+   def get_data_loader(self, dataset, batch_size=4, shuffle=True):
+       """
+    Создает DataLoader для переданного датасета
+    
+    Args:
+        dataset: Загруженный датасет
+        batch_size: Размер батча
+        shuffle: Перемешивать ли данные
+        
+    Returns:
+        DataLoader для переданного датасета
+    """
+        return DataLoader(
+            dataset,
+            batch_size=batch_size,
+            shuffle=shuffle,
+            collate_fn=self._collate_fn
+    )
