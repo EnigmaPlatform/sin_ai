@@ -17,6 +17,7 @@ from brain.evaluator import ModelEvaluator
 from brain.monitor import TrainingMonitor
 from torch.optim.lr_scheduler import CosineAnnealingLR
 from torch.utils.data import Dataset
+from typing import Dict, Optional, List  # Добавьте это в существующие импорты
 
 # Настройка кодировки для Windows
 sys.stdin.reconfigure(encoding='utf-8')
