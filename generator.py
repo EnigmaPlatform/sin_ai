@@ -167,7 +167,7 @@ def generate_responses(topic):
                 "Экономика": ["диверсификация", "ликвидность", "капитализация"]
             }
             if response["meta"]["category"] in jargon:
-                response["text"] += f" {random.choice(jargon[response['meta']['category'])]} играет ключевую роль."
+                response["text"] += f" {random.choice(jargon[category])} играет ключевую роль."
         
         responses.append(response)
     return responses
