@@ -107,6 +107,18 @@ class SinTrainer:
         self.device = device or ('cuda' if torch.cuda.is_available() else 'cpu')
         self.model.to(self.device)
         self.logger = logging.getLogger(__name__)
+
+    def load_dataset(self, file_path: Union[str, Path]) -> Dataset:
+        """
+        Загружает датасет из файла (для обратной совместимости)
+        
+        Args:
+            file_path: Путь к файлу с данными
+            
+        Returns:
+            Dataset: Загруженный датасет
+        """
+        return DialogDataset(file_path, self.tokenizer, format=file_path.suffix[1:])
         
     def create_dataloader(self, 
                          data: Union[List[Dict], str, Path],
@@ -125,7 +137,11 @@ class SinTrainer:
         Returns:
             DataLoader для переданных данных
         """
-        dataset = DialogDataset(data, self.tokenizer, **kwargs)
+        if isinstance(data, (str, Path)):
+            dataset = DialogDataset(data, self.tokenizer, format=data.suffix[1:], **kwargs)
+        else:
+            dataset = DialogDataset(data, self.tokenizer, **kwargs)
+            
         return DataLoader(
             dataset,
             batch_size=batch_size,
