@@ -18,6 +18,7 @@ from brain.monitor import TrainingMonitor
 from torch.optim.lr_scheduler import CosineAnnealingLR
 from torch.utils.data import Dataset
 from typing import Dict, Optional, List  # Добавьте это в существующие импорты
+from tqdm import tqdm
 
 # Настройка кодировки для Windows
 sys.stdin.reconfigure(encoding='utf-8')
@@ -329,14 +330,16 @@ class Sin:
 
     def train(self, epochs=3, val_dataset=None):
         """Обучение с валидацией"""
-         # === Оптимизация для CPU ===
+    # === Оптимизация для CPU ===
         import os
         import psutil
+        from tqdm import tqdm  # Добавляем импорт tqdm
+    
         torch.set_num_threads(min(4, os.cpu_count() or 1))  # Ограничение потоков
         torch.backends.quantized.engine = 'qnnpack'         # Для мобильных CPU
         os.environ['OMP_NUM_THREADS'] = '1'                 # Для OpenMP
         os.environ['MKL_NUM_THREADS'] = '1'                 # Для Intel MKL
-    
+
         self.logger.info(f"CPU: {psutil.cpu_percent()}% | RAM: {psutil.virtual_memory().percent}%")
 
         try:
@@ -345,9 +348,9 @@ class Sin:
                 error_msg = "No training data found"
                 self.logger.error(error_msg)
                 raise ValueError(error_msg)
-            
-            self.logger.info(f"Loaded dataset with {len(train_dataset)} samples")
         
+            self.logger.info(f"Loaded dataset with {len(train_dataset)} samples")
+    
         # Создаем DataLoader
             train_loader = DataLoader(
                 train_dataset,
@@ -356,68 +359,64 @@ class Sin:
                 num_workers=0,             # 0 для избежания ошибок на ноутбуках
                 pin_memory=False,          # Не использовать для CPU
                 collate_fn=self.trainer._collate_fn
-)
-        
+        )
+    
             optimizer = torch.optim.AdamW(self.model.parameters(), lr=5e-5)
             scheduler = CosineAnnealingLR(optimizer, epochs)
-        
+    
             for epoch in range(epochs):
-    self.model.train()
-    total_loss = 0
-    progress_bar = tqdm(train_loader, desc=f'Epoch {epoch+1}/{epochs}', leave=True)
+                self.model.train()
+                total_loss = 0
+                progress_bar = tqdm(train_loader, desc=f'Epoch {epoch+1}/{epochs}', leave=True)
+            
+                for batch_idx, batch in enumerate(progress_bar):
+                    optimizer.zero_grad()
+                    loss = self.trainer.train_step(batch)
+                    loss.backward()
+                    torch.nn.utils.clip_grad_norm_(self.model.parameters(), 1.0)
+                    optimizer.step()
+                    scheduler.step()
+                
+                    total_loss += loss.item()
+                    progress_bar.set_postfix({'loss': loss.item()})
+                
+                # Логирование каждые 10 батчей
+                    if batch_idx % 10 == 0:
+                        self.logger.info(
+                            f"Batch {batch_idx} | Loss: {loss.item():.4f} | "
+                            f"RAM: {psutil.virtual_memory().percent}%"
+                    )
+            
+            # Валидация после эпохи
+                val_metrics = None
+                if val_dataset:
+                    self.logger.info("Running validation...")
+                    val_metrics = self.trainer.evaluate(val_dataset)
+                    self.logger.info(f"Validation metrics: {val_metrics}")
     
-    for batch_idx, batch in enumerate(progress_bar):
-        optimizer.zero_grad()
-        loss = self.trainer.train_step(batch)
-        loss.backward()
-        torch.nn.utils.clip_grad_norm_(self.model.parameters(), 1.0)
-        optimizer.step()
-        scheduler.step()
-        
-        total_loss += loss.item()
-        progress_bar.set_postfix({'loss': loss.item()})
-        
-        # Логирование каждые 10 батчей
-        if batch_idx % 10 == 0:
-            self.logger.info(
-                f"Batch {batch_idx} | Loss: {loss.item():.4f} | "
-                f"RAM: {psutil.virtual_memory().percent}%"
+            # Логирование прогресса
+                self.monitor.log_epoch(
+                    epoch=epoch+1,
+                    train_loss=total_loss/len(train_loader),
+                    val_metrics=val_metrics,
+                    learning_rate=scheduler.get_last_lr()[0]
             )
-        
-                # Валидация после эпохи
-                    val_metrics = None
-                    if val_dataset:
-                        self.logger.info("Running validation...")
-                        val_metrics = self.trainer.evaluate(val_dataset)
-                        self.logger.info(f"Validation metrics: {val_metrics}")
-        
-                # Логирование прогресса
-                    self.monitor.log_epoch(
-                        epoch=epoch+1,
-                        train_loss=total_loss/len(train_loader),
-                        val_metrics=val_metrics,
-                        learning_rate=scheduler.get_last_lr()[0]
-                )
-        
-                    self.logger.info(
-                        f"Epoch {epoch+1} complete | Avg Loss: {total_loss/len(train_loader):.4f}"
-                )
-        
-                except Exception as e:
-                    self.logger.error(f"Error during epoch {epoch+1}: {str(e)}", exc_info=True)
-                    raise
     
+                self.logger.info(
+                    f"Epoch {epoch+1} complete | Avg Loss: {total_loss/len(train_loader):.4f}"
+            )
+
         # После завершения обучения
             best_epoch = self.monitor.get_best_epoch("accuracy")
             best_metrics = self.monitor.get_best_metrics()
-    
+
             self.logger.info(f"Training complete! Best epoch: {best_epoch}")
             self.logger.info(f"Best metrics: {best_metrics}")
-    
+
         # Сохранение модели и отчетов
             self.save()
             self.monitor.save_report()
-        
+    
             return best_metrics
 
         except Exception as e:
