@@ -92,7 +92,7 @@ def generate_dataset(num_dialogues=10000):
     }
 
 # Генерация и сохранение
-dataset = generate_dataset(100000)  # Генерируем 100 диалогов для теста
+dataset = generate_dataset(1000)  # Генерируем 1000 диалогов для теста
 with open("russian_dialogues_final.json", "w", encoding="utf-8") as f:
     json.dump(dataset, f, ensure_ascii=False, indent=2)
 
