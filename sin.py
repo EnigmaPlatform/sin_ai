@@ -383,20 +383,15 @@ class Sin:
                     progress_bar.set_postfix({'loss': loss.item()})
                 
                 # Логирование каждые 10 батчей
-                    if batch_idx % 10 == 0:
+                    if batch_idx % 50 == 0:
                         self.logger.info(
-                            f"Batch {batch_idx} | Loss: {loss.item():.4f} | "
+                            f"Эпоха {epoch+1}/{epochs} | Батч {batch_idx} | "
+                            f"Loss: {loss.item():.4f} | "
                             f"RAM: {psutil.virtual_memory().percent}%"
                     )
             
             # Валидация после эпохи
-                val_metrics = None
-                if val_dataset:
-                    self.logger.info("Running validation...")
-                    val_metrics = self.trainer.evaluate(val_dataset)
-                    self.logger.info(f"Validation metrics: {val_metrics}")
-    
-            # Логирование прогресса
+                val_metrics = self.trainer.evaluate(val_dataset) if val_dataset else None
                 self.monitor.log_epoch(
                     epoch=epoch+1,
                     train_loss=total_loss/len(train_loader),
@@ -417,13 +412,11 @@ class Sin:
 
         # Сохранение модели и отчетов
             self.save()
-            self.monitor.save_report()
-    
-            return best_metrics
-
+            return {"status": "success", "epochs": epochs}
+        
         except Exception as e:
-            self.logger.critical(f"Training failed: {str(e)}", exc_info=True)
-            raise
+            self.logger.critical(f"Ошибка обучения: {str(e)}", exc_info=True)
+            return {"status": "error", "message": str(e)}
 
     def _load_all_datasets(self):
         """Загружает все доступные датасеты для обучения"""
