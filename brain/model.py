@@ -18,6 +18,11 @@ class SinModel(nn.Module):
         # 2. Загрузка основной модели
         self.base_model = GPT2LMHeadModel.from_pretrained("sberbank-ai/rugpt3medium_based_on_gpt2").to(self.device)
         self.base_model.resize_token_embeddings(len(self.tokenizer))
+        self.base_model = self.base_model.to(torch.bfloat16)  # 16-битная точность
+        self.base_model.eval()  # Включаем режим оценки для части оптимизаций
+    
+    # Добавьте после инициализации модели:
+    torch._C._jit_set_texpr_fuser_enabled(False)  # Отключаем JIT для стабильности
         
         # 3. Настройка параметров
         self.base_model.config.pad_token_id = self.tokenizer.eos_token_id
