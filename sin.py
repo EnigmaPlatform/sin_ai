@@ -333,26 +333,25 @@ class Sin:
     # === Оптимизация для CPU ===
         import os
         import psutil
-        
-        torch._C._jit_set_texpr_fuser_enabled(False)
-        torch._C._jit_set_nvfuser_enabled(False)
-    
+        from torch.utils.data import DataLoader  # Добавьте этот импорт
+        from tqdm import tqdm  # Добавьте этот импорт
+
         torch.set_num_threads(min(4, os.cpu_count() or 1))  # Ограничение потоков
         os.environ['OMP_NUM_THREADS'] = '1'                 # Для OpenMP
         os.environ['MKL_NUM_THREADS'] = '1'                 # Для Intel MKL
 
         self.logger.info(f"Начинаем обучение на {'CPU'}")
         self.logger.info(f"Загрузка CPU: {psutil.cpu_percent()}% | RAM: {psutil.virtual_memory().percent}%")
-        
+    
         try:
             train_dataset = self._load_all_datasets()
             if not train_dataset:
                 error_msg = "No training data found"
                 self.logger.error(error_msg)
                 raise ValueError(error_msg)
-        
-            self.logger.info(f"Loaded dataset with {len(train_dataset)} samples")
     
+            self.logger.info(f"Loaded dataset with {len(train_dataset)} samples")
+
         # Создаем DataLoader
             train_loader = DataLoader(
                 train_dataset,
@@ -362,15 +361,15 @@ class Sin:
                 pin_memory=False,          # Не использовать для CPU
                 collate_fn=self.trainer._collate_fn
         )
-    
+
             optimizer = torch.optim.AdamW(self.model.parameters(), lr=5e-5)
             scheduler = CosineAnnealingLR(optimizer, epochs)
-    
+
             for epoch in range(epochs):
                 self.model.train()
                 total_loss = 0
                 progress_bar = tqdm(train_loader, desc=f'Epoch {epoch+1}/{epochs}', leave=True)
-            
+        
                 for batch_idx, batch in enumerate(progress_bar):
                     optimizer.zero_grad()
                     loss = self.trainer.train_step(batch)
@@ -378,18 +377,18 @@ class Sin:
                     torch.nn.utils.clip_grad_norm_(self.model.parameters(), 1.0)
                     optimizer.step()
                     scheduler.step()
-                
+            
                     total_loss += loss.item()
                     progress_bar.set_postfix({'loss': loss.item()})
-                
-                # Логирование каждые 10 батчей
+            
+                # Логирование каждые 50 батчей
                     if batch_idx % 50 == 0:
                         self.logger.info(
                             f"Эпоха {epoch+1}/{epochs} | Батч {batch_idx} | "
                             f"Loss: {loss.item():.4f} | "
                             f"RAM: {psutil.virtual_memory().percent}%"
                     )
-            
+        
             # Валидация после эпохи
                 val_metrics = self.trainer.evaluate(val_dataset) if val_dataset else None
                 self.monitor.log_epoch(
@@ -398,7 +397,7 @@ class Sin:
                     val_metrics=val_metrics,
                     learning_rate=scheduler.get_last_lr()[0]
             )
-    
+
                 self.logger.info(
                     f"Epoch {epoch+1} complete | Avg Loss: {total_loss/len(train_loader):.4f}"
             )
@@ -413,11 +412,11 @@ class Sin:
         # Сохранение модели и отчетов
             self.save()
             return {"status": "success", "epochs": epochs}
-        
+    
         except Exception as e:
             self.logger.critical(f"Ошибка обучения: {str(e)}", exc_info=True)
             return {"status": "error", "message": str(e)}
-
+    
     def _load_all_datasets(self):
         """Загружает все доступные датасеты для обучения"""
         datasets = []
