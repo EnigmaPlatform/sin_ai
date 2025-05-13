@@ -20,9 +20,9 @@ class SinModel(nn.Module):
         self.base_model.resize_token_embeddings(len(self.tokenizer))
         self.base_model = self.base_model.to(torch.bfloat16)  # 16-битная точность
         self.base_model.eval()  # Включаем режим оценки для части оптимизаций
-    
-    # Добавьте после инициализации модели:
-    torch._C._jit_set_texpr_fuser_enabled(False)  # Отключаем JIT для стабильности
+        
+        # Отключаем JIT для стабильности
+        torch._C._jit_set_texpr_fuser_enabled(False)
         
         # 3. Настройка параметров
         self.base_model.config.pad_token_id = self.tokenizer.eos_token_id
