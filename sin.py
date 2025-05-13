@@ -333,18 +333,17 @@ class Sin:
     # === Оптимизация для CPU ===
         import os
         import psutil
-        from tqdm import tqdm  # Добавляем импорт tqdm
         
         torch._C._jit_set_texpr_fuser_enabled(False)
         torch._C._jit_set_nvfuser_enabled(False)
     
         torch.set_num_threads(min(4, os.cpu_count() or 1))  # Ограничение потоков
-        torch.backends.quantized.engine = 'qnnpack'         # Для мобильных CPU
         os.environ['OMP_NUM_THREADS'] = '1'                 # Для OpenMP
         os.environ['MKL_NUM_THREADS'] = '1'                 # Для Intel MKL
 
-        self.logger.info(f"CPU: {psutil.cpu_percent()}% | RAM: {psutil.virtual_memory().percent}%")
-
+        self.logger.info(f"Начинаем обучение на {'CPU'}")
+        self.logger.info(f"Загрузка CPU: {psutil.cpu_percent()}% | RAM: {psutil.virtual_memory().percent}%")
+        
         try:
             train_dataset = self._load_all_datasets()
             if not train_dataset:
