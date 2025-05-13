@@ -334,6 +334,9 @@ class Sin:
         import os
         import psutil
         from tqdm import tqdm  # Добавляем импорт tqdm
+        
+        torch._C._jit_set_texpr_fuser_enabled(False)
+        torch._C._jit_set_nvfuser_enabled(False)
     
         torch.set_num_threads(min(4, os.cpu_count() or 1))  # Ограничение потоков
         torch.backends.quantized.engine = 'qnnpack'         # Для мобильных CPU
