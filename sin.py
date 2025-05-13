@@ -329,8 +329,15 @@ class Sin:
 
     def train(self, epochs=3, val_dataset=None):
         """Обучение с валидацией"""
-        torch.set_num_threads(4)  # Оптимальное количество потоков
-        self.logger.info(f"Starting training for {epochs} epochs")
+         # === Оптимизация для CPU ===
+        import os
+        import psutil
+        torch.set_num_threads(min(4, os.cpu_count() or 1))  # Ограничение потоков
+        torch.backends.quantized.engine = 'qnnpack'         # Для мобильных CPU
+        os.environ['OMP_NUM_THREADS'] = '1'                 # Для OpenMP
+        os.environ['MKL_NUM_THREADS'] = '1'                 # Для Intel MKL
+    
+        self.logger.info(f"CPU: {psutil.cpu_percent()}% | RAM: {psutil.virtual_memory().percent}%")
 
         try:
             train_dataset = self._load_all_datasets()
@@ -342,30 +349,40 @@ class Sin:
             self.logger.info(f"Loaded dataset with {len(train_dataset)} samples")
         
         # Создаем DataLoader
-            train_loader = self.trainer.get_data_loader(train_dataset)
+            train_loader = DataLoader(
+                train_dataset,
+                batch_size=2,              # Маленький batch для слабого CPU
+                shuffle=True,
+                num_workers=0,             # 0 для избежания ошибок на ноутбуках
+                pin_memory=False,          # Не использовать для CPU
+                collate_fn=self.trainer._collate_fn
+)
         
             optimizer = torch.optim.AdamW(self.model.parameters(), lr=5e-5)
             scheduler = CosineAnnealingLR(optimizer, epochs)
         
             for epoch in range(epochs):
-                self.logger.info(f"Starting epoch {epoch+1}/{epochs}")
-                self.model.train()
-                total_loss = 0
+    self.model.train()
+    total_loss = 0
+    progress_bar = tqdm(train_loader, desc=f'Epoch {epoch+1}/{epochs}', leave=True)
     
-                try:
-                    for batch_idx, batch in enumerate(train_loader):
-                        optimizer.zero_grad()
-                        loss = self.trainer.train_step(batch)
-                        loss.backward()
-                        torch.nn.utils.clip_grad_norm_(self.model.parameters(), 1.0)
-                        optimizer.step()
-                        scheduler.step()
-                        total_loss += loss.item()
-            
-                        if batch_idx % 50 == 0:
-                            self.logger.debug(
-                                f"Epoch {epoch+1} | Batch {batch_idx} | Loss: {loss.item():.4f}"
-                        )
+    for batch_idx, batch in enumerate(progress_bar):
+        optimizer.zero_grad()
+        loss = self.trainer.train_step(batch)
+        loss.backward()
+        torch.nn.utils.clip_grad_norm_(self.model.parameters(), 1.0)
+        optimizer.step()
+        scheduler.step()
+        
+        total_loss += loss.item()
+        progress_bar.set_postfix({'loss': loss.item()})
+        
+        # Логирование каждые 10 батчей
+        if batch_idx % 10 == 0:
+            self.logger.info(
+                f"Batch {batch_idx} | Loss: {loss.item():.4f} | "
+                f"RAM: {psutil.virtual_memory().percent}%"
+            )
         
                 # Валидация после эпохи
                     val_metrics = None
