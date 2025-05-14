@@ -81,7 +81,7 @@ def generate_dialogue():
         "responses": generate_responses(subcategory, category)  # Явно передаем категорию
     }
 
-def generate_dataset(num_dialogues=10000):
+def generate_dataset(num_dialogues=100):
     return {
         "dialogues": [generate_dialogue() for _ in range(num_dialogues)],
         "metadata": {
