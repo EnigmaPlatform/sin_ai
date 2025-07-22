@@ -10,7 +10,7 @@ import json
 import torch
 
 # --- Конфигурация ---
-MODEL_PATH = "saiga_llama3_8b.gguf"  # Локальный путь к модели
+MODEL_PATH = "model-q8_0.gguf"  # Точное имя файла из репозитория
 EMBEDDING_MODEL = "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2"
 MAX_HISTORY = 5
 WHOOSH_INDEX_DIR = "whoosh_index"
