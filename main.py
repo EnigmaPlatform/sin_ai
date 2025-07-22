@@ -1,27 +1,24 @@
-import ollama
 import chromadb
 from sentence_transformers import SentenceTransformer
 from collections import deque
 import gradio as gr
-from vosk import Model, KaldiRecognizer
-import pyaudio
 from ctransformers import AutoModelForCausalLM
 from whoosh.index import create_in, open_dir
 from whoosh.fields import *
 import os
-import threading
+import json
+import torch
 
 # --- Конфигурация ---
-MODEL_NAME = "saiga"  # Лёгкая русскоязычная модель (4B)
+MODEL_PATH = "saiga_llama3_8b.gguf"  # Локальный путь к модели
 EMBEDDING_MODEL = "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2"
-MAX_HISTORY = 5  # Глубина контекста
-VOSK_MODEL_PATH = "vosk-model-small-ru-0.22"  # Скачать с alphacephei.com/vosk/models
+MAX_HISTORY = 5
 WHOOSH_INDEX_DIR = "whoosh_index"
 
 # --- Инициализация Whoosh ---
 def setup_whoosh():
     if not os.path.exists(WHOOSH_INDEX_DIR):
-        os.mkdir(WHOOSH_INDEX_DIR)
+        os.makedirs(WHOOSH_INDEX_DIR, exist_ok=True)
         schema = Schema(title=TEXT(stored=True), content=TEXT(stored=True))
         ix = create_in(WHOOSH_INDEX_DIR, schema)
     else:
@@ -35,52 +32,24 @@ class Assistant:
         self.history = deque(maxlen=MAX_HISTORY)
         
         # База знаний (RAG)
-        self.client = chromadb.PersistentClient(path="db/")
+        self.client = chromadb.PersistentClient(path="chroma_db/")
         self.collection = self.client.get_or_create_collection(name="knowledge")
         self.embedding_model = SentenceTransformer(EMBEDDING_MODEL)
         
         # Whoosh поиск
         self.whoosh_index = setup_whoosh()
         
-        # Ускоренная модель через ctransformers
+        # Инициализация языковой модели
         self.llm = AutoModelForCausalLM.from_pretrained(
-            "saiga-llama3-8b.gguf",
+            MODEL_PATH,
             model_type="llama",
-            gpu_layers=1 if torch.cuda.is_available() else 0
+            gpu_layers=1 if torch.cuda.is_available() else 0,
+            local_files_only=True  # Важно для Termux
         )
         
         # Эмоции
         self.mood = 50  # 0-100
-        self.recognizer = None
-        self.init_voice_recognition()
         
-    def init_voice_recognition(self):
-        """Инициализация голосового ввода"""
-        if os.path.exists(VOSK_MODEL_PATH):
-            model = Model(VOSK_MODEL_PATH)
-            self.recognizer = KaldiRecognizer(model, 16000)
-            self.mic = pyaudio.PyAudio()
-            self.stream = self.mic.open(
-                format=pyaudio.paInt16,
-                channels=1,
-                rate=16000,
-                input=True,
-                frames_per_buffer=8192
-            )
-    
-    def listen_voice(self):
-        """Запись голоса и преобразование в текст"""
-        if not self.recognizer:
-            return ""
-        
-        print("Говорите...")
-        self.stream.start_stream()
-        while True:
-            data = self.stream.read(4096)
-            if self.recognizer.AcceptWaveform(data):
-                result = self.recognizer.Result()
-                return json.loads(result)["text"]
-    
     def update_mood(self, text):
         """Динамическое обновление настроения"""
         text_lower = text.lower()
@@ -143,18 +112,19 @@ class Assistant:
         Ответ:
         """
         
-        # Ускоренная генерация через ctransformers
+        # Генерация ответа
         response = self.llm(
             prompt,
             max_new_tokens=100,
-            temperature=0.7
+            temperature=0.7,
+            stop=["Пользователь:", "###"]
         )
         
         # Обновление истории
         self.history.append({"user": user_input, "assistant": response})
         self.update_mood(user_input)
         
-        return response
+        return response.strip()
 
 # --- Графический интерфейс ---
 assistant = Assistant()
@@ -163,18 +133,8 @@ def chat(message, history):
     response = assistant.generate_response(message)
     return response
 
-def voice_input():
-    text = assistant.listen_voice()
-    return text
-
 with gr.Blocks() as demo:
-    with gr.Tab("Текстовый чат"):
-        gr.ChatInterface(fn=chat)
-    
-    with gr.Tab("Голосовой ввод"):
-        voice_recording = gr.Button("Запись голоса")
-        voice_text = gr.Textbox(label="Распознанный текст")
-        voice_recording.click(fn=voice_input, outputs=voice_text)
+    gr.ChatInterface(fn=chat, title="IT-ассистент Алекс")
 
 # --- Инициализация данных ---
 if not os.listdir(WHOOSH_INDEX_DIR):
