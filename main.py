@@ -1,9 +1,9 @@
 import chromadb
 from chromadb.utils import embedding_functions
-from rutransformers import SentenceTransformer  # Замена на русскую модель
+from sentence_transformers import SentenceTransformer
 from collections import deque
 import gradio as gr
-from rugpt import Llama  # Замена на русскую реализацию LLaMA
+from llama_cpp import Llama
 from whoosh.index import create_in, open_dir, exists_in
 from whoosh.fields import *
 from whoosh.qparser import QueryParser
@@ -50,10 +50,10 @@ logger = logging.getLogger(__name__)
 
 # --- Оптимизированная конфигурация для Tecno Pova 5 ---
 CONFIG = {
-    "MODEL_REPO": "RussianNLP/RuLLaMA-1.3B-GGUF",  # Русская LLaMA модель
-    "MODEL_FILE": "rullama-1.3b.Q4_K_M.gguf",
+    "MODEL_REPO": "TheBloke/MobileLLaMA-1.4B-Chat-GGUF",
+    "MODEL_FILE": "mobilellama-1.4b-chat.Q4_K_M.gguf",
     "LOCAL_MODEL_DIR": "/storage/emulated/0/Download/models",
-    "EMBEDDING_MODEL": "RussianNLP/rubert-tiny2",  # Русская модель эмбеддингов
+    "EMBEDDING_MODEL": "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2",
     "MAX_HISTORY": 5,
     "WHOOSH_INDEX_DIR": "whoosh_index",
     "CHROMA_DB_PATH": "chroma_db",
@@ -61,7 +61,7 @@ CONFIG = {
     "DEVICE": "cpu",
     "LOCAL_FILES_ONLY": False,
     "HF_HOME": "/storage/emulated/0/Download/models_cache",
-    "EMBEDDING_DIM": 312,  # Размерность для rubert-tiny2
+    "EMBEDDING_DIM": 384,
     "LLM_CTX_SIZE": 1024,
     "LLM_THREADS": 2,
     "MOOD_UPDATE_INTERVAL": 60,
@@ -806,7 +806,7 @@ class Assistant:
                 device=CONFIG["DEVICE"]
             )
             
-            logger.info("Загрузка RuLLaMA модели...")
+            logger.info("Загрузка MobileLLaMA модели...")
             model_path = download_model(
                 CONFIG["MODEL_REPO"],
                 CONFIG["MODEL_FILE"],
