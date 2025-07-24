@@ -1,4 +1,3 @@
-
 import chromadb
 from chromadb.utils import embedding_functions
 from sentence_transformers import SentenceTransformer
