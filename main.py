@@ -18,9 +18,7 @@ import json
 import matplotlib.pyplot as plt
 import psutil  # Для мониторинга системных ресурсов
 import gc     # Для ручной очистки памяти
-
 # Установите psutil: pip install psutil
-
 # Для работы с DOCX файлами
 try:
     from docx import Document
@@ -28,7 +26,6 @@ try:
 except ImportError:
     DOCX_SUPPORT = False
     print("⚠️  python-docx не установлен. Установите его для поддержки .docx файлов: pip install python-docx")
-
 # Для работы с PDF файлами
 try:
     import PyPDF2
@@ -36,19 +33,16 @@ try:
 except ImportError:
     PDF_SUPPORT = False
     print("⚠️  PyPDF2 не установлен. Установите его для поддержки .pdf файлов: pip install PyPDF2")
-
 # Создание директории для моделей
 MODELS_DIR = "models"
 LOGS_DIR = "logs"
 METRICS_DIR = "metrics"
 CACHE_DIR = "cache"
-
 # Создание необходимых директорий
 os.makedirs(MODELS_DIR, exist_ok=True)
 os.makedirs(LOGS_DIR, exist_ok=True)
 os.makedirs(METRICS_DIR, exist_ok=True)
 os.makedirs(CACHE_DIR, exist_ok=True)
-
 # ------------------
 # Настройка логирования
 # ------------------
@@ -61,7 +55,6 @@ logging.basicConfig(
     ]
 )
 logger = logging.getLogger(__name__)
-
 # ------------------
 # Гиперпараметры (уменьшены для CPU)
 # ------------------
@@ -79,6 +72,78 @@ DEFAULT_TOKEN_TYPE = "bpe"
 DEFAULT_MODEL_TYPE = "gpt"
 
 # ------------------
+# Адаптивные конфигурации
+# ------------------
+ADAPTIVE_CONFIGS = {
+    "high_end_gpu": {
+        "seq_length": 512,
+        "batch_size": 16,
+        "epochs": 100,
+        "hidden_size": 768,
+        "num_layers": 12,
+        "num_heads": 12,
+        "ff_hidden_size": 3072,
+        "dropout": 0.1,
+        "learning_rate": 3e-4,
+    },
+    "mid_end_gpu": {
+        "seq_length": 256,
+        "batch_size": 8,
+        "epochs": 75,
+        "hidden_size": 512,
+        "num_layers": 8,
+        "num_heads": 8,
+        "ff_hidden_size": 2048,
+        "dropout": 0.1,
+        "learning_rate": 3e-4,
+    },
+    "low_end_gpu": {
+        "seq_length": 128,
+        "batch_size": 4,
+        "epochs": 50,
+        "hidden_size": 256,
+        "num_layers": 4,
+        "num_heads": 4,
+        "ff_hidden_size": 1024,
+        "dropout": 0.1,
+        "learning_rate": 3e-4,
+    },
+    "high_memory_cpu": {
+        "seq_length": 256,
+        "batch_size": 4,
+        "epochs": 30,
+        "hidden_size": 512,
+        "num_layers": 6,
+        "num_heads": 8,
+        "ff_hidden_size": 2048,
+        "dropout": 0.1,
+        "learning_rate": 3e-4,
+    },
+    "mid_memory_cpu": {
+        "seq_length": 128,
+        "batch_size": 2,
+        "epochs": 20,
+        "hidden_size": 256,
+        "num_layers": 4,
+        "num_heads": 4,
+        "ff_hidden_size": 1024,
+        "dropout": 0.1,
+        "learning_rate": 3e-4,
+    },
+    "low_memory_cpu": {
+        "seq_length": 64,
+        "batch_size": 1,
+        "epochs": 10,
+        "hidden_size": 128,
+        "num_layers": 2,
+        "num_heads": 2,
+        "ff_hidden_size": 512,
+        "dropout": 0.1,
+        "learning_rate": 3e-4,
+    }
+}
+
+# ------------------
 # Layer Normalization
 # ------------------
 class LayerNorm(nn.Module):
@@ -91,7 +156,6 @@ class LayerNorm(nn.Module):
         mean = x.mean(-1, keepdim=True)
         std = x.std(-1, keepdim=True)
         return self.weight * (x - mean) / (std + self.eps) + self.bias
-
 # ------------------
 # Rotary Positional Embedding (RoPE)
 # ------------------
@@ -109,21 +173,17 @@ class RotaryPositionalEmbedding(nn.Module):
         cos = emb.cos()
         sin = emb.sin()
         return cos, sin
-
 def rotate_half(x):
     x1 = x[..., : x.shape[-1] // 2]
     x2 = x[..., x.shape[-1] // 2 :]
     return torch.cat((-x2, x1), dim=-1)
-
 def apply_rotary_pos_emb(q, k, cos, sin):
     # Адаптация размерностей для правильного применения
     cos = cos.unsqueeze(1) # [batch_size, 1, seq_len, head_dim]
     sin = sin.unsqueeze(1) # [batch_size, 1, seq_len, head_dim]
-    
     q_embed = (q * cos) + (rotate_half(q) * sin)
     k_embed = (k * cos) + (rotate_half(k) * sin)
     return q_embed, k_embed
-
 # ------------------
 # Multi-Head Self-Attention
 # ------------------
@@ -135,31 +195,25 @@ class MultiHeadAttention(nn.Module):
         self.head_dim = hidden_size // num_heads
         self.dropout = dropout
         assert self.head_dim * num_heads == hidden_size, "hidden_size must be divisible by num_heads"
-        
         self.q_proj = nn.Linear(hidden_size, hidden_size)
         self.k_proj = nn.Linear(hidden_size, hidden_size)
         self.v_proj = nn.Linear(hidden_size, hidden_size)
         self.o_proj = nn.Linear(hidden_size, hidden_size)
         self.dropout_layer = nn.Dropout(dropout)
         self.rotary_emb = RotaryPositionalEmbedding(self.head_dim)
-        
     def forward(self, x, attention_mask=None, position_ids=None):
         batch_size, seq_length, _ = x.shape
-        
         # Project to query, key, value
         q = self.q_proj(x).view(batch_size, seq_length, self.num_heads, self.head_dim).transpose(1, 2)
         k = self.k_proj(x).view(batch_size, seq_length, self.num_heads, self.head_dim).transpose(1, 2)
         v = self.v_proj(x).view(batch_size, seq_length, self.num_heads, self.head_dim).transpose(1, 2)
-        
         # Apply rotary positional embeddings
         if position_ids is None:
             position_ids = torch.arange(seq_length, device=x.device).unsqueeze(0)
         cos, sin = self.rotary_emb(position_ids)
         q, k = apply_rotary_pos_emb(q, k, cos, sin)
-        
         # Scaled dot-product attention
         attn_scores = torch.matmul(q, k.transpose(-2, -1)) / math.sqrt(self.head_dim)
-        
         # Apply attention mask
         if attention_mask is not None:
             # Ensure correct shape for masking
@@ -168,18 +222,14 @@ class MultiHeadAttention(nn.Module):
             elif attention_mask.dim() == 3:
                 attention_mask = attention_mask.unsqueeze(1)
             attn_scores = attn_scores.masked_fill(attention_mask == 0, float('-inf'))
-            
         attn_weights = F.softmax(attn_scores, dim=-1)
         attn_weights = self.dropout_layer(attn_weights)
-        
         # Apply attention to values
         attn_output = torch.matmul(attn_weights, v)
         attn_output = attn_output.transpose(1, 2).contiguous().view(batch_size, seq_length, self.hidden_size)
-        
         # Output projection
         output = self.o_proj(attn_output)
         return output, attn_weights
-
 # ------------------
 # Feed-Forward Network
 # ------------------
@@ -196,7 +246,6 @@ class FeedForward(nn.Module):
         x = self.linear2(x)
         x = self.dropout(x)
         return x
-
 # ------------------
 # Transformer Block
 # ------------------
@@ -217,7 +266,6 @@ class TransformerBlock(nn.Module):
         ffn_output = self.ffn(self.ln2(x))
         x = x + self.dropout2(ffn_output)
         return x, attn_weights
-
 # ------------------
 # Современная GPT-Style модель
 # ------------------
@@ -228,28 +276,21 @@ class ModernGPT(nn.Module):
         self.hidden_size = hidden_size
         self.num_layers = num_layers
         self.max_seq_length = max_seq_length
-        
         # Token embeddings (без позиционных, используем RoPE)
         self.token_embedding = nn.Embedding(vocab_size, hidden_size)
-        
         # Transformer blocks
         self.blocks = nn.ModuleList([
             TransformerBlock(hidden_size, num_heads, ff_hidden_size, dropout)
             for _ in range(num_layers)
         ])
-        
         # Final layer normalization
         self.ln_f = LayerNorm(hidden_size)
-        
         # Output head
         self.lm_head = nn.Linear(hidden_size, vocab_size, bias=False)
-        
         # Weight tying
         self.lm_head.weight = self.token_embedding.weight
-        
         # Initialize weights
         self._init_weights()
-        
     def _init_weights(self):
         for module in self.modules():
             if isinstance(module, nn.Linear):
@@ -258,30 +299,23 @@ class ModernGPT(nn.Module):
                     torch.nn.init.zeros_(module.bias)
             elif isinstance(module, nn.Embedding):
                 torch.nn.init.normal_(module.weight, mean=0.0, std=0.02)
-                
     def forward(self, input_ids, attention_mask=None, position_ids=None):
         batch_size, seq_length = input_ids.shape
-        
         # Create position IDs if not provided
         if position_ids is None:
             position_ids = torch.arange(seq_length, device=input_ids.device).unsqueeze(0).expand(batch_size, -1)
-            
         # Embeddings (only token embeddings as we use RoPE)
         x = self.token_embedding(input_ids)
-        
         # Apply transformer blocks
         attention_weights = []
         for block in self.blocks:
             x, attn_weights = block(x, attention_mask, position_ids)
             attention_weights.append(attn_weights)
-            
         # Final layer normalization
         x = self.ln_f(x)
-        
         # Language modeling head
         logits = self.lm_head(x)
         return logits, attention_weights
-        
     def generate(self, input_ids, max_new_tokens, temperature=1.0, do_sample=True):
         self.eval()
         with torch.no_grad():
@@ -297,7 +331,6 @@ class ModernGPT(nn.Module):
                 if next_token.item() == 0:  # Assuming 0 is end token
                     break
         return input_ids
-        
     def get_model_info(self):
         info = f"ModernGPT Model:\n"
         info += f"  Vocabulary size: {self.token_embedding.num_embeddings}\n"
@@ -309,7 +342,6 @@ class ModernGPT(nn.Module):
         info += f"  Parameters: {sum(p.numel() for p in self.parameters()):,}\n"
         info += f"  Trainable parameters: {sum(p.numel() for p in self.parameters() if p.requires_grad):,}"
         return info
-
 # ------------------
 # Класс для сбора метрик
 # ------------------
@@ -329,31 +361,22 @@ class MetricsCollector:
             'attention_weights_stats': {},
             'system_resources': []
         }
-        
     def add_training_loss(self, loss):
         self.metrics['training_loss'].append(loss)
-        
     def add_validation_loss(self, loss):
         self.metrics['validation_loss'].append(loss)
-        
     def add_training_perplexity(self, perplexity):
         self.metrics['training_perplexity'].append(perplexity)
-        
     def add_validation_perplexity(self, perplexity):
         self.metrics['validation_perplexity'].append(perplexity)
-        
     def add_learning_rate(self, lr):
         self.metrics['learning_rate'].append(lr)
-        
     def add_gradient_norm(self, grad_norm):
         self.metrics['gradient_norm'].append(grad_norm)
-        
     def add_epoch_time(self, time_taken):
         self.metrics['epoch_times'].append(time_taken)
-        
     def add_batch_loss(self, loss):
         self.metrics['batch_losses'].append(loss)
-        
     def add_system_resources(self):
         # Сбор информации о системных ресурсах
         cpu_percent = psutil.cpu_percent(interval=1)
@@ -363,7 +386,6 @@ class MetricsCollector:
             'memory_percent': memory.percent,
             'memory_available_gb': memory.available / (1024**3)
         })
-        
     def collect_weight_statistics(self, model):
         weight_stats = {}
         for name, param in model.named_parameters():
@@ -377,7 +399,6 @@ class MetricsCollector:
                 }
         self.metrics['weight_statistics'] = weight_stats
         return weight_stats
-        
     def collect_gradient_norms(self, model):
         grad_norms = {}
         for name, param in model.named_parameters():
@@ -385,7 +406,6 @@ class MetricsCollector:
                 grad_norms[name] = param.grad.norm().item()
         self.metrics['grad_norm_by_layer'] = grad_norms
         return grad_norms
-        
     def collect_attention_stats(self, attention_weights):
         if attention_weights and len(attention_weights) > 0:
             last_layer_attn = attention_weights[-1]
@@ -397,7 +417,6 @@ class MetricsCollector:
                     'min': last_layer_attn.min().item(),
                 }
                 self.metrics['attention_weights_stats'] = attn_stats
-                
     def save_metrics(self, filename):
         filepath = os.path.join(METRICS_DIR, filename)
         serializable_metrics = {}
@@ -425,7 +444,6 @@ class MetricsCollector:
         with open(filepath, 'w', encoding='utf-8') as f:
             json.dump(serializable_metrics, f, indent=2, ensure_ascii=False)
         logger.info(f"Метрики сохранены в {filepath}")
-        
     def plot_metrics(self, filename_prefix):
         try:
             plt.figure(figsize=(15, 10))
@@ -439,7 +457,6 @@ class MetricsCollector:
             plt.title('Training and Validation Loss')
             plt.legend()
             plt.grid(True)
-            
             plt.subplot(2, 3, 2)
             if self.metrics['training_perplexity']:
                 plt.plot(self.metrics['training_perplexity'], label='Training Perplexity')
@@ -450,7 +467,6 @@ class MetricsCollector:
             plt.title('Training and Validation Perplexity')
             plt.legend()
             plt.grid(True)
-            
             plt.subplot(2, 3, 3)
             if self.metrics['learning_rate']:
                 plt.plot(self.metrics['learning_rate'], label='Learning Rate')
@@ -459,7 +475,6 @@ class MetricsCollector:
             plt.title('Learning Rate Schedule')
             plt.legend()
             plt.grid(True)
-            
             plt.subplot(2, 3, 4)
             if self.metrics['gradient_norm']:
                 plt.plot(self.metrics['gradient_norm'], label='Gradient Norm')
@@ -468,7 +483,6 @@ class MetricsCollector:
             plt.title('Gradient Norm')
             plt.legend()
             plt.grid(True)
-            
             plt.subplot(2, 3, 5)
             if self.metrics['epoch_times']:
                 plt.plot(self.metrics['epoch_times'], label='Epoch Time')
@@ -477,7 +491,6 @@ class MetricsCollector:
             plt.title('Training Time per Epoch')
             plt.legend()
             plt.grid(True)
-            
             plt.subplot(2, 3, 6)
             if self.metrics['batch_losses'] and len(self.metrics['batch_losses']) > 10:
                 recent_losses = self.metrics['batch_losses'][-100:]
@@ -487,7 +500,6 @@ class MetricsCollector:
                 plt.title('Recent Batch Losses')
                 plt.legend()
                 plt.grid(True)
-                
             plt.tight_layout()
             plot_path = os.path.join(METRICS_DIR, f"{filename_prefix}_metrics.png")
             plt.savefig(plot_path, dpi=300, bbox_inches='tight')
@@ -495,7 +507,6 @@ class MetricsCollector:
             logger.info(f"Графики метрик сохранены в {plot_path}")
         except Exception as e:
             logger.error(f"Ошибка при построении графиков: {e}")
-
 # ------------------
 # Продвинутые техники сэмплирования
 # ------------------
@@ -504,26 +515,21 @@ def advanced_sampling(logits, temperature=1.0, top_k=0, top_p=1.0, repetition_pe
         for token_id in set(previous_tokens):
             logits[:, token_id] /= repetition_penalty
     logits = logits / temperature
-    
     if top_k > 0:
         top_k = min(top_k, logits.size(-1))
         indices_to_remove = logits < torch.topk(logits, top_k)[0][..., -1, None]
         logits[indices_to_remove] = float('-inf')
-        
     if top_p < 1.0:
         sorted_logits, sorted_indices = torch.sort(logits, descending=True)
         cumulative_probs = torch.cumsum(F.softmax(sorted_logits, dim=-1), dim=-1)
         sorted_indices_to_remove = cumulative_probs > top_p
         sorted_indices_to_remove[..., 1:] = sorted_indices_to_remove[..., :-1].clone()
         sorted_indices_to_remove[..., 0] = 0
-        
         indices_to_remove = torch.zeros_like(logits, dtype=torch.bool)
         for i in range(sorted_indices.size(0)):
             indices_to_remove[i, sorted_indices[i, sorted_indices_to_remove[i]]] = True
         logits[indices_to_remove] = float('-inf')
-        
     return F.softmax(logits, dim=-1)
-
 # ------------------
 # Early Stopping
 # ------------------
@@ -543,7 +549,6 @@ class EarlyStopping:
             if self.counter >= self.patience:
                 self.early_stop = True
         return self.early_stop
-
 # ------------------
 # Label Smoothing Loss
 # ------------------
@@ -559,7 +564,6 @@ class LabelSmoothingLoss(nn.Module):
         smooth_loss = -logprobs.mean(dim=-1)
         loss = self.confidence * nll_loss + self.smoothing * smooth_loss
         return loss.mean()
-
 # ------------------
 # Gradient Noise
 # ------------------
@@ -569,7 +573,6 @@ def add_gradient_noise(optimizer, sigma=1e-3):
             if param.grad is not None:
                 noise = torch.randn_like(param.grad) * sigma
                 param.grad.add_(noise)
-
 # ------------------
 # Подготовка данных
 # ------------------
@@ -591,7 +594,6 @@ def load_text(file_path):
     except Exception as e:
         logger.error(f"Ошибка при загрузке файла {file_path}: {e}")
         raise
-
 def load_txt_file(file_path):
     encodings = ['utf-8', 'windows-1251', 'cp1251', 'koi8-r', 'latin1']
     for encoding in encodings:
@@ -612,7 +614,6 @@ def load_txt_file(file_path):
         return text
     except Exception as e:
         raise Exception(f"Не удалось загрузить файл {file_path} ни с одной кодировкой: {e}")
-
 def load_docx_file(file_path):
     if not DOCX_SUPPORT:
         raise Exception("Поддержка DOCX файлов не доступна. Установите python-docx")
@@ -625,7 +626,6 @@ def load_docx_file(file_path):
         return text
     except Exception as e:
         raise Exception(f"Ошибка при загрузке DOCX файла {file_path}: {e}")
-
 def load_pdf_file(file_path):
     if not PDF_SUPPORT:
         raise Exception("Поддержка PDF файлов не доступна. Установите PyPDF2")
@@ -639,7 +639,6 @@ def load_pdf_file(file_path):
         return text
     except Exception as e:
         raise Exception(f"Ошибка при загрузке PDF файла {file_path}: {e}")
-
 def tokenize_text(text, token_type="bpe"):
     if token_type == "char":
         return list(text)
@@ -651,7 +650,6 @@ def tokenize_text(text, token_type="bpe"):
         return words
     else:
         raise ValueError(f"Неизвестный тип токенизации: {token_type}")
-
 def clean_text(text):
     original_length = len(text)
     text = re.sub(r'[^\w\s\.\,\!\?\-\n\u0400-\u04FF]', '', text)
@@ -660,7 +658,6 @@ def clean_text(text):
     cleaned_length = len(text)
     logger.info(f"Текст очищен: {original_length} -> {cleaned_length} символов")
     return text.strip()
-
 def create_token_mappings(tokens):
     unique_tokens = sorted(list(set(tokens)))
     special_tokens = ['<PAD>', '<UNK>', '<BOS>', '<EOS>']
@@ -669,26 +666,21 @@ def create_token_mappings(tokens):
     idx_to_token = {i: token for i, token in enumerate(all_tokens)}
     logger.info(f"Созданы словари: {len(all_tokens)} токенов (включая специальные)")
     return token_to_idx, idx_to_token, len(all_tokens)
-
 def create_sequences(tokens, token_to_idx, seq_length, stride=None):
     if stride is None:
         stride = seq_length // 2
     if len(tokens) < seq_length + 1:
         raise ValueError(f"Текст слишком короткий. Минимальная длина: {seq_length + 1}, текущая: {len(tokens)}")
-    
     bos_token = token_to_idx['<BOS>']
     eos_token = token_to_idx['<EOS>']
     data = [bos_token] + [token_to_idx.get(token, token_to_idx['<UNK>']) for token in tokens] + [eos_token]
-    
     X, y = [], []
     for i in range(0, len(data) - seq_length, stride):
         if i + seq_length + 1 <= len(data):
             X.append(data[i:i+seq_length])
             y.append(data[i+1:i+seq_length+1])
-            
     logger.info(f"Создано {len(X)} последовательностей длиной {seq_length} с шагом {stride}")
     return torch.tensor(X, dtype=torch.long), torch.tensor(y, dtype=torch.long)
-
 # ------------------
 # Управление моделями
 # ------------------
@@ -696,7 +688,6 @@ def get_model_files():
     model_files = glob.glob(os.path.join(MODELS_DIR, "gpt_model_*.pth"))
     model_files.sort(key=os.path.getctime, reverse=True)
     return model_files
-
 def cleanup_old_models():
     model_files = get_model_files()
     if len(model_files) > MAX_SAVED_MODELS:
@@ -707,7 +698,6 @@ def cleanup_old_models():
                 logger.info(f"Удалена старая модель: {os.path.basename(old_model)}")
             except Exception as e:
                 logger.error(f"Ошибка при удалении модели {old_model}: {e}")
-
 def save_model_with_timestamp(model, token_to_idx, idx_to_token, vocab_size, 
                             loss=0.0, token_type="bpe", perplexity=None,
                             training_config=None, metrics_collector=None, model_type="gpt"):
@@ -756,13 +746,11 @@ def save_model_with_timestamp(model, token_to_idx, idx_to_token, vocab_size,
     except Exception as e:
         logger.error(f"Ошибка при сохранении модели: {e}")
         return None
-
 def load_model_with_dicts(model_path, device):
     try:
         checkpoint = torch.load(model_path, map_location=device)
         model_config = checkpoint.get('model_config', {})
         model_type = checkpoint.get('model_type', 'gpt')
-        
         if model_type == 'gpt':
             model = ModernGPT(
                 checkpoint['vocab_size'],
@@ -781,7 +769,6 @@ def load_model_with_dicts(model_path, device):
                 model_config.get('ff_hidden_size', 2048),
                 dropout=model_config.get('dropout', 0.1)
             )
-            
         model.load_state_dict(checkpoint['model_state_dict'])
         token_to_idx = checkpoint['token_to_idx']
         idx_to_token = checkpoint['idx_to_token']
@@ -797,7 +784,6 @@ def load_model_with_dicts(model_path, device):
     except Exception as e:
         logger.error(f"Ошибка при загрузке модели {model_path}: {e}")
         return None, None, None, None, None, None, None, None
-
 def list_available_models():
     model_files = get_model_files()
     if not model_files:
@@ -821,6 +807,46 @@ def list_available_models():
     return model_files
 
 # ------------------
+# Определение профиля устройства
+# ------------------
+def detect_hardware_profile():
+    """Определяет профиль устройства для адаптивного обучения."""
+    profile = {
+        "device": "cpu",
+        "memory_gb": 0,
+        "profile_name": "unknown"
+    }
+
+    if torch.cuda.is_available():
+        profile["device"] = "cuda"
+        props = torch.cuda.get_device_properties(0)
+        profile["memory_gb"] = props.total_memory / (1024**3)
+        # Примерная логика определения профиля
+        if profile["memory_gb"] >= 10: # Например, 10 ГБ и больше
+            profile["profile_name"] = "high_end_gpu"
+        elif profile["memory_gb"] >= 6: # Например, от 6 до 10 ГБ
+             profile["profile_name"] = "mid_end_gpu"
+        else: # Меньше 6 ГБ
+             profile["profile_name"] = "low_end_gpu" # Или "mid_end_gpu" с очень малым batch_size
+
+    else:
+        # Определение для CPU
+        profile["device"] = "cpu"
+        # Используем psutil для получения доступной памяти
+        virtual_mem = psutil.virtual_memory()
+        profile["memory_gb"] = virtual_mem.total / (1024**3)
+
+        # Логика для CPU (очень приблизительная)
+        if profile["memory_gb"] >= 16: # Например, 16 ГБ и больше
+             profile["profile_name"] = "high_memory_cpu"
+        elif profile["memory_gb"] >= 8: # Например, от 8 до 16 ГБ
+             profile["profile_name"] = "mid_memory_cpu"
+        else: # Меньше 8 ГБ
+             profile["profile_name"] = "low_memory_cpu"
+
+    return profile
+
+# ------------------
 # Расчет перплексии
 # ------------------
 def calculate_perplexity(model, data_loader, device, criterion):
@@ -837,7 +863,6 @@ def calculate_perplexity(model, data_loader, device, criterion):
     avg_loss = total_loss / total_samples
     perplexity = np.exp(avg_loss)
     return perplexity
-
 # ------------------
 # Генерация текста
 # ------------------
@@ -853,7 +878,6 @@ def generate_text(model, token_to_idx, idx_to_token, start_tokens,
         input_ids.extend([token_to_idx.get(token, token_to_idx.get('<UNK>', 1)) for token in tokens])
         input_ids = torch.tensor([input_ids], dtype=torch.long).to(device)
         generated_tokens = []
-        
         for _ in range(max_new_tokens):
             output, _ = model(input_ids)
             next_token_logits = output[0, -1, :]
@@ -874,7 +898,6 @@ def generate_text(model, token_to_idx, idx_to_token, start_tokens,
             except Exception as e:
                 logger.error(f"Ошибка при генерации токена: {e}")
                 break
-                
         generated_text_tokens = [idx_to_token.get(idx, '?') for idx in generated_tokens]
         if token_type == "word" or token_type == "bpe":
             generated_text = ' '.join(generated_text_tokens)
@@ -882,7 +905,6 @@ def generate_text(model, token_to_idx, idx_to_token, start_tokens,
             generated_text = ''.join(generated_text_tokens)
         logger.info(f"Генерация завершена, сгенерировано {len(generated_tokens)} токенов")
         return start_tokens + generated_text
-
 # ------------------
 # Обучение с улучшенной обработкой ошибок
 # ------------------
@@ -891,7 +913,6 @@ def train_model(model, train_loader, val_loader, criterion, optimizer, epochs, d
                 learning_rate=DEFAULT_LEARNING_RATE, model_type="gpt"):
     logger.info(f"Начало обучения модели на устройстве {device}")
     logger.info(f"Параметры обучения: epochs={epochs}, batch_size={train_loader.batch_size}")
-    
     metrics_collector = MetricsCollector()
     training_config = {
         'epochs': epochs,
@@ -905,10 +926,8 @@ def train_model(model, train_loader, val_loader, criterion, optimizer, epochs, d
         'model_parameters': sum(p.numel() for p in model.parameters()),
         'trainable_parameters': sum(p.numel() for p in model.parameters() if p.requires_grad)
     }
-    
     model.to(device)
     model.train()
-    
     # Используем DummyScaler для CPU
     class DummyScaler:
         def scale(self, loss):
@@ -919,52 +938,42 @@ def train_model(model, train_loader, val_loader, criterion, optimizer, epochs, d
             optimizer.step()
         def update(self):
             pass
-    
     scaler = DummyScaler()
     early_stopping = EarlyStopping(patience=5, min_delta=0.001)
     scheduler = optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=epochs, eta_min=1e-6)
-    
     best_loss = float('inf')
     best_perplexity = float('inf')
     best_model_path = None
     training_start_time = time.time()
-    
     try:
         for epoch in range(epochs):
             epoch_start_time = time.time()
             total_loss = 0
             total_batches = len(train_loader)
             logger.info(f"Эпоха {epoch+1}/{epochs} начата")
-            
             # Training phase
             model.train()
             for batch_idx, (x_batch, y_batch) in enumerate(train_loader):
                 try:
                     x_batch, y_batch = x_batch.to(device), y_batch.to(device)
                     optimizer.zero_grad()
-                    
                     output, attention_weights = model(x_batch)
                     loss = criterion(output.reshape(-1, output.size(-1)), y_batch.reshape(-1))
-                    
                     scaled_loss = scaler.scale(loss)
                     scaled_loss.backward()
-                    
                     scaler.unscale_(optimizer)
                     grad_norm = torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
                     add_gradient_noise(optimizer, sigma=1e-3)
                     scaler.step(optimizer)
                     scaler.update()
-                    
                     total_loss += loss.item()
                     metrics_collector.add_batch_loss(loss.item())
-                    
                     # Логирование каждые 10% батчей
                     if batch_idx % max(1, total_batches // 10) == 0 and batch_idx > 0:
                         avg_batch_loss = total_loss / (batch_idx + 1)
                         logger.info(f"Эпоха {epoch+1}/{epochs}, Батч {batch_idx}/{total_batches}, Loss: {avg_batch_loss:.4f}")
                         # Сбор метрик системы
                         metrics_collector.add_system_resources()
-                        
                 except RuntimeError as e:
                     if "out of memory" in str(e).lower():
                         logger.error(f"Out of memory на батче {batch_idx}. Очистка памяти...")
@@ -977,7 +986,6 @@ def train_model(model, train_loader, val_loader, criterion, optimizer, epochs, d
                 except Exception as e:
                     logger.error(f"Ошибка в батче {batch_idx}: {e}")
                     continue
-                    
             # Validation phase
             model.eval()
             val_loss = 0
@@ -993,22 +1001,17 @@ def train_model(model, train_loader, val_loader, criterion, optimizer, epochs, d
                     except Exception as e:
                         logger.error(f"Ошибка в валидационном батче: {e}")
                         continue
-                        
             if val_samples > 0:
                 val_loss /= val_samples
             else:
                 val_loss = float('inf')
-                
             scheduler.step()
-            
             # Calculate perplexity
             train_perplexity = np.exp(total_loss / max(total_batches, 1))
             val_perplexity = calculate_perplexity(model, val_loader, device, criterion)
-            
             epoch_time = time.time() - epoch_start_time
             avg_train_loss = total_loss / max(total_batches, 1)
             current_lr = optimizer.param_groups[0]['lr']
-            
             # Сбор метрик
             metrics_collector.add_training_loss(avg_train_loss)
             metrics_collector.add_validation_loss(val_loss)
@@ -1018,17 +1021,14 @@ def train_model(model, train_loader, val_loader, criterion, optimizer, epochs, d
             metrics_collector.add_gradient_norm(grad_norm.item() if isinstance(grad_norm, torch.Tensor) else float(grad_norm))
             metrics_collector.add_epoch_time(epoch_time)
             metrics_collector.collect_gradient_norms(model)
-            
             logger.info(f"Эпоха {epoch+1}/{epochs} завершена за {epoch_time:.2f} сек")
             logger.info(f"  Train Loss: {avg_train_loss:.4f}, Val Loss: {val_loss:.4f}")
             logger.info(f"  Train Perplexity: {train_perplexity:.4f}, Val Perplexity: {val_perplexity:.4f}")
             logger.info(f"  Learning Rate: {current_lr:.6f}, Gradient Norm: {grad_norm:.4f}")
-            
             # Early stopping check
             if early_stopping(val_loss):
                 logger.info(f"Early stopping на эпохе {epoch+1}")
                 break
-                
             # Сохранение лучшей модели
             if val_loss < best_loss:
                 best_loss = val_loss
@@ -1040,35 +1040,28 @@ def train_model(model, train_loader, val_loader, criterion, optimizer, epochs, d
                 if model_path:
                     best_model_path = model_path
                     logger.info(f"Новая лучшая модель сохранена: loss {val_loss:.4f}, perplexity {val_perplexity:.4f}")
-                    
             # Принудительная очистка памяти после каждой эпохи
             torch.cuda.empty_cache() if torch.cuda.is_available() else None
             gc.collect()
-            
     except KeyboardInterrupt:
         logger.info("Обучение прервано пользователем")
     except Exception as e:
         logger.error(f"Критическая ошибка во время обучения: {e}")
         import traceback
         logger.error(traceback.format_exc())
-        
     training_time = time.time() - training_start_time
     logger.info(f"Обучение завершено за {training_time:.2f} сек")
     logger.info(f"Лучшая модель: loss {best_loss:.4f}, perplexity {best_perplexity:.4f}")
-    
     final_timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     metrics_collector.save_metrics(f"final_metrics_{final_timestamp}.json")
     metrics_collector.plot_metrics(f"final_metrics_{final_timestamp}")
-    
     return best_model_path, metrics_collector
-
 # ------------------
 # Интерактивный режим
 # ------------------
 def interactive_mode():
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     logger.info(f"Запуск интерактивного режима на устройстве: {device}")
-    
     current_model = None
     token_to_idx = None
     idx_to_token = None
@@ -1078,7 +1071,6 @@ def interactive_mode():
     current_perplexity = None
     current_weight_stats = {}
     current_training_config = {}
-    
     print("\n" + "="*80)
     print("🤖 Современный генеративный ИИ с GPT-архитектурой (оптимизированная версия)")
     print("="*80)
@@ -1097,7 +1089,6 @@ def interactive_mode():
     print("  metrics      - Просмотр метрик обучения")
     print("  quit         - Выход")
     print("="*80)
-    
     while True:
         try:
             command = input("\nВведите команду: ").strip().lower()
@@ -1162,69 +1153,75 @@ def interactive_mode():
                 if not os.path.exists(file_path):
                     print(f"❌ Файл {file_path} не найден")
                     continue
+                
+                # 1. Определить профиль устройства
+                hw_profile = detect_hardware_profile()
+                print(f"Обнаружен профиль устройства: {hw_profile}")
+                
+                # 2. Получить адаптивные конфигурации
+                adaptive_config = ADAPTIVE_CONFIGS.get(hw_profile["profile_name"], ADAPTIVE_CONFIGS["low_memory_cpu"]) # fallback
+                
                 try:
-                    token_type = input("Тип токенизации (char/word/bpe, по умолчанию bpe): ").strip().lower()
+                    token_type = input(f"Тип токенизации (char/word/bpe, по умолчанию {adaptive_config['token_type'] if 'token_type' in adaptive_config else 'bpe'}): ").strip().lower()
                     if token_type not in ["char", "word", "bpe"]:
-                        token_type = "bpe"
+                        token_type = adaptive_config.get('token_type', 'bpe')
+                    
+                    # Запрос параметров обучения с адаптивными значениями по умолчанию
+                    try:
+                        epochs = int(input(f"Количество эпох (по умолчанию {adaptive_config['epochs']}): ") or str(adaptive_config['epochs']))
+                    except ValueError:
+                        epochs = adaptive_config['epochs']
                         
-                    # Запрос параметров обучения с разумными значениями по умолчанию для CPU
                     try:
-                        epochs = int(input(f"Количество эпох (по умолчанию {DEFAULT_EPOCHS}): ") or str(DEFAULT_EPOCHS))
+                        seq_length = int(input(f"Длина последовательности (по умолчанию {adaptive_config['seq_length']}): ") or str(adaptive_config['seq_length']))
                     except ValueError:
-                        epochs = DEFAULT_EPOCHS
-                    try:
-                        seq_length = int(input(f"Длина последовательности (по умолчанию {DEFAULT_SEQ_LENGTH}): ") or str(DEFAULT_SEQ_LENGTH))
-                    except ValueError:
-                        seq_length = DEFAULT_SEQ_LENGTH
-                    try:
-                        batch_size = int(input(f"Размер батча (по умолчанию {DEFAULT_BATCH_SIZE}): ") or str(DEFAULT_BATCH_SIZE))
-                    except ValueError:
-                        batch_size = DEFAULT_BATCH_SIZE
-                    try:
-                        learning_rate = float(input(f"Learning rate (по умолчанию {DEFAULT_LEARNING_RATE}): ") or str(DEFAULT_LEARNING_RATE))
-                    except ValueError:
-                        learning_rate = DEFAULT_LEARNING_RATE
+                        seq_length = adaptive_config['seq_length']
                         
+                    try:
+                        batch_size = int(input(f"Размер батча (по умолчанию {adaptive_config['batch_size']}): ") or str(adaptive_config['batch_size']))
+                    except ValueError:
+                        batch_size = adaptive_config['batch_size']
+                        
+                    try:
+                        learning_rate = float(input(f"Learning rate (по умолчанию {adaptive_config['learning_rate']}): ") or str(adaptive_config['learning_rate']))
+                    except ValueError:
+                        learning_rate = adaptive_config['learning_rate']
+                    
                     print("🔄 Загрузка текста...")
                     text = load_text(file_path)
                     text = clean_text(text)
-                    
                     tokens = tokenize_text(text, token_type)
                     print(f"Текст токенизирован: {len(tokens)} токенов")
                     if len(tokens) < seq_length:
                         print("❌ Текст слишком короткий для обучения")
                         continue
-                        
                     token_to_idx, idx_to_token, vocab_size = create_token_mappings(tokens)
                     X, y = create_sequences(tokens, token_to_idx, seq_length)
                     if len(X) == 0:
                         print("❌ Недостаточно данных для обучения")
                         continue
-                        
                     dataset = torch.utils.data.TensorDataset(X, y)
                     train_size = int(0.9 * len(dataset))
                     val_size = len(dataset) - train_size
                     train_dataset, val_dataset = torch.utils.data.random_split(dataset, [train_size, val_size])
                     train_loader = torch.utils.data.DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
                     val_loader = torch.utils.data.DataLoader(val_dataset, batch_size=batch_size, shuffle=False)
-                    
                     print("🔄 Создание модели...")
-                    # Используем оптимизированные параметры для CPU
+                    # Используем адаптивные параметры для модели
                     current_model = ModernGPT(
                         vocab_size=vocab_size,
-                        hidden_size=DEFAULT_HIDDEN_SIZE,
-                        num_layers=DEFAULT_NUM_LAYERS,
-                        num_heads=DEFAULT_ATTENTION_HEADS,
-                        ff_hidden_size=DEFAULT_FF_HIDDEN_SIZE,
-                        dropout=DEFAULT_DROPOUT
+                        hidden_size=adaptive_config['hidden_size'],
+                        num_layers=adaptive_config['num_layers'],
+                        num_heads=adaptive_config['num_heads'],
+                        ff_hidden_size=adaptive_config['ff_hidden_size'],
+                        dropout=adaptive_config['dropout'],
+                        max_seq_length=seq_length # Убедиться, что это передается
                     )
                     print(current_model.get_model_info())
-                    
                     criterion = LabelSmoothingLoss(smoothing=0.1)
                     optimizer = optim.AdamW(current_model.parameters(), lr=learning_rate, weight_decay=0.01)
                     current_token_type = token_type
                     current_model_type = "gpt"
-                    
                     print("🔄 Начало обучения...")
                     model_path, metrics_collector = train_model(current_model, train_loader, val_loader, criterion, optimizer, 
                                                               epochs, device, token_to_idx, idx_to_token, vocab_size, 
@@ -1355,7 +1352,6 @@ def interactive_mode():
             import traceback
             logger.error(traceback.format_exc())
             print(f"❌ Неожиданная ошибка: {e}")
-
 if __name__ == "__main__":
     print("🤖 Современный генеративный ИИ с GPT-архитектурой (оптимизированная версия)")
     print("Поддерживаемые форматы файлов: .txt, .docx, .pdf")
