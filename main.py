@@ -396,17 +396,18 @@ class MetricsCollector:
     
     def collect_attention_stats(self, attention_weights):
         """Сбор статистик весов внимания"""
-        if attention_weights:
+        if attention_weights and len(attention_weights) > 0:
             # Берем статистики по последнему слою внимания
             last_layer_attn = attention_weights[-1]
-            attn_stats = {
-                'mean': last_layer_attn.mean().item(),
-                'std': last_layer_attn.std().item(),
-                'max': last_layer_attn.max().item(),
-                'min': last_layer_attn.min().item(),
-                'sparsity': (last_layer_attn < 0.01).float().mean().item()
-            }
-            self.metrics['attention_weights_stats'] = attn_stats
+            if len(last_layer_attn.shape) >= 2:
+                attn_stats = {
+                    'mean': last_layer_attn.mean().item(),
+                    'std': last_layer_attn.std().item(),
+                    'max': last_layer_attn.max().item(),
+                    'min': last_layer_attn.min().item(),
+                    'sparsity': (last_layer_attn < 0.01).float().mean().item()
+                }
+                self.metrics['attention_weights_stats'] = attn_stats
     
     def save_metrics(self, filename):
         """Сохранение метрик в JSON файл"""
@@ -824,9 +825,9 @@ def save_model_with_timestamp(model, token_to_idx, idx_to_token, vocab_size,
             'model_config': {
                 'hidden_size': getattr(model, 'hidden_size', 768),
                 'num_layers': getattr(model, 'num_layers', 12),
-                'num_heads': getattr(model, 'blocks', [None])[0].attention.num_heads if hasattr(model, 'blocks') and model.blocks else 12,
-                'ff_hidden_size': getattr(model, 'blocks', [None])[0].ffn.linear1.out_features if hasattr(model, 'blocks') and model.blocks else 3072,
-                'dropout': getattr(model, 'blocks', [None])[0].dropout1.p if hasattr(model, 'blocks') and model.blocks else 0.1,
+                'num_heads': getattr(model, 'blocks', [None])[0].attention.num_heads if hasattr(model, 'blocks') and len(model.blocks) > 0 else 12,
+                'ff_hidden_size': getattr(model, 'blocks', [None])[0].ffn.linear1.out_features if hasattr(model, 'blocks') and len(model.blocks) > 0 else 3072,
+                'dropout': getattr(model, 'blocks', [None])[0].dropout1.p if hasattr(model, 'blocks') and len(model.blocks) > 0 else 0.1,
                 'model_type': type(model).__name__
             }
         }, model_path)
@@ -1030,8 +1031,21 @@ def train_model(model, train_loader, val_loader, criterion, optimizer, epochs, d
     model.to(device)
     model.train()
     
-    # Mixed precision training
-    scaler = GradScaler()
+    # Mixed precision training (с правильной настройкой для CPU)
+    if torch.cuda.is_available():
+        scaler = torch.cuda.amp.GradScaler()
+    else:
+        # Для CPU используем простую версию
+        class DummyScaler:
+            def scale(self, loss):
+                return loss
+            def unscale_(self, optimizer):
+                pass
+            def step(self, optimizer):
+                optimizer.step()
+            def update(self):
+                pass
+        scaler = DummyScaler()
     
     # Early stopping
     early_stopping = EarlyStopping(patience=15, min_delta=0.001)
@@ -1062,12 +1076,18 @@ def train_model(model, train_loader, val_loader, criterion, optimizer, epochs, d
             optimizer.zero_grad()
             
             # Mixed precision training
-            with autocast():
+            if torch.cuda.is_available():
+                with torch.cuda.amp.autocast():
+                    output, attention_weights = model(x_batch)
+                    # Вычисляем loss для всех позиций
+                    loss = criterion(output.reshape(-1, output.size(-1)), y_batch.reshape(-1))
+            else:
                 output, attention_weights = model(x_batch)
                 # Вычисляем loss для всех позиций
                 loss = criterion(output.reshape(-1, output.size(-1)), y_batch.reshape(-1))
             
-            scaler.scale(loss).backward()
+            scaled_loss = scaler.scale(loss)
+            scaled_loss.backward()
             
             # Gradient clipping и сбор нормы градиентов
             scaler.unscale_(optimizer)
