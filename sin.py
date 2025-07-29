@@ -1,13 +1,13 @@
 import torch
-import torch.nn as nn
-import torch.optim as optim
-import torch.nn.functional as F
 # Исправлен импорт autocast для PyTorch >= 2.4
 try:
     from torch.amp import autocast
 except ImportError:
     from torch.cuda.amp import autocast
 from torch.cuda.amp import GradScaler
+import torch.nn as nn
+import torch.optim as optim
+import torch.nn.functional as F
 import numpy as np
 import random
 import os
@@ -23,6 +23,10 @@ import json
 import matplotlib.pyplot as plt
 import psutil  # Для мониторинга системных ресурсов
 import gc     # Для ручной очистки памяти
+# Добавлены импорты для парсинга веб-страниц
+import requests
+from bs4 import BeautifulSoup
+from urllib.parse import urlparse
 # Установите psutil: pip install psutil
 # Для работы с DOCX файлами
 try:
@@ -622,6 +626,110 @@ def detokenize_with_tokenizer(tokenizer, ids):
     if not TOKENIZERS_SUPPORT:
         raise Exception("Поддержка tokenizers не доступна. Установите tokenizers")
     return tokenizer.decode(ids)
+# ------------------
+# Новая функция для загрузки текста с URL
+# ------------------
+def load_text_from_url(url):
+    """
+    Загружает текст с веб-страницы по URL.
+    Пытается извлечь основной текстовой контент.
+    """
+    logger.info(f"Попытка загрузки текста с URL: {url}")
+    
+    try:
+        # Проверка URL формально (не обязательно, но полезно)
+        parsed_url = urlparse(url)
+        if not parsed_url.scheme or not parsed_url.netloc:
+            raise ValueError("Недопустимый формат URL")
+
+        # Выполнение HTTP-запроса
+        headers = {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
+        } # Некоторые сайты блокируют запросы без User-Agent
+        response = requests.get(url, timeout=30, headers=headers) 
+        response.raise_for_status() # Проверка на ошибки HTTP (4xx, 5xx)
+
+        # Проверка типа контента
+        content_type = response.headers.get('content-type', '').lower()
+        if 'text/html' not in content_type:
+            logger.warning(f"URL {url} не является HTML-страницей (Content-Type: {content_type}). Пробуем загрузить как текст.")
+            # Если это не HTML, попробуем загрузить как текст
+            try:
+                # Попробуем декодировать как текст
+                text_content = response.text
+                if text_content:
+                    logger.info(f"Текст успешно загружен с {url} как не-HTML контент. Длина: {len(text_content)} символов.")
+                    return text_content
+                else:
+                    logger.warning(f"Не удалось извлечь текст с {url} как не-HTML контент.")
+                    return ""
+            except Exception as decode_e:
+                logger.error(f"Ошибка декодирования не-HTML контента с {url}: {decode_e}")
+                raise Exception(f"Ошибка декодирования контента с {url}: {decode_e}")
+
+        # Парсинг HTML
+        soup = BeautifulSoup(response.content, 'html.parser')
+
+        # --- Стратегии извлечения текста ---
+        # 1. Попробовать найти основной контент по типичным тегам/классам
+        #    Это потребует адаптации под типичные сайты, которые вы хотите парсить.
+        #    Примеры (нужно адаптировать под конкретные сайты):
+        content_selectors = [
+            'article', 
+            '[class*="content"]', # Атрибут class содержит "content"
+            '[class*="article"]',
+            '.post-body',
+            '.entry-content',
+            'main',
+            'div.content',
+            '.post-content',
+            '.article-body',
+            '#content',
+            '.main-content'
+        ]
+        
+        text_content = ""
+        for selector in content_selectors:
+            content = soup.select_one(selector)
+            if content:
+                # Удаление скриптов, стилей, навигации и т.д. из найденного блока
+                for script in content(["script", "style", "nav", "aside", "footer", "header"]):
+                    script.decompose()
+                text_content = content.get_text(separator=' ', strip=True)
+                if len(text_content) > 100: # Минимальная длина для "реального" контента
+                     logger.info(f"Текст извлечен с использованием селектора: {selector}")
+                     break
+                else:
+                     text_content = "" # Слишком короткий, пробуем следующий селектор
+
+        # 2. Если специфические селекторы не сработали, попробовать более общий подход
+        if not text_content:
+            logger.info("Специфические селекторы не сработали, пробуем общий подход.")
+            # Удаление потенциально ненужных тегов со всей страницы
+            for tag in soup(["script", "style", "nav", "header", "footer", "aside", "form", "noscript"]):
+                tag.decompose()
+            
+            # Извлечение текста из <body> или всего документа
+            body = soup.find('body')
+            if body:
+                text_content = body.get_text(separator=' ', strip=True)
+            else:
+                text_content = soup.get_text(separator=' ', strip=True)
+
+        if text_content:
+            logger.info(f"Текст успешно загружен с {url}. Длина: {len(text_content)} символов.")
+            return text_content
+        else:
+            logger.warning(f"Не удалось извлечь текст с {url}")
+            return ""
+
+    except requests.exceptions.RequestException as e:
+        logger.error(f"Ошибка сети при запросе {url}: {e}")
+        raise Exception(f"Ошибка при загрузке URL {url}: {e}")
+    except Exception as e:
+        logger.error(f"Ошибка при парсинге {url}: {e}")
+        raise Exception(f"Ошибка при обработке содержимого URL {url}: {e}")
+
 def load_text(file_path):
     logger.info(f"Попытка загрузки файла: {file_path}")
     if not os.path.exists(file_path):
@@ -1162,7 +1270,7 @@ def interactive_mode():
     print(f"Кэширование в: {os.path.abspath(CACHE_DIR)}")
     print("\nДоступные команды:")
     print("  generate     - Генерация текста (продвинутая)")
-    print("  train        - Обучение модели")
+    print("  train        - Обучение модели (поддерживаются файлы и URL)")
     print("  save         - Сохранение текущей модели")
     print("  load         - Загрузка модели")
     print("  list         - Список доступных моделей")
@@ -1296,13 +1404,40 @@ def interactive_mode():
                     logger.error(f"Ошибка при генерации текста: {e}")
                     print(f"❌ Ошибка при генерации текста: {e}")
             elif command == "train":
-                file_path = input("Введите путь к текстовому файлу: ").strip()
-                if not file_path:
-                    print("❌ Путь к файлу не указан")
+                # Обновленный ввод данных для обучения
+                data_source = input("Введите путь к текстовому файлу или URL веб-страницы: ").strip()
+                if not data_source:
+                    print("❌ Путь к файлу или URL не указан")
                     continue
-                if not os.path.exists(file_path):
-                    print(f"❌ Файл {file_path} не найден")
-                    continue
+
+                # Проверка, является ли это URL
+                parsed_url = urlparse(data_source)
+                is_url = parsed_url.scheme and parsed_url.netloc
+                
+                text = ""
+                if is_url:
+                    # Это URL
+                    try:
+                        print(f"🔄 Загрузка текста с URL: {data_source}")
+                        text = load_text_from_url(data_source)
+                        if not text:
+                             print("❌ Не удалось загрузить или извлечь текст с указанного URL.")
+                             continue
+                    except Exception as e:
+                        print(f"❌ Ошибка при загрузке с URL: {e}")
+                        continue
+                else:
+                    # Предполагаем, что это путь к файлу
+                    if not os.path.exists(data_source):
+                        print(f"❌ Файл {data_source} не найден")
+                        continue
+                    try:
+                        print(f"🔄 Загрузка текста из файла: {data_source}")
+                        text = load_text(data_source)
+                    except Exception as e:
+                        print(f"❌ Ошибка при загрузке файла: {e}")
+                        continue
+
                 # 1. Определить профиль устройства
                 hw_profile = detect_hardware_profile()
                 print(f"Обнаружен профиль устройства: {hw_profile}")
@@ -1335,8 +1470,8 @@ def interactive_mode():
                         vocab_size_input = max(1000, vocab_size_input)
                     except ValueError:
                         vocab_size_input = 30000
-                    print("🔄 Загрузка текста...")
-                    text = load_text(file_path)
+                    
+                    print("🔄 Очистка текста...")
                     text = clean_text(text)
                     print("🔄 Обучение BPE токенайзера...")
                     # Обучение токенайзера
@@ -1543,6 +1678,7 @@ if __name__ == "__main__":
     print("Поддерживаемые форматы файлов: .txt, .docx, .pdf")
     print("Оптимизации для CPU: уменьшенные параметры модели, улучшенная обработка ошибок")
     print("Интеграция с tokenizers для BPE.")
+    print("Поддержка обучения на тексте из веб-страниц (URL).")
     print(f"📁 Модели сохраняются в: {os.path.abspath(MODELS_DIR)}")
     print(f"📝 Логи сохраняются в: {os.path.abspath(LOGS_DIR)}")
     print(f"📊 Метрики сохраняются в: {os.path.abspath(METRICS_DIR)}")
