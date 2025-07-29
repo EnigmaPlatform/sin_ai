@@ -2,7 +2,12 @@ import torch
 import torch.nn as nn
 import torch.optim as optim
 import torch.nn.functional as F
-from torch.cuda.amp import autocast, GradScaler
+# Исправлен импорт autocast для PyTorch >= 2.4
+try:
+    from torch.amp import autocast
+except ImportError:
+    from torch.cuda.amp import autocast
+from torch.cuda.amp import GradScaler
 import numpy as np
 import random
 import os
@@ -33,7 +38,6 @@ try:
 except ImportError:
     PDF_SUPPORT = False
     print("⚠️  PyPDF2 не установлен. Установите его для поддержки .pdf файлов: pip install PyPDF2")
-
 # Для реальной BPE токенизации
 try:
     from tokenizers import Tokenizer
@@ -45,7 +49,6 @@ try:
 except ImportError:
     TOKENIZERS_SUPPORT = False
     print("⚠️  tokenizers не установлен. Установите его для поддержки BPE: pip install tokenizers")
-
 # Создание директории для моделей
 MODELS_DIR = "models"
 LOGS_DIR = "logs"
@@ -56,7 +59,6 @@ os.makedirs(MODELS_DIR, exist_ok=True)
 os.makedirs(LOGS_DIR, exist_ok=True)
 os.makedirs(METRICS_DIR, exist_ok=True)
 os.makedirs(CACHE_DIR, exist_ok=True)
-
 # ------------------
 # Настройка логирования
 # ------------------
@@ -69,7 +71,6 @@ logging.basicConfig(
     ]
 )
 logger = logging.getLogger(__name__)
-
 # ------------------
 # Гиперпараметры (уменьшены для CPU)
 # ------------------
@@ -87,7 +88,6 @@ DEFAULT_TOKEN_TYPE = "bpe" # Теперь это будет означать и�
 DEFAULT_MODEL_TYPE = "gpt"
 # Имя ассистента
 ASSISTANT_NAME = "Sin"
-
 # ------------------
 # Адаптивные конфигурации
 # ------------------
@@ -165,7 +165,6 @@ ADAPTIVE_CONFIGS = {
         "token_type": "bpe"
     }
 }
-
 # ------------------
 # Layer Normalization
 # ------------------
@@ -175,12 +174,10 @@ class LayerNorm(nn.Module):
         self.eps = eps
         self.weight = nn.Parameter(torch.ones(hidden_size))
         self.bias = nn.Parameter(torch.zeros(hidden_size))
-
     def forward(self, x):
         mean = x.mean(-1, keepdim=True)
         std = x.std(-1, keepdim=True)
         return self.weight * (x - mean) / (std + self.eps) + self.bias
-
 # ------------------
 # Rotary Positional Embedding (RoPE)
 # ------------------
@@ -190,7 +187,6 @@ class RotaryPositionalEmbedding(nn.Module):
         self.dim = dim
         self.max_position_embeddings = max_position_embeddings
         self.inv_freq = 1.0 / (10000 ** (torch.arange(0, dim, 2).float() / dim))
-
     def forward(self, positions):
         inv_freq_expanded = self.inv_freq[None, :, None].float()
         position_ids_expanded = positions[:, None, :].float()
@@ -199,12 +195,10 @@ class RotaryPositionalEmbedding(nn.Module):
         cos = emb.cos()
         sin = emb.sin()
         return cos, sin
-
 def rotate_half(x):
     x1 = x[..., : x.shape[-1] // 2]
     x2 = x[..., x.shape[-1] // 2 :]
     return torch.cat((-x2, x1), dim=-1)
-
 def apply_rotary_pos_emb(q, k, cos, sin):
     # Адаптация размерностей для правильного применения
     cos = cos.unsqueeze(1) # [batch_size, 1, seq_len, head_dim]
@@ -212,7 +206,6 @@ def apply_rotary_pos_emb(q, k, cos, sin):
     q_embed = (q * cos) + (rotate_half(q) * sin)
     k_embed = (k * cos) + (rotate_half(k) * sin)
     return q_embed, k_embed
-
 # ------------------
 # Multi-Head Self-Attention
 # ------------------
@@ -224,27 +217,23 @@ class MultiHeadAttention(nn.Module):
         self.head_dim = hidden_size // num_heads
         self.dropout = dropout
         assert self.head_dim * num_heads == hidden_size, "hidden_size must be divisible by num_heads"
-
         self.q_proj = nn.Linear(hidden_size, hidden_size)
         self.k_proj = nn.Linear(hidden_size, hidden_size)
         self.v_proj = nn.Linear(hidden_size, hidden_size)
         self.o_proj = nn.Linear(hidden_size, hidden_size)
         self.dropout_layer = nn.Dropout(dropout)
         self.rotary_emb = RotaryPositionalEmbedding(self.head_dim)
-
     def forward(self, x, attention_mask=None, position_ids=None):
         batch_size, seq_length, _ = x.shape
         # Project to query, key, value
         q = self.q_proj(x).view(batch_size, seq_length, self.num_heads, self.head_dim).transpose(1, 2)
         k = self.k_proj(x).view(batch_size, seq_length, self.num_heads, self.head_dim).transpose(1, 2)
         v = self.v_proj(x).view(batch_size, seq_length, self.num_heads, self.head_dim).transpose(1, 2)
-
         # Apply rotary positional embeddings
         if position_ids is None:
             position_ids = torch.arange(seq_length, device=x.device).unsqueeze(0)
         cos, sin = self.rotary_emb(position_ids)
         q, k = apply_rotary_pos_emb(q, k, cos, sin)
-
         # Scaled dot-product attention
         attn_scores = torch.matmul(q, k.transpose(-2, -1)) / math.sqrt(self.head_dim)
         # Apply attention mask
@@ -263,7 +252,6 @@ class MultiHeadAttention(nn.Module):
         # Output projection
         output = self.o_proj(attn_output)
         return output, attn_weights
-
 # ------------------
 # Feed-Forward Network
 # ------------------
@@ -273,7 +261,6 @@ class FeedForward(nn.Module):
         self.linear1 = nn.Linear(hidden_size, ff_hidden_size)
         self.linear2 = nn.Linear(ff_hidden_size, hidden_size)
         self.dropout = nn.Dropout(dropout)
-
     def forward(self, x):
         x = self.linear1(x)
         x = F.gelu(x)
@@ -281,7 +268,6 @@ class FeedForward(nn.Module):
         x = self.linear2(x)
         x = self.dropout(x)
         return x
-
 # ------------------
 # Transformer Block
 # ------------------
@@ -294,7 +280,6 @@ class TransformerBlock(nn.Module):
         self.ln2 = LayerNorm(hidden_size)
         self.dropout1 = nn.Dropout(dropout)
         self.dropout2 = nn.Dropout(dropout)
-
     def forward(self, x, attention_mask=None, position_ids=None):
         # Self-attention with residual connection
         attn_output, attn_weights = self.attention(self.ln1(x), attention_mask, position_ids)
@@ -303,7 +288,6 @@ class TransformerBlock(nn.Module):
         ffn_output = self.ffn(self.ln2(x))
         x = x + self.dropout2(ffn_output)
         return x, attn_weights
-
 # ------------------
 # Современная GPT-Style модель
 # ------------------
@@ -329,7 +313,6 @@ class ModernGPT(nn.Module):
         self.lm_head.weight = self.token_embedding.weight
         # Initialize weights
         self._init_weights()
-
     def _init_weights(self):
         for module in self.modules():
             if isinstance(module, nn.Linear):
@@ -338,7 +321,6 @@ class ModernGPT(nn.Module):
                     torch.nn.init.zeros_(module.bias)
             elif isinstance(module, nn.Embedding):
                 torch.nn.init.normal_(module.weight, mean=0.0, std=0.02)
-
     def forward(self, input_ids, attention_mask=None, position_ids=None):
         batch_size, seq_length = input_ids.shape
         # Create position IDs if not provided
@@ -356,7 +338,6 @@ class ModernGPT(nn.Module):
         # Language modeling head
         logits = self.lm_head(x)
         return logits, attention_weights
-
     def generate(self, input_ids, max_new_tokens, temperature=1.0, do_sample=True):
         self.eval()
         with torch.no_grad():
@@ -372,7 +353,6 @@ class ModernGPT(nn.Module):
                 if next_token.item() == 0:  # Assuming 0 is end token
                     break
         return input_ids
-
     def get_model_info(self):
         info = f"ModernGPT Model:\n"
         info += f"  Vocabulary size: {self.token_embedding.num_embeddings}\n"
@@ -384,7 +364,6 @@ class ModernGPT(nn.Module):
         info += f"  Parameters: {sum(p.numel() for p in self.parameters()):,}\n"
         info += f"  Trainable parameters: {sum(p.numel() for p in self.parameters() if p.requires_grad):,}"
         return info
-
 # ------------------
 # Класс для сбора метрик
 # ------------------
@@ -404,31 +383,22 @@ class MetricsCollector:
             'attention_weights_stats': {},
             'system_resources': []
         }
-
     def add_training_loss(self, loss):
         self.metrics['training_loss'].append(loss)
-
     def add_validation_loss(self, loss):
         self.metrics['validation_loss'].append(loss)
-
     def add_training_perplexity(self, perplexity):
         self.metrics['training_perplexity'].append(perplexity)
-
     def add_validation_perplexity(self, perplexity):
         self.metrics['validation_perplexity'].append(perplexity)
-
     def add_learning_rate(self, lr):
         self.metrics['learning_rate'].append(lr)
-
     def add_gradient_norm(self, grad_norm):
         self.metrics['gradient_norm'].append(grad_norm)
-
     def add_epoch_time(self, time_taken):
         self.metrics['epoch_times'].append(time_taken)
-
     def add_batch_loss(self, loss):
         self.metrics['batch_losses'].append(loss)
-
     def add_system_resources(self):
         # Сбор информации о системных ресурсах
         cpu_percent = psutil.cpu_percent(interval=1)
@@ -438,7 +408,6 @@ class MetricsCollector:
             'memory_percent': memory.percent,
             'memory_available_gb': memory.available / (1024**3)
         })
-
     def collect_weight_statistics(self, model):
         weight_stats = {}
         for name, param in model.named_parameters():
@@ -452,7 +421,6 @@ class MetricsCollector:
                 }
         self.metrics['weight_statistics'] = weight_stats
         return weight_stats
-
     def collect_gradient_norms(self, model):
         grad_norms = {}
         for name, param in model.named_parameters():
@@ -460,7 +428,6 @@ class MetricsCollector:
                 grad_norms[name] = param.grad.norm().item()
         self.metrics['grad_norm_by_layer'] = grad_norms
         return grad_norms
-
     def collect_attention_stats(self, attention_weights):
         if attention_weights and len(attention_weights) > 0:
             last_layer_attn = attention_weights[-1]
@@ -472,7 +439,6 @@ class MetricsCollector:
                     'min': last_layer_attn.min().item(),
                 }
                 self.metrics['attention_weights_stats'] = attn_stats
-
     def save_metrics(self, filename):
         filepath = os.path.join(METRICS_DIR, filename)
         serializable_metrics = {}
@@ -500,7 +466,6 @@ class MetricsCollector:
         with open(filepath, 'w', encoding='utf-8') as f:
             json.dump(serializable_metrics, f, indent=2, ensure_ascii=False)
         logger.info(f"Метрики сохранены в {filepath}")
-
     def plot_metrics(self, filename_prefix):
         try:
             plt.figure(figsize=(15, 10))
@@ -564,7 +529,6 @@ class MetricsCollector:
             logger.info(f"Графики метрик сохранены в {plot_path}")
         except Exception as e:
             logger.error(f"Ошибка при построении графиков: {e}")
-
 # ------------------
 # Продвинутые техники сэмплирования
 # ------------------
@@ -588,7 +552,6 @@ def advanced_sampling(logits, temperature=1.0, top_k=0, top_p=1.0, repetition_pe
             indices_to_remove[i, sorted_indices[i, sorted_indices_to_remove[i]]] = True
         logits[indices_to_remove] = float('-inf')
     return F.softmax(logits, dim=-1)
-
 # ------------------
 # Early Stopping
 # ------------------
@@ -599,7 +562,6 @@ class EarlyStopping:
         self.counter = 0
         self.best_loss = float('inf')
         self.early_stop = False
-
     def __call__(self, val_loss):
         if val_loss < self.best_loss - self.min_delta:
             self.best_loss = val_loss
@@ -609,7 +571,6 @@ class EarlyStopping:
             if self.counter >= self.patience:
                 self.early_stop = True
         return self.early_stop
-
 # ------------------
 # Label Smoothing Loss
 # ------------------
@@ -618,7 +579,6 @@ class LabelSmoothingLoss(nn.Module):
         super(LabelSmoothingLoss, self).__init__()
         self.confidence = 1.0 - smoothing
         self.smoothing = smoothing
-
     def forward(self, x, target):
         logprobs = F.log_softmax(x, dim=-1)
         nll_loss = -logprobs.gather(dim=-1, index=target.unsqueeze(1))
@@ -626,7 +586,6 @@ class LabelSmoothingLoss(nn.Module):
         smooth_loss = -logprobs.mean(dim=-1)
         loss = self.confidence * nll_loss + self.smoothing * smooth_loss
         return loss.mean()
-
 # ------------------
 # Gradient Noise
 # ------------------
@@ -636,7 +595,6 @@ def add_gradient_noise(optimizer, sigma=1e-3):
             if param.grad is not None:
                 noise = torch.randn_like(param.grad) * sigma
                 param.grad.add_(noise)
-
 # ------------------
 # Подготовка данных с tokenizers
 # ------------------
@@ -645,7 +603,6 @@ def train_tokenizer(files, vocab_size=30000, special_tokens=None):
         raise Exception("Поддержка tokenizers не доступна. Установите tokenizers")
     if special_tokens is None:
         special_tokens = ['<PAD>', '<UNK>', '<BOS>', '<EOS>']
-
     tokenizer = Tokenizer(BPE(unk_token='<UNK>'))
     tokenizer.pre_tokenizer = Whitespace()
     trainer = BpeTrainer(vocab_size=vocab_size, special_tokens=special_tokens, show_progress=True)
@@ -656,18 +613,15 @@ def train_tokenizer(files, vocab_size=30000, special_tokens=None):
         special_tokens=[("<BOS>", special_tokens.index("<BOS>")), ("<EOS>", special_tokens.index("<EOS>"))],
     )
     return tokenizer
-
 def tokenize_with_tokenizer(tokenizer, text):
     if not TOKENIZERS_SUPPORT:
         raise Exception("Поддержка tokenizers не доступна. Установите tokenizers")
     encoding = tokenizer.encode(text)
     return encoding.ids
-
 def detokenize_with_tokenizer(tokenizer, ids):
     if not TOKENIZERS_SUPPORT:
         raise Exception("Поддержка tokenizers не доступна. Установите tokenizers")
     return tokenizer.decode(ids)
-
 def load_text(file_path):
     logger.info(f"Попытка загрузки файла: {file_path}")
     if not os.path.exists(file_path):
@@ -686,7 +640,6 @@ def load_text(file_path):
     except Exception as e:
         logger.error(f"Ошибка при загрузке файла {file_path}: {e}")
         raise
-
 def load_txt_file(file_path):
     encodings = ['utf-8', 'windows-1251', 'cp1251', 'koi8-r', 'latin1']
     for encoding in encodings:
@@ -707,7 +660,6 @@ def load_txt_file(file_path):
         return text
     except Exception as e:
         raise Exception(f"Не удалось загрузить файл {file_path} ни с одной кодировкой: {e}")
-
 def load_docx_file(file_path):
     if not DOCX_SUPPORT:
         raise Exception("Поддержка DOCX файлов не доступна. Установите python-docx")
@@ -720,7 +672,6 @@ def load_docx_file(file_path):
         return text
     except Exception as e:
         raise Exception(f"Ошибка при загрузке DOCX файла {file_path}: {e}")
-
 def load_pdf_file(file_path):
     if not PDF_SUPPORT:
         raise Exception("Поддержка PDF файлов не доступна. Установите PyPDF2")
@@ -734,23 +685,20 @@ def load_pdf_file(file_path):
         return text
     except Exception as e:
         raise Exception(f"Ошибка при загрузке PDF файла {file_path}: {e}")
-
 def clean_text(text):
     original_length = len(text)
-    # Оставляем больше символов, включая знаки препинания и кириллицу
-    text = re.sub(r'[^\w\s\.\,\!\?\-\:\;\(\)\"\''\u0400-\u04FF]', ' ', text)
+    # Исправленная строка с корректным экранированием апострофа
+    text = re.sub(r'[^\w\s\.\,\!\?\-\:\;\(\)\"\\\'\u0400-\u04FF]', ' ', text)
     text = re.sub(r'\s+', ' ', text)
     text = re.sub(r'\n+', '\n', text)
     cleaned_length = len(text)
     logger.info(f"Текст очищен: {original_length} -> {cleaned_length} символов")
     return text.strip()
-
 def create_sequences_from_ids(ids, seq_length, stride=None):
     if stride is None:
         stride = seq_length // 2
     if len(ids) < seq_length + 1:
         raise ValueError(f"Текст слишком короткий. Минимальная длина: {seq_length + 1}, текущая: {len(ids)}")
-
     X, y = [], []
     for i in range(0, len(ids) - seq_length, stride):
         if i + seq_length + 1 <= len(ids):
@@ -758,7 +706,6 @@ def create_sequences_from_ids(ids, seq_length, stride=None):
             y.append(ids[i+1:i+seq_length+1])
     logger.info(f"Создано {len(X)} последовательностей длиной {seq_length} с шагом {stride}")
     return torch.tensor(X, dtype=torch.long), torch.tensor(y, dtype=torch.long)
-
 # ------------------
 # Управление моделями
 # ------------------
@@ -766,7 +713,6 @@ def get_model_files():
     model_files = glob.glob(os.path.join(MODELS_DIR, "gpt_model_*.pth"))
     model_files.sort(key=os.path.getctime, reverse=True)
     return model_files
-
 def cleanup_old_models():
     model_files = get_model_files()
     if len(model_files) > MAX_SAVED_MODELS:
@@ -777,7 +723,7 @@ def cleanup_old_models():
                 logger.info(f"Удалена старая модель: {os.path.basename(old_model)}")
             except Exception as e:
                 logger.error(f"Ошибка при удалении модели {old_model}: {e}")
-
+# Исправленная функция загрузки модели с weights_only=False
 def save_model_with_timestamp(model, tokenizer_path, vocab_size,
                             loss=0.0, token_type="bpe", perplexity=None,
                             training_config=None, metrics_collector=None, model_type="gpt"):
@@ -825,10 +771,10 @@ def save_model_with_timestamp(model, tokenizer_path, vocab_size,
     except Exception as e:
         logger.error(f"Ошибка при сохранении модели: {e}")
         return None
-
 def load_model_with_dicts(model_path, device):
     try:
-        checkpoint = torch.load(model_path, map_location=device)
+        # Установка weights_only=False для совместимости с PyTorch 2.6+
+        checkpoint = torch.load(model_path, map_location=device, weights_only=False)
         model_config = checkpoint.get('model_config', {})
         model_type = checkpoint.get('model_type', 'gpt')
         if model_type == 'gpt':
@@ -863,7 +809,6 @@ def load_model_with_dicts(model_path, device):
     except Exception as e:
         logger.error(f"Ошибка при загрузке модели {model_path}: {e}")
         return None, None, None, None, None, None, None
-
 def list_available_models():
     model_files = get_model_files()
     if not model_files:
@@ -872,7 +817,8 @@ def list_available_models():
     print("\nДоступные модели:")
     for i, model_file in enumerate(model_files):
         try:
-            checkpoint = torch.load(model_file, map_location='cpu')
+            # Установка weights_only=False для совместимости с PyTorch 2.6+
+            checkpoint = torch.load(model_file, map_location='cpu', weights_only=False)
             timestamp = checkpoint.get('timestamp', 'unknown')
             loss = checkpoint.get('loss', 0.0)
             vocab_size = checkpoint.get('vocab_size', 0)
@@ -885,7 +831,6 @@ def list_available_models():
         except Exception as e:
             print(f"{i+1}. {os.path.basename(model_file)} (ошибка чтения: {e})")
     return model_files
-
 # ------------------
 # Определение профиля устройства
 # ------------------
@@ -921,7 +866,6 @@ def detect_hardware_profile():
         else: # Меньше 8 ГБ
              profile["profile_name"] = "low_memory_cpu"
     return profile
-
 # ------------------
 # Расчет перплексии
 # ------------------
@@ -939,7 +883,6 @@ def calculate_perplexity(model, data_loader, device, criterion):
     avg_loss = total_loss / total_samples
     perplexity = np.exp(avg_loss)
     return perplexity
-
 # ------------------
 # Генерация текста
 # ------------------
@@ -979,7 +922,6 @@ def generate_text(model, tokenizer, start_tokens,
         generated_text = detokenize_with_tokenizer(tokenizer, generated_tokens)
         logger.info(f"Генерация завершена, сгенерировано {len(generated_tokens)} токенов")
         return start_tokens + generated_text
-
 # ------------------
 # Обучение с улучшенной обработкой ошибок
 # ------------------
@@ -1021,7 +963,6 @@ def train_model(model, train_loader, val_loader, criterion, optimizer, epochs, d
                 pass
         scaler = DummyScaler()
         logger.info("AMP отключен. Используется стандартная точность.")
-
     early_stopping = EarlyStopping(patience=5, min_delta=0.001)
     scheduler = optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=epochs, eta_min=1e-6)
     best_loss = float('inf')
@@ -1041,7 +982,7 @@ def train_model(model, train_loader, val_loader, criterion, optimizer, epochs, d
                     x_batch, y_batch = x_batch.to(device), y_batch.to(device)
                     optimizer.zero_grad()
                     # Используем autocast для AMP
-                    with autocast(enabled=use_amp):
+                    with autocast(device_type=device.type, enabled=use_amp):
                         output, attention_weights = model(x_batch)
                         loss = criterion(output.reshape(-1, output.size(-1)), y_batch.reshape(-1))
                     scaled_loss = scaler.scale(loss)
@@ -1079,7 +1020,7 @@ def train_model(model, train_loader, val_loader, criterion, optimizer, epochs, d
                 for x_batch, y_batch in val_loader:
                     try:
                         x_batch, y_batch = x_batch.to(device), y_batch.to(device)
-                        with autocast(enabled=use_amp): # AMP и для валидации
+                        with autocast(device_type=device.type, enabled=use_amp): # AMP и для валидации
                             output, _ = model(x_batch)
                             loss = criterion(output.reshape(-1, output.size(-1)), y_batch.reshape(-1))
                         val_loss += loss.item() * x_batch.size(0) * x_batch.size(1)
@@ -1143,7 +1084,6 @@ def train_model(model, train_loader, val_loader, criterion, optimizer, epochs, d
     metrics_collector.save_metrics(f"final_metrics_{final_timestamp}.json")
     metrics_collector.plot_metrics(f"final_metrics_{final_timestamp}")
     return best_model_path, metrics_collector
-
 # ------------------
 # Чат с ассистентом Sin
 # ------------------
@@ -1160,12 +1100,10 @@ def chat_with_sin(model, tokenizer, device):
             if user_input.lower() in ['/exit', '/quit']:
                 print(f"{ASSISTANT_NAME}: До скорой встречи!")
                 break
-
             # Формирование контекста (простой вариант)
             # В реальном приложении здесь может быть более сложная логика
             # управления историей диалога, например, обрезка до последних N сообщений
             context = f"{conversation_history}Пользователь: {user_input}\n{ASSISTANT_NAME}:"
-
             print(f"{ASSISTANT_NAME}: ", end='', flush=True)
             try:
                 # Генерация ответа
@@ -1188,9 +1126,7 @@ def chat_with_sin(model, tokenizer, device):
                          response = response[:response_end].strip()
                 else:
                      response = generated[len(context):].strip()
-
                 print(response)
-
                 # Обновление истории
                 conversation_history += f"Пользователь: {user_input}\n{ASSISTANT_NAME}: {response}\n"
                 # Простая обрезка истории для предотвращения переполнения контекста
@@ -1198,11 +1134,9 @@ def chat_with_sin(model, tokenizer, device):
                     lines = conversation_history.splitlines()
                     if len(lines) > 10: # Оставляем последние N строк
                         conversation_history = "\n".join(lines[-10:]) + "\n"
-
             except Exception as e:
                 logger.error(f"Ошибка при генерации ответа: {e}")
                 print(f"{ASSISTANT_NAME}: Извините, произошла ошибка при генерации ответа.")
-
 # ------------------
 # Интерактивный режим
 # ------------------
@@ -1218,6 +1152,7 @@ def interactive_mode():
     current_perplexity = None
     current_weight_stats = {}
     current_training_config = {}
+    
     print("\n" + "="*80)
     print(f"🤖 Современный генеративный ИИ '{ASSISTANT_NAME}' с GPT-архитектурой (оптимизированная версия)")
     print("="*80)
@@ -1237,6 +1172,72 @@ def interactive_mode():
     print("  chat         - Начать чат с ассистентом Sin")
     print("  quit         - Выход")
     print("="*80)
+    
+    # --- Автозагрузка последней модели ---
+    try:
+        model_files = get_model_files()
+        if model_files:
+            logger.info(f"Найдено {len(model_files)} сохраненных моделей. Попытка автозагрузки последней...")
+            for i, latest_model_path in enumerate(model_files): # Цикл для повторных попыток
+                model_basename = os.path.basename(latest_model_path)
+                logger.info(f"Попытка загрузки модели {i+1}/{len(model_files)}: {model_basename}")
+                try:
+                    loaded_model, loaded_tokenizer_path, loaded_token_type, loaded_model_type, loaded_perplexity, loaded_weight_stats, loaded_training_config = load_model_with_dicts(latest_model_path, device)
+                    if loaded_model is not None:
+                        current_model = loaded_model
+                        current_tokenizer_path = loaded_tokenizer_path
+                        current_token_type = loaded_token_type
+                        current_model_type = loaded_model_type
+                        current_perplexity = loaded_perplexity
+                        current_weight_stats = loaded_weight_stats
+                        current_training_config = loaded_training_config
+                        
+                        vocab_size_from_checkpoint = loaded_training_config.get('vocab_size', 0)
+                        
+                        # Попытка загрузить токенайзер
+                        tokenizer_loaded_successfully = False
+                        if current_tokenizer_path and os.path.exists(current_tokenizer_path) and TOKENIZERS_SUPPORT:
+                            try:
+                                current_tokenizer = Tokenizer.from_file(current_tokenizer_path)
+                                vocab_size = current_tokenizer.get_vocab_size() if hasattr(current_tokenizer, 'get_vocab_size') else vocab_size_from_checkpoint
+                                # Простая проверка работоспособности токенайзера
+                                test_text = "проверка"
+                                test_ids = tokenize_with_tokenizer(current_tokenizer, test_text)
+                                test_decoded = detokenize_with_tokenizer(current_tokenizer, test_ids[:3]) # Декодируем часть для проверки
+                                logger.info(f"✅ Токенайзер успешно загружен и протестирован.")
+                                tokenizer_loaded_successfully = True
+                            except Exception as tok_e:
+                                logger.warning(f"⚠️ Ошибка при тестировании загруженного токенайзера из {current_tokenizer_path}: {tok_e}")
+                                current_tokenizer = None
+                        elif current_tokenizer_path and not os.path.exists(current_tokenizer_path):
+                            logger.warning(f"⚠️ Файл токенайзера не найден по указанному пути: {current_tokenizer_path}")
+                        elif current_tokenizer_path and not TOKENIZERS_SUPPORT:
+                            logger.warning(f"⚠️ Библиотека tokenizers не доступна для загрузки токенайзера.")
+                        
+                        if not tokenizer_loaded_successfully:
+                            logger.warning(f"⚠️ Токенайзер для модели {model_basename} не доступен или не работает. Будет использован vocab_size из чекпоинта.")
+                            current_tokenizer = None
+                            vocab_size = vocab_size_from_checkpoint
+                        
+                        logger.info(f"✅ Модель успешно автозагружена из {model_basename}")
+                        if current_perplexity is not None:
+                            logger.info(f"   Perplexity модели: {current_perplexity:.2f}")
+                        logger.info(f"   Vocabulary size: {vocab_size}")
+                        print(f"✅ Автозагружена модель: {model_basename}" + (f" (Perplexity: {current_perplexity:.2f})" if current_perplexity is not None else ""))
+                        break # Успешная загрузка, выходим из цикла попыток
+                    else:
+                        logger.warning(f"❌ Не удалось загрузить модель из {model_basename} (load_model_with_dicts вернул None)")
+                except Exception as model_e:
+                    logger.error(f"❌ Ошибка при загрузке модели {model_basename}: {model_e}")
+                    if i == len(model_files) - 1: # Если это была последняя попытка
+                        logger.error("Не удалось загрузить ни одну из доступных моделей.")
+                    continue # Пробуем следующую модель в списке
+        else:
+            logger.info("Нет сохраненных моделей для автозагрузки.")
+    except Exception as e:
+        logger.error(f"Неожиданная ошибка при попытке автозагрузки модели: {e}")
+    # --- Конец автозагрузки ---
+
     while True:
         try:
             command = input("\nВведите команду: ").strip().lower()
@@ -1312,7 +1313,6 @@ def interactive_mode():
                     if token_type != "bpe":
                         print("⚠️  В этой версии поддерживается только 'bpe' с tokenizers.")
                         token_type = "bpe"
-
                     # Запрос параметров обучения с адаптивными значениями по умолчанию
                     try:
                         epochs = int(input(f"Количество эпох (по умолчанию {adaptive_config['epochs']}): ") or str(adaptive_config['epochs']))
@@ -1335,7 +1335,6 @@ def interactive_mode():
                         vocab_size_input = max(1000, vocab_size_input)
                     except ValueError:
                         vocab_size_input = 30000
-
                     print("🔄 Загрузка текста...")
                     text = load_text(file_path)
                     text = clean_text(text)
@@ -1351,14 +1350,12 @@ def interactive_mode():
                     current_tokenizer_path = temp_tokenizer_file
                     vocab_size = current_tokenizer.get_vocab_size()
                     print(f"✅ Токенайзер обучен. Размер словаря: {vocab_size}")
-
                     print("🔄 Токенизация текста...")
                     token_ids = tokenize_with_tokenizer(current_tokenizer, text)
                     print(f"Текст токенизирован: {len(token_ids)} токенов")
                     if len(token_ids) < seq_length:
                         print("❌ Текст слишком короткий для обучения")
                         continue
-
                     X, y = create_sequences_from_ids(token_ids, seq_length)
                     if len(X) == 0:
                         print("❌ Недостаточно данных для обучения")
@@ -1449,7 +1446,7 @@ def interactive_mode():
                             current_perplexity = loaded_perplexity
                             current_weight_stats = loaded_weight_stats
                             current_training_config = loaded_training_config
-                            checkpoint = torch.load(model_path, map_location=device)
+                            checkpoint = torch.load(model_path, map_location=device, weights_only=False) # Исправлено
                             vocab_size = checkpoint.get('vocab_size', 0) # Получаем из чекпойнта
                             print(f"✅ Модель загружена из {os.path.basename(model_path)}")
                             print(f"   Тип токенизации: {current_token_type}")
@@ -1541,7 +1538,6 @@ def interactive_mode():
             import traceback
             logger.error(traceback.format_exc())
             print(f"❌ Неожиданная ошибка: {e}")
-
 if __name__ == "__main__":
     print(f"🤖 Современный генеративный ИИ '{ASSISTANT_NAME}' с GPT-архитектурой (оптимизированная версия)")
     print("Поддерживаемые форматы файлов: .txt, .docx, .pdf")
