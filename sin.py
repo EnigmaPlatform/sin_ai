@@ -973,8 +973,7 @@ def process_json_to_dialogue_text(json_data):
         except Exception as e:
             logger.warning(f"Ошибка при обработке записи JSON {item}: {e}")
             continue
-    combined_text = "
-".join(dialogue_texts)
+    combined_text = "\n".join(dialogue_texts) 
     logger.info(f"Преобразование JSON завершено. Обработано {len(dialogue_texts)} диалогов. Общий размер текста: {len(combined_text)} символов.")
     return combined_text
 
