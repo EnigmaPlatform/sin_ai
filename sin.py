@@ -27,6 +27,7 @@ import gc     # Для ручной очистки памяти
 import requests
 from bs4 import BeautifulSoup
 from urllib.parse import urlparse
+import shutil # Для копирования файлов токенизатора
 # Установите psutil: pip install psutil
 # Для работы с DOCX файлами
 try:
@@ -53,17 +54,6 @@ try:
 except ImportError:
     TOKENIZERS_SUPPORT = False
     print("⚠️  tokenizers не установлен. Установите его для поддержки BPE: pip install tokenizers")
-
-# --- Импорты для QAT ---
-try:
-    import torch.quantization as quantization
-    import torch.nn.quantized as nnq
-    QAT_SUPPORT = True
-except ImportError:
-    QAT_SUPPORT = False
-    print("⚠️  PyTorch QAT не доступен или не поддерживается в этой версии PyTorch.")
-# -----------------------
-
 # --- Новый базовый путь ---
 BASE_DIR = r"C:\Users\User\Downloads"
 # --------------------------
@@ -124,9 +114,7 @@ ADAPTIVE_CONFIGS = {
         "learning_rate": 3e-4,
         "token_type": "bpe",
         "gradient_clipping": 1.0, # Добавлен параметр нормализации градиентов
-        "gradient_noise_sigma": 1e-3, # Добавлен параметр шума градиента
-        "use_qat": False, # QAT по умолчанию выключен для высокопроизводительных GPU
-        "qat_start_epoch": 5 # Эпоха начала QAT, если включено
+        "gradient_noise_sigma": 1e-3 # Добавлен параметр шума градиента
     },
     "mid_end_gpu": {
         "seq_length": 256,
@@ -140,9 +128,7 @@ ADAPTIVE_CONFIGS = {
         "learning_rate": 3e-4,
         "token_type": "bpe",
         "gradient_clipping": 1.0,
-        "gradient_noise_sigma": 1e-3,
-        "use_qat": False,
-        "qat_start_epoch": 5
+        "gradient_noise_sigma": 1e-3
     },
     "low_end_gpu": {
         "seq_length": 128,
@@ -156,9 +142,7 @@ ADAPTIVE_CONFIGS = {
         "learning_rate": 3e-4,
         "token_type": "bpe",
         "gradient_clipping": 1.0,
-        "gradient_noise_sigma": 1e-3,
-        "use_qat": True, # QAT может быть полезен для уменьшения размера модели на слабом GPU
-        "qat_start_epoch": 3
+        "gradient_noise_sigma": 1e-3
     },
     "high_memory_cpu": {
         "seq_length": 256,
@@ -172,9 +156,7 @@ ADAPTIVE_CONFIGS = {
         "learning_rate": 3e-4,
         "token_type": "bpe",
         "gradient_clipping": 1.0,
-        "gradient_noise_sigma": 1e-3,
-        "use_qat": True, # QAT может быть полезен для уменьшения размера модели на CPU
-        "qat_start_epoch": 3
+        "gradient_noise_sigma": 1e-3
     },
     "mid_memory_cpu": {
         "seq_length": 128,
@@ -188,9 +170,7 @@ ADAPTIVE_CONFIGS = {
         "learning_rate": 3e-4,
         "token_type": "bpe",
         "gradient_clipping": 1.0,
-        "gradient_noise_sigma": 1e-3,
-        "use_qat": True,
-        "qat_start_epoch": 2
+        "gradient_noise_sigma": 1e-3
     },
     # --- Обновленная конфигурация для CPU с увеличенными параметрами ---
     "low_memory_cpu": {
@@ -205,9 +185,7 @@ ADAPTIVE_CONFIGS = {
         "learning_rate": 3e-4,
         "token_type": "bpe",
         "gradient_clipping": 1.0,
-        "gradient_noise_sigma": 1e-3,
-        "use_qat": True, # QAT особенно полезен для слабых CPU
-        "qat_start_epoch": 1
+        "gradient_noise_sigma": 1e-3
     },
     # --- Новая конфигурация для экспериментов с очень глубокими моделями ---
     "deep_model_experiment": {
@@ -222,9 +200,7 @@ ADAPTIVE_CONFIGS = {
         "learning_rate": 1e-4, # Может потребоваться меньший LR
         "token_type": "bpe",
         "gradient_clipping": 0.5, # Более агрессивная нормализация
-        "gradient_noise_sigma": 1e-4, # Меньший шум
-        "use_qat": True, # Может помочь с размером очень глубокой модели
-        "qat_start_epoch": 5
+        "gradient_noise_sigma": 1e-4 # Меньший шум
     }
     # ------------------------------------------------------------
 }
@@ -278,13 +254,12 @@ def apply_rotary_pos_emb(q, k, cos, sin):
 # ------------------
 class MultiHeadAttention(nn.Module):
     """Многоголовое самовнимание с RoPE."""
-    def __init__(self, hidden_size, num_heads, dropout=0.1, quantize=False):
+    def __init__(self, hidden_size, num_heads, dropout=0.1):
         super().__init__()
         self.hidden_size = hidden_size
         self.num_heads = num_heads
         self.head_dim = hidden_size // num_heads
         self.dropout = dropout
-        self.quantize = quantize # Флаг для QAT
         assert self.head_dim * num_heads == hidden_size, "hidden_size must be divisible by num_heads"
         self.q_proj = nn.Linear(hidden_size, hidden_size)
         self.k_proj = nn.Linear(hidden_size, hidden_size)
@@ -292,15 +267,6 @@ class MultiHeadAttention(nn.Module):
         self.o_proj = nn.Linear(hidden_size, hidden_size)
         self.dropout_layer = nn.Dropout(dropout)
         self.rotary_emb = RotaryPositionalEmbedding(self.head_dim)
-        
-        # --- Поддержка QAT ---
-        if self.quantize:
-            self.q_proj.qconfig = quantization.get_default_qat_qconfig('fbgemm')
-            self.k_proj.qconfig = quantization.get_default_qat_qconfig('fbgemm')
-            self.v_proj.qconfig = quantization.get_default_qat_qconfig('fbgemm')
-            self.o_proj.qconfig = quantization.get_default_qat_qconfig('fbgemm')
-        # --------------------
-
     def forward(self, x, attention_mask=None, position_ids=None):
         batch_size, seq_length, _ = x.shape
         # Project to query, key, value
@@ -335,19 +301,11 @@ class MultiHeadAttention(nn.Module):
 # ------------------
 class FeedForward(nn.Module):
     """Feed-Forward Network."""
-    def __init__(self, hidden_size, ff_hidden_size, dropout=0.1, quantize=False):
+    def __init__(self, hidden_size, ff_hidden_size, dropout=0.1):
         super().__init__()
-        self.quantize = quantize # Флаг для QAT
         self.linear1 = nn.Linear(hidden_size, ff_hidden_size)
         self.linear2 = nn.Linear(ff_hidden_size, hidden_size)
         self.dropout = nn.Dropout(dropout)
-        
-        # --- Поддержка QAT ---
-        if self.quantize:
-            self.linear1.qconfig = quantization.get_default_qat_qconfig('fbgemm')
-            self.linear2.qconfig = quantization.get_default_qat_qconfig('fbgemm')
-        # --------------------
-
     def forward(self, x):
         x = self.linear1(x)
         x = F.gelu(x)
@@ -360,16 +318,14 @@ class FeedForward(nn.Module):
 # ------------------
 class TransformerBlock(nn.Module):
     """Блок трансформера с остаточными связями."""
-    def __init__(self, hidden_size, num_heads, ff_hidden_size, dropout=0.1, quantize=False):
+    def __init__(self, hidden_size, num_heads, ff_hidden_size, dropout=0.1):
         super().__init__()
-        self.quantize = quantize # Флаг для QAT
-        self.attention = MultiHeadAttention(hidden_size, num_heads, dropout, quantize=quantize)
-        self.ffn = FeedForward(hidden_size, ff_hidden_size, dropout, quantize=quantize)
+        self.attention = MultiHeadAttention(hidden_size, num_heads, dropout)
+        self.ffn = FeedForward(hidden_size, ff_hidden_size, dropout)
         self.ln1 = LayerNorm(hidden_size)
         self.ln2 = LayerNorm(hidden_size)
         self.dropout1 = nn.Dropout(dropout)
         self.dropout2 = nn.Dropout(dropout)
-
     def forward(self, x, attention_mask=None, position_ids=None):
         # Self-attention with residual connection
         attn_output, attn_weights = self.attention(self.ln1(x), attention_mask, position_ids)
@@ -384,9 +340,8 @@ class TransformerBlock(nn.Module):
 class ModernGPT(nn.Module):
     """Современная GPT-Style модель с RoPE и LayerNorm."""
     def __init__(self, vocab_size, hidden_size=512, num_layers=6, num_heads=8,
-                 ff_hidden_size=2048, max_seq_length=512, dropout=0.1, quantize=False):
+                 ff_hidden_size=2048, max_seq_length=512, dropout=0.1):
         super().__init__()
-        self.quantize = quantize # Флаг для QAT
         self.hidden_size = hidden_size
         self.num_layers = num_layers
         self.max_seq_length = max_seq_length
@@ -394,7 +349,7 @@ class ModernGPT(nn.Module):
         self.token_embedding = nn.Embedding(vocab_size, hidden_size)
         # Transformer blocks
         self.blocks = nn.ModuleList([
-            TransformerBlock(hidden_size, num_heads, ff_hidden_size, dropout, quantize=quantize)
+            TransformerBlock(hidden_size, num_heads, ff_hidden_size, dropout)
             for _ in range(num_layers)
         ])
         # Final layer normalization
@@ -405,14 +360,6 @@ class ModernGPT(nn.Module):
         self.lm_head.weight = self.token_embedding.weight
         # Initialize weights
         self._init_weights()
-        
-        # --- Поддержка QAT ---
-        if self.quantize:
-            self.token_embedding.qconfig = quantization.get_default_qat_qconfig('fbgemm')
-            self.lm_head.qconfig = quantization.get_default_qat_qconfig('fbgemm')
-            self.ln_f.qconfig = quantization.get_default_qat_qconfig('fbgemm')
-        # --------------------
-
     def _init_weights(self):
         for module in self.modules():
             if isinstance(module, nn.Linear):
@@ -466,7 +413,6 @@ class ModernGPT(nn.Module):
         info += f"  Max sequence length: {self.max_seq_length}\n"
         info += f"  Parameters: {sum(p.numel() for p in self.parameters()):,}\n"
         info += f"  Trainable parameters: {sum(p.numel() for p in self.parameters() if p.requires_grad):,}"
-        info += f"  Quantized (QAT): {self.quantize}"
         return info
 # ------------------
 # IterableDataset для потоковой обработки (улучшенная реализация worker split)
@@ -515,7 +461,7 @@ class StreamingTextIterableDataset(torch.utils.data.IterableDataset):
             # Это усложняет логику, но обеспечивает паралелизм.
             # Делим файл на равные части по количеству воркеров.
             # Это может привести к разрыву последовательностей на границах,
-            # но это приемлемый компромисс для потокового обучения.
+            # но это приемлемый компромисс для потоковой обработки.
             logger.info(f"StreamingTextIterableDataset: Worker {worker_info.id} of {worker_info.num_workers}")
             per_worker = int(math.ceil(file_size / float(worker_info.num_workers)))
             start_offset = worker_info.id * per_worker
@@ -589,8 +535,7 @@ class MetricsCollector:
             'weight_statistics': {},
             'grad_norm_by_layer': {},
             'attention_weights_stats': {},
-            'system_resources': [],
-            'qat_status': [] # Новая метрика для отслеживания статуса QAT
+            'system_resources': []
         }
     def add_training_loss(self, loss):
         self.metrics['training_loss'].append(loss)
@@ -616,12 +561,6 @@ class MetricsCollector:
             'cpu_percent': cpu_percent,
             'memory_percent': memory.percent,
             'memory_available_gb': memory.available / (1024**3)
-        })
-    def add_qat_status(self, is_qat_active, epoch):
-        """Добавление статуса QAT."""
-        self.metrics['qat_status'].append({
-            'epoch': epoch,
-            'is_active': is_qat_active
         })
     def collect_weight_statistics(self, model):
         weight_stats = {}
@@ -683,8 +622,8 @@ class MetricsCollector:
         logger.info(f"Метрики сохранены в {filepath}")
     def plot_metrics(self, filename_prefix):
         try:
-            plt.figure(figsize=(15, 12)) # Увеличил высоту для нового графика
-            plt.subplot(2, 4, 1) # Изменил на 2x4 сетку
+            plt.figure(figsize=(15, 10))
+            plt.subplot(2, 3, 1)
             if self.metrics['training_loss']:
                 plt.plot(self.metrics['training_loss'], label='Training Loss')
             if self.metrics['validation_loss']:
@@ -694,7 +633,7 @@ class MetricsCollector:
             plt.title('Training and Validation Loss')
             plt.legend()
             plt.grid(True)
-            plt.subplot(2, 4, 2)
+            plt.subplot(2, 3, 2)
             if self.metrics['training_perplexity']:
                 plt.plot(self.metrics['training_perplexity'], label='Training Perplexity')
             if self.metrics['validation_perplexity']:
@@ -704,7 +643,7 @@ class MetricsCollector:
             plt.title('Training and Validation Perplexity')
             plt.legend()
             plt.grid(True)
-            plt.subplot(2, 4, 3)
+            plt.subplot(2, 3, 3)
             if self.metrics['learning_rate']:
                 plt.plot(self.metrics['learning_rate'], label='Learning Rate')
             plt.xlabel('Epoch')
@@ -712,7 +651,7 @@ class MetricsCollector:
             plt.title('Learning Rate Schedule')
             plt.legend()
             plt.grid(True)
-            plt.subplot(2, 4, 4)
+            plt.subplot(2, 3, 4)
             if self.metrics['gradient_norm']:
                 plt.plot(self.metrics['gradient_norm'], label='Gradient Norm')
             plt.xlabel('Epoch')
@@ -720,7 +659,7 @@ class MetricsCollector:
             plt.title('Gradient Norm')
             plt.legend()
             plt.grid(True)
-            plt.subplot(2, 4, 5)
+            plt.subplot(2, 3, 5)
             if self.metrics['epoch_times']:
                 plt.plot(self.metrics['epoch_times'], label='Epoch Time')
             plt.xlabel('Epoch')
@@ -728,7 +667,7 @@ class MetricsCollector:
             plt.title('Training Time per Epoch')
             plt.legend()
             plt.grid(True)
-            plt.subplot(2, 4, 6)
+            plt.subplot(2, 3, 6)
             if self.metrics['batch_losses'] and len(self.metrics['batch_losses']) > 10:
                 recent_losses = self.metrics['batch_losses'][-100:]
                 plt.plot(recent_losses, label='Recent Batch Losses')
@@ -737,19 +676,6 @@ class MetricsCollector:
                 plt.title('Recent Batch Losses')
                 plt.legend()
                 plt.grid(True)
-            # --- Новый график для QAT ---
-            plt.subplot(2, 4, 7)
-            if self.metrics['qat_status']:
-                epochs = [s['epoch'] for s in self.metrics['qat_status']]
-                is_active = [int(s['is_active']) for s in self.metrics['qat_status']]
-                plt.plot(epochs, is_active, 'o-', label='QAT Active')
-                plt.xlabel('Epoch')
-                plt.ylabel('Active (1=True, 0=False)')
-                plt.title('QAT Activation Status')
-                plt.yticks([0, 1], ['False', 'True'])
-                plt.legend()
-                plt.grid(True)
-            # --------------------------
             plt.tight_layout()
             plot_path = os.path.join(METRICS_DIR, f"{filename_prefix}_metrics.png")
             plt.savefig(plot_path, dpi=300, bbox_inches='tight')
@@ -854,7 +780,7 @@ def train_tokenizer(files, vocab_size=30000, special_tokens=None):
     # )
     return tokenizer
 def tokenize_with_tokenizer(tokenizer, text):
-    """Токенизация текста с помощью обученного токенайзера."""
+    """Токенизация текста с помощью обученного токенизатора."""
     if not TOKENIZERS_SUPPORT:
         raise Exception("Поддержка tokenizers не доступна. Установите tokenizers")
     encoding = tokenizer.encode(text)
@@ -1156,8 +1082,7 @@ def save_model_with_timestamp(model, tokenizer_path, vocab_size,
                 'num_heads': getattr(model, 'blocks', [None])[0].attention.num_heads if hasattr(model, 'blocks') and len(model.blocks) > 0 else 8,
                 'ff_hidden_size': getattr(model, 'blocks', [None])[0].ffn.linear1.out_features if hasattr(model, 'blocks') and len(model.blocks) > 0 else 2048,
                 'dropout': getattr(model, 'blocks', [None])[0].dropout1.p if hasattr(model, 'blocks') and len(model.blocks) > 0 else 0.1,
-                'model_type': type(model).__name__,
-                'quantize': getattr(model, 'quantize', False) # Сохраняем информацию о квантовании
+                'model_type': type(model).__name__
             }
         }, model_path)
         logger.info(f"Модель сохранена: {model_path}")
@@ -1177,8 +1102,6 @@ def load_model_with_dicts(model_path, device):
         checkpoint = torch.load(model_path, map_location=device, weights_only=False)
         model_config = checkpoint.get('model_config', {})
         model_type = checkpoint.get('model_type', 'gpt')
-        # --- Загрузка модели с учетом квантования ---
-        quantize_flag = model_config.get('quantize', False)
         if model_type == 'gpt':
             model = ModernGPT(
                 checkpoint['vocab_size'],
@@ -1186,25 +1109,17 @@ def load_model_with_dicts(model_path, device):
                 model_config.get('num_layers', 6),
                 model_config.get('num_heads', 8),
                 model_config.get('ff_hidden_size', 2048),
-                dropout=model_config.get('dropout', 0.1),
-                quantize=quantize_flag # Передаем флаг квантования
+                dropout=model_config.get('dropout', 0.1)
             )
         else:
-            # fallback, если тип модели неизвестен
             model = ModernGPT(
                 checkpoint['vocab_size'],
                 model_config.get('hidden_size', 512),
                 model_config.get('num_layers', 6),
                 model_config.get('num_heads', 8),
                 model_config.get('ff_hidden_size', 2048),
-                dropout=model_config.get('dropout', 0.1),
-                quantize=quantize_flag
+                dropout=model_config.get('dropout', 0.1)
             )
-        # Если модель была квантована, преобразуем её перед загрузкой весов
-        if quantize_flag:
-            logger.info("Преобразование модели в квантованную форму перед загрузкой весов...")
-            model = quantization.prepare_qat(model, inplace=False)
-        # -------------------------------
         model.load_state_dict(checkpoint['model_state_dict'])
         tokenizer_path = checkpoint.get('tokenizer_path', None)
         timestamp = checkpoint.get('timestamp', 'unknown')
@@ -1236,11 +1151,9 @@ def list_available_models():
             token_type = checkpoint.get('token_type', 'bpe')
             model_type = checkpoint.get('model_type', 'gpt')
             perplexity = checkpoint.get('perplexity', 'N/A')
-            model_config = checkpoint.get('model_config', {})
-            quantized = model_config.get('quantize', False)
             print(f"{i+1}. {os.path.basename(model_file)}")
             print(f"   Дата: {timestamp}, Loss: {loss:.4f}, Perplexity: {perplexity}")
-            print(f"   Vocab: {vocab_size}, Type: {token_type}, Model: {model_type}, Quantized: {quantized}")
+            print(f"   Vocab: {vocab_size}, Type: {token_type}, Model: {model_type}")
         except Exception as e:
             print(f"{i+1}. {os.path.basename(model_file)} (ошибка чтения: {e})")
     return model_files
@@ -1415,8 +1328,7 @@ def chat_with_sin(model, tokenizer, device):
 def train_model(model, train_loader, val_loader, criterion, optimizer, epochs, device,
                 tokenizer_path, vocab_size, token_type="bpe",
                 learning_rate=DEFAULT_LEARNING_RATE, model_type="gpt",
-                gradient_clipping=1.0, gradient_noise_sigma=1e-3,
-                use_qat=False, qat_start_epoch=5): # Новые параметры для QAT
+                gradient_clipping=1.0, gradient_noise_sigma=1e-3): # Новые параметры
     """Обучение модели."""
     logger.info(f"Начало обучения модели на устройстве {device}")
     logger.info(f"Параметры обучения: epochs={epochs}, batch_size={train_loader.batch_size}")
@@ -1433,24 +1345,10 @@ def train_model(model, train_loader, val_loader, criterion, optimizer, epochs, d
         'model_parameters': sum(p.numel() for p in model.parameters()),
         'trainable_parameters': sum(p.numel() for p in model.parameters() if p.requires_grad),
         'gradient_clipping': gradient_clipping, # Сохраняем параметры
-        'gradient_noise_sigma': gradient_noise_sigma,
-        'use_qat': use_qat, # Сохраняем параметры QAT
-        'qat_start_epoch': qat_start_epoch
+        'gradient_noise_sigma': gradient_noise_sigma
     }
     model.to(device)
     model.train()
-    # --- Подготовка QAT ---
-    qat_active = False
-    if use_qat and QAT_SUPPORT:
-        logger.info("QAT подготовлен, но будет активирован позже.")
-        # Подготовка модели к QAT (это не активирует квантование сразу)
-        # Это необходимо сделать до начала обучения.
-        model = quantization.prepare_qat(model, inplace=True)
-        logger.info("Модель подготовлена к QAT (prepare_qat).")
-    elif use_qat and not QAT_SUPPORT:
-        logger.warning("QAT запрошен, но не поддерживается в этой среде.")
-        use_qat = False # Отключаем QAT, если он не поддерживается
-    # ---------------------
     # Условное использование GradScaler для AMP
     use_amp = device.type == 'cuda' and torch.cuda.is_available()
     if use_amp:
@@ -1478,17 +1376,6 @@ def train_model(model, train_loader, val_loader, criterion, optimizer, epochs, d
     try:
         for epoch in range(epochs):
             epoch_start_time = time.time()
-            # --- Активация QAT ---
-            if use_qat and not qat_active and epoch >= qat_start_epoch:
-                logger.info(f"Активация QAT на эпохе {epoch+1}")
-                # model.apply(torch.quantization.enable_observer)
-                # model.apply(torch.quantization.enable_fake_quant)
-                qat_active = True
-                # После активации QAT, LR может потребоваться уменьшить
-                # for param_group in optimizer.param_groups:
-                #     param_group['lr'] = param_group['lr'] * 0.1
-                # logger.info("Скорость обучения уменьшена в 10 раз после активации QAT.")
-            # ---------------------
             total_loss = 0
             total_batches = 0 # Будем считать динамически
             logger.info(f"Эпоха {epoch+1}/{epochs} начата")
@@ -1584,12 +1471,10 @@ def train_model(model, train_loader, val_loader, criterion, optimizer, epochs, d
             metrics_collector.add_gradient_norm(grad_norm.item() if isinstance(grad_norm, torch.Tensor) else float(grad_norm))
             metrics_collector.add_epoch_time(epoch_time)
             metrics_collector.collect_gradient_norms(model)
-            metrics_collector.add_qat_status(qat_active, epoch+1) # Добавляем статус QAT
             logger.info(f"Эпоха {epoch+1}/{epochs} завершена за {epoch_time:.2f} сек")
             logger.info(f"  Train Loss: {avg_train_loss:.4f}, Val Loss: {val_loss:.4f}")
             logger.info(f"  Train Perplexity: {train_perplexity:.4f}, Val Perplexity: {val_perplexity:.4f}")
             logger.info(f"  Learning Rate: {current_lr:.6f}, Gradient Norm: {grad_norm:.4f}")
-            logger.info(f"  QAT Active: {qat_active}")
             # Early stopping check
             if early_stopping(val_loss):
                 logger.info(f"Early stopping на эпохе {epoch+1}")
@@ -1599,8 +1484,28 @@ def train_model(model, train_loader, val_loader, criterion, optimizer, epochs, d
                 best_loss = val_loss
                 best_perplexity = val_perplexity
                 metrics_collector.collect_weight_statistics(model)
+                # --- Копирование токенизатора ---
+                permanent_tokenizer_path = None
+                if tokenizer_path and os.path.exists(tokenizer_path):
+                    try:
+                        # Генерируем имя файла токенизатора на основе имени модели
+                        model_filename = os.path.basename(model_path) if 'model_path' in locals() else f"gpt_model_{datetime.now().strftime('%Y%m%d_%H%M%S')}.pth"
+                        model_name_without_ext = os.path.splitext(model_filename)[0]
+                        permanent_tokenizer_filename = f"{model_name_without_ext}_tokenizer.json"
+                        permanent_tokenizer_path = os.path.join(MODELS_DIR, permanent_tokenizer_filename)
+                        # Копируем временный файл токенизатора в постоянное место
+                        shutil.copy2(tokenizer_path, permanent_tokenizer_path)
+                        logger.info(f"Файл токенизатора скопирован в: {permanent_tokenizer_path}")
+                        tokenizer_path_to_save = permanent_tokenizer_path
+                    except Exception as copy_e:
+                        logger.error(f"Ошибка копирования токенизатора: {copy_e}")
+                        tokenizer_path_to_save = tokenizer_path # fallback к исходному пути
+                else:
+                    tokenizer_path_to_save = tokenizer_path # fallback если исходный файл не найден
+                # -------------------------------
+
                 model_path = save_model_with_timestamp(model,
-                                                     tokenizer_path,
+                                                     tokenizer_path_to_save, # <-- Используем постоянный путь
                                                      vocab_size, val_loss, token_type, val_perplexity,
                                                      training_config, metrics_collector, model_type)
                 if model_path:
@@ -1840,22 +1745,6 @@ def interactive_mode():
                         vocab_size_input = max(1000, vocab_size_input)
                     except ValueError:
                         vocab_size_input = 30000
-                    # --- Запрос параметров QAT ---
-                    use_qat_input = input(f"Использовать QAT (квантование во время обучения)? (y/N, по умолчанию {'y' if adaptive_config.get('use_qat', False) else 'n'}): ").strip().lower()
-                    use_qat = adaptive_config.get('use_qat', False)
-                    if use_qat_input in ['y', 'yes', 'д', 'да']:
-                        use_qat = True
-                    elif use_qat_input in ['n', 'no', 'н', 'нет', '']:
-                        use_qat = adaptive_config.get('use_qat', False) # fallback to adaptive config
-                    else:
-                        use_qat = adaptive_config.get('use_qat', False) # fallback
-                    qat_start_epoch = adaptive_config.get('qat_start_epoch', 5)
-                    if use_qat:
-                        try:
-                            qat_start_epoch = int(input(f"Эпоха начала QAT (по умолчанию {qat_start_epoch}): ") or str(qat_start_epoch))
-                        except ValueError:
-                            qat_start_epoch = adaptive_config.get('qat_start_epoch', 5)
-                    # ----------------------------
                     print("🔄 Очистка текста...")
                     text = clean_text(text)
                     # --- Потоковая обработка ---
@@ -1935,8 +1824,7 @@ def interactive_mode():
                         num_heads=adaptive_config['num_heads'],
                         ff_hidden_size=adaptive_config['ff_hidden_size'],
                         dropout=adaptive_config['dropout'],
-                        max_seq_length=seq_length, # Убедиться, что это передается
-                        quantize=use_qat # Передаем флаг квантования
+                        max_seq_length=seq_length # Убедиться, что это передается
                     )
                     print(current_model.get_model_info())
                     criterion = LabelSmoothingLoss(smoothing=0.1)
@@ -1951,9 +1839,7 @@ def interactive_mode():
                         current_tokenizer_path, vocab_size,
                         token_type, learning_rate, current_model_type,
                         gradient_clipping=adaptive_config.get('gradient_clipping', 1.0),
-                        gradient_noise_sigma=adaptive_config.get('gradient_noise_sigma', 1e-3),
-                        use_qat=use_qat, # Передаем параметры QAT
-                        qat_start_epoch=qat_start_epoch
+                        gradient_noise_sigma=adaptive_config.get('gradient_noise_sigma', 1e-3)
                     )
                     if model_path:
                         print(f"✅ Обучение завершено! Модель сохранена в {os.path.basename(model_path)}")
@@ -2142,7 +2028,7 @@ if __name__ == "__main__":
     print("  - Добавлены остаточные связи между блоками трансформера (уже были внутри блоков)")
     print("  - Добавлены методы нормализации градиентов (Gradient Clipping) и шума (Gradient Noise)")
     print("  - Добавлена новая конфигурация 'deep_model_experiment' для 50 слоев")
-    print("  - Интеграция QAT (Quantization-Aware Training) для сжатия модели.")
+    print("  - Поддержка QAT может быть интегрирована через внешние библиотеки (например, torch.quantization)")
     print(f"📁 Модели сохраняются в: {os.path.abspath(MODELS_DIR)}")
     print(f"📝 Логи сохраняются в: {os.path.abspath(LOGS_DIR)}")
     print(f"📊 Метрики сохраняются в: {os.path.abspath(METRICS_DIR)}")
