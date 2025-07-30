@@ -342,7 +342,8 @@ class ModernGPT(nn.Module):
         # Language modeling head
         logits = self.lm_head(x)
         return logits, attention_weights
-    def generate(self, input_ids, max_new_tokens, temperature=1.0, do_sample=True):
+    def generate(self, input_ids, max_new_tokens, eos_token_id, temperature=1.0, do_sample=True):
+        """Генерация с ранней остановкой по EOS токену."""
         self.eval()
         with torch.no_grad():
             for _ in range(max_new_tokens):
@@ -354,7 +355,8 @@ class ModernGPT(nn.Module):
                 else:
                     next_token = torch.argmax(next_token_logits, dim=-1, keepdim=True)
                 input_ids = torch.cat([input_ids, next_token], dim=1)
-                if next_token.item() == 0:  # Assuming 0 is end token
+                # Ранняя остановка
+                if next_token.item() == eos_token_id:
                     break
         return input_ids
     def get_model_info(self):
@@ -786,33 +788,37 @@ def add_gradient_noise(optimizer, sigma=1e-3):
                 noise = torch.randn_like(param.grad) * sigma
                 param.grad.add_(noise)
 # ------------------
-# Подготовка данных с tokenizers
+# Подготовка данных с tokenizers (обновлено)
 # ------------------
-# ... (остается без изменений)
 def train_tokenizer(files, vocab_size=30000, special_tokens=None):
     if not TOKENIZERS_SUPPORT:
         raise Exception("Поддержка tokenizers не доступна. Установите tokenizers")
+    # Добавлены специальные токены для диалога
     if special_tokens is None:
-        special_tokens = ['<PAD>', '<UNK>', '<BOS>', '<EOS>']
+        special_tokens = ['<PAD>', '<UNK>', '<BOS>', '<EOS>', '<USER>', '<BOT>']
     tokenizer = Tokenizer(BPE(unk_token='<UNK>'))
     tokenizer.pre_tokenizer = Whitespace()
     trainer = BpeTrainer(vocab_size=vocab_size, special_tokens=special_tokens, show_progress=True)
     tokenizer.train(files, trainer)
     # Установка пост-процессора для автоматического добавления BOS/EOS
-    tokenizer.post_processor = TemplateProcessing(
-        single="<BOS> $A <EOS>",
-        special_tokens=[("<BOS>", special_tokens.index("<BOS>")), ("<EOS>", special_tokens.index("<EOS>"))],
-    )
+    # Убран автоматический BOS/EOS, так как они будут добавляться вручную или модель будет учится без них.
+    # tokenizer.post_processor = TemplateProcessing(
+    #     single="<BOS> $A <EOS>",
+    #     special_tokens=[("<BOS>", special_tokens.index("<BOS>")), ("<EOS>", special_tokens.index("<EOS>"))],
+    # )
     return tokenizer
+
 def tokenize_with_tokenizer(tokenizer, text):
     if not TOKENIZERS_SUPPORT:
         raise Exception("Поддержка tokenizers не доступна. Установите tokenizers")
     encoding = tokenizer.encode(text)
     return encoding.ids
+
 def detokenize_with_tokenizer(tokenizer, ids):
     if not TOKENIZERS_SUPPORT:
         raise Exception("Поддержка tokenizers не доступна. Установите tokenizers")
     return tokenizer.decode(ids)
+
 # ------------------
 # Новая функция для загрузки текста с URL
 # ------------------
@@ -1160,48 +1166,49 @@ def calculate_perplexity(model, data_loader, device, criterion):
     perplexity = np.exp(avg_loss)
     return perplexity
 # ------------------
-# Генерация текста
+# Генерация текста (обновлено)
 # ------------------
-# ... (остается без изменений)
 def generate_text(model, tokenizer, start_tokens,
                  max_new_tokens=200, temperature=1.0, top_k=0, top_p=1.0,
                  repetition_penalty=1.0, device='cpu'):
+    """Генерация текста с ранней остановкой и динамической длиной."""
     logger.info(f"Начало генерации текста: '{start_tokens}', max_new_tokens: {max_new_tokens}")
     logger.info(f"Параметры: температура={temperature}, top_k={top_k}, top_p={top_p}, repetition_penalty={repetition_penalty}")
+    
     model.eval()
     with torch.no_grad():
         # Токенизация начального текста
         input_ids_list = tokenize_with_tokenizer(tokenizer, start_tokens)
         input_ids = torch.tensor([input_ids_list], dtype=torch.long).to(device)
-        generated_tokens = []
+        
+        # Получаем ID токена EOS
         eos_token_id = tokenizer.token_to_id('<EOS>')
-        for _ in range(max_new_tokens):
-            output, _ = model(input_ids)
-            next_token_logits = output[0, -1, :]
-            probs = advanced_sampling(
-                next_token_logits.unsqueeze(0),
-                temperature=temperature,
-                top_k=top_k,
-                top_p=top_p,
-                repetition_penalty=repetition_penalty,
-                previous_tokens=input_ids[0].tolist()
-            )
-            try:
-                next_token = torch.multinomial(probs, 1)[0, 0].item()
-                if next_token == eos_token_id:
-                    break
-                generated_tokens.append(next_token)
-                input_ids = torch.cat([input_ids, torch.tensor([[next_token]], device=device)], dim=1)
-            except Exception as e:
-                logger.error(f"Ошибка при генерации токена: {e}")
-                break
-        # Детокенизация только сгенерированной части
-        generated_text = detokenize_with_tokenizer(tokenizer, generated_tokens)
-        logger.info(f"Генерация завершена, сгенерировано {len(generated_tokens)} токенов")
-        return start_tokens + generated_text
+        if eos_token_id is None:
+            logger.warning("Токен <EOS> не найден в токенайзере. Используется ID 0 как EOS.")
+            eos_token_id = 0 # fallback
+
+        # Генерация с ранней остановкой
+        output_ids = model.generate(
+            input_ids,
+            max_new_tokens=max_new_tokens,
+            eos_token_id=eos_token_id,
+            temperature=temperature,
+            do_sample=True # Всегда используем сэмплирование для генерации
+        )
+        
+        # Декодируем только сгенерированную часть (без начального контекста)
+        generated_ids = output_ids[0, len(input_ids_list):].tolist()
+        
+        # Удаляем EOS токен из финального текста, если он есть
+        if generated_ids and generated_ids[-1] == eos_token_id:
+            generated_ids = generated_ids[:-1]
+            
+        generated_text = detokenize_with_tokenizer(tokenizer, generated_ids)
+        logger.info(f"Генерация завершена, сгенерировано {len(generated_ids)} токенов")
+        return generated_text # Возвращаем только сгенерированный текст
 
 # ------------------
-# Улучшенный класс для управления историей чата
+# Улучшенный класс для управления историей чата (обновлено)
 # ------------------
 class ChatHistory:
     def __init__(self, tokenizer, max_context_tokens=512):
@@ -1211,11 +1218,11 @@ class ChatHistory:
         self.total_tokens = 0
 
     def add_user_message(self, message):
-        entry = f"Пользователь: {message}\n"
+        entry = f"<USER>{message}<EOS>"
         self._add_entry(entry)
 
     def add_assistant_message(self, message):
-        entry = f"{ASSISTANT_NAME}: {message}\n"
+        entry = f"<BOT>{message}<EOS>"
         self._add_entry(entry)
 
     def _add_entry(self, entry):
@@ -1236,7 +1243,7 @@ class ChatHistory:
         self.total_tokens = 0
 
 # ------------------
-# Чат с ассистентом Sin (улучшенная реализация управления историей)
+# Чат с ассистентом Sin (обновлено)
 # ------------------
 def chat_with_sin(model, tokenizer, device):
     if model is None or tokenizer is None:
@@ -1245,8 +1252,7 @@ def chat_with_sin(model, tokenizer, device):
     print(f"\n🗣️  Начинаем чат с {ASSISTANT_NAME}. Введите '/exit' для выхода или '/clear' для очистки истории.")
     
     # Используем улучшенный класс для управления историей
-    # Предполагаем, что модель была обучена с seq_length <= 512. Адаптируйте при необходимости.
-    chat_history = ChatHistory(tokenizer, max_context_tokens=384) # Оставляем запас для нового запроса/ответа
+    chat_history = ChatHistory(tokenizer, max_context_tokens=384) # Оставляем запас
 
     model.eval()
     with torch.no_grad():
@@ -1262,31 +1268,24 @@ def chat_with_sin(model, tokenizer, device):
 
             # Формирование контекста с использованием улучшенного класса
             chat_history.add_user_message(user_input)
-            context = chat_history.get_context() + f"{ASSISTANT_NAME}:"
+            context = chat_history.get_context() + "<BOT>"
+            
             print(f"{ASSISTANT_NAME}: ", end='', flush=True)
             try:
                 # Генерация ответа
-                generated = generate_text(
+                generated_text = generate_text(
                     model, tokenizer, context,
-                    max_new_tokens=150, # Ограничиваем для чата
+                    max_new_tokens=200, # Максимум, но генерация остановится на <EOS>
                     temperature=0.8, top_k=50, top_p=0.95,
                     repetition_penalty=1.1, device=device
                 )
-                # Извлечение только ответа ассистента
-                response_start = generated.find(f"{ASSISTANT_NAME}:")
-                if response_start != -1:
-                    response_start += len(f"{ASSISTANT_NAME}:")
-                    response = generated[response_start:].strip()
-                    # Обрезаем до конца строки или следующего "Пользователь:"
-                    response_end = response.find("\nПользователь:")
-                    if response_end != -1:
-                         response = response[:response_end].strip()
-                else:
-                     response = generated[len(context):].strip()
                 
-                print(response)
+                # Вывод сгенерированного текста (без специальных токенов)
+                # generated_text уже не содержит <BOT> в начале и <EOS> в конце благодаря generate_text
+                print(generated_text.strip())
+                
                 # Обновление истории с ответом ассистента
-                chat_history.add_assistant_message(response)
+                chat_history.add_assistant_message(generated_text.strip())
 
             except Exception as e:
                 logger.error(f"Ошибка при генерации ответа: {e}")
@@ -1348,7 +1347,6 @@ def train_model(model, train_loader, val_loader, criterion, optimizer, epochs, d
             # Training phase
             model.train()
             # --- Исправленная логика логирования ---
-            # Вместо вычисления 10% батчей, логируем каждые N батчей
             log_interval = 100 # Логировать каждые 100 батчей
             # ---
             for batch_idx, (x_batch, y_batch) in enumerate(train_loader):
@@ -1370,8 +1368,7 @@ def train_model(model, train_loader, val_loader, criterion, optimizer, epochs, d
                     total_batches += 1
                     metrics_collector.add_batch_loss(loss.item())
                     # Логирование каждые log_interval батчей
-                    # if batch_idx % max(1, len(train_loader) // 10) == 0 and batch_idx > 0: # <-- Старая строка
-                    if batch_idx % log_interval == 0 and batch_idx > 0: # <-- Новая строка
+                    if batch_idx % log_interval == 0 and batch_idx > 0:
                         avg_batch_loss = total_loss / total_batches
                         logger.info(f"Эпоха {epoch+1}/{epochs}, Батч {batch_idx}, Loss: {avg_batch_loss:.4f}")
                         # Сбор метрик системы
@@ -1387,7 +1384,6 @@ def train_model(model, train_loader, val_loader, criterion, optimizer, epochs, d
                         raise e
                 except Exception as e:
                     logger.error(f"Ошибка в батче {batch_idx}: {e}")
-                    # Удалено: raise e # Не прерываем эпоху из-за одной ошибки батча
                     continue # Продолжаем со следующего батча
             # Validation phase
             model.eval()
@@ -1611,7 +1607,7 @@ def interactive_mode():
                                             temperature=temp, top_k=top_k, top_p=top_p,
                                             repetition_penalty=repetition_penalty,
                                             device=device)
-                    print(f"\n📝 Сгенерированный текст:\n{generated}")
+                    print(f"\n📝 Сгенерированный текст:\n{start_text}{generated}") # Выводим начальный текст + сгенерированный
                 except Exception as e:
                     logger.error(f"Ошибка при генерации текста: {e}")
                     print(f"❌ Ошибка при генерации текста: {e}")
