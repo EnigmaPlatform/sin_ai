@@ -917,13 +917,90 @@ def load_text_from_url(url):
     except Exception as e:
         logger.error(f"Ошибка при парсинге {url}: {e}")
         raise Exception(f"Ошибка при обработке содержимого URL {url}: {e}")
+
+# ------------------
+# Новые функции для загрузки и обработки JSON
+# ------------------
+def load_json_file(file_path):
+    """Загружает данные из JSON файла."""
+    logger.info(f"Попытка загрузки JSON файла: {file_path}")
+    try:
+        with open(file_path, 'r', encoding='utf-8') as f:
+            data = json.load(f)
+        logger.info(f"JSON файл {file_path} успешно загружен. Количество записей: {len(data) if isinstance(data, list) else 'N/A'}")
+        return data
+    except Exception as e:
+        logger.error(f"Ошибка при загрузке JSON файла {file_path}: {e}")
+        raise
+
+def process_json_to_dialogue_text(json_data):
+    """
+    Преобразует данные JSON в форматированный текст диалога.
+    Поддерживает два формата:
+    1. [{"instruction": "...", "input": "...", "output": "..."}, ...]
+    2. [{"input": "...", "output": "..."}, ...]
+    """
+    logger.info("Начало преобразования JSON в текст диалога...")
+    dialogue_texts = []
+    
+    if not isinstance(json_data, list):
+        logger.warning("JSON данные не являются списком. Попытка обработать как один элемент.")
+        json_data = [json_data]
+
+    for item in json_data:
+        try:
+            # Формат 1: instruction + input + output
+            if "instruction" in item and "input" in item and "output" in item:
+                instruction = item.get("instruction", "").strip()
+                user_input = item.get("input", "").strip()
+                bot_output = item.get("output", "").strip()
+                
+                if bot_output: # Только если есть ответ
+                    # Формируем контекст: инструкция + вход
+                    context_parts = []
+                    if instruction:
+                        context_parts.append(instruction)
+                    if user_input:
+                        context_parts.append(user_input)
+                    context = " ".join(context_parts)
+                    
+                    dialogue_text = f"<USER>{context}<EOS><BOT>{bot_output}<EOS>"
+                    dialogue_texts.append(dialogue_text)
+            
+            # Формат 2: input + output
+            elif "input" in item and "output" in item:
+                user_input = item.get("input", "").strip()
+                bot_output = item.get("output", "").strip()
+                
+                if user_input and bot_output: # Только если есть и запрос, и ответ
+                    dialogue_text = f"<USER>{user_input}<EOS><BOT>{bot_output}<EOS>"
+                    dialogue_texts.append(dialogue_text)
+            else:
+                logger.warning(f"Пропущена запись JSON с неожиданным форматом: {item.keys()}")
+        except Exception as e:
+            logger.warning(f"Ошибка при обработке записи JSON {item}: {e}")
+            continue
+            
+    combined_text = "\n".join(dialogue_texts)
+    logger.info(f"Преобразование JSON завершено. Обработано {len(dialogue_texts)} диалогов. Общий размер текста: {len(combined_text)} символов.")
+    return combined_text
+
+# ------------------
+# Обновленные функции загрузки текста
+# ------------------
 def load_text(file_path):
+    """Универсальная функция загрузки текста из различных форматов файлов."""
     logger.info(f"Попытка загрузки файла: {file_path}")
     if not os.path.exists(file_path):
         raise FileNotFoundError(f"Файл {file_path} не найден")
     file_extension = os.path.splitext(file_path)[1].lower()
     try:
-        if file_extension == '.txt':
+        if file_extension == '.json':
+            # Загрузка и обработка JSON
+            json_data = load_json_file(file_path)
+            text = process_json_to_dialogue_text(json_data)
+            return text
+        elif file_extension == '.txt':
             return load_txt_file(file_path)
         elif file_extension == '.docx':
             return load_docx_file(file_path)
@@ -935,6 +1012,7 @@ def load_text(file_path):
     except Exception as e:
         logger.error(f"Ошибка при загрузке файла {file_path}: {e}")
         raise
+
 def load_txt_file(file_path):
     encodings = ['utf-8', 'windows-1251', 'cp1251', 'koi8-r', 'latin1']
     for encoding in encodings:
@@ -955,6 +1033,7 @@ def load_txt_file(file_path):
         return text
     except Exception as e:
         raise Exception(f"Не удалось загрузить файл {file_path} ни с одной кодировкой: {e}")
+
 def load_docx_file(file_path):
     if not DOCX_SUPPORT:
         raise Exception("Поддержка DOCX файлов не доступна. Установите python-docx")
@@ -967,6 +1046,7 @@ def load_docx_file(file_path):
         return text
     except Exception as e:
         raise Exception(f"Ошибка при загрузке DOCX файла {file_path}: {e}")
+
 def load_pdf_file(file_path):
     if not PDF_SUPPORT:
         raise Exception("Поддержка PDF файлов не доступна. Установите PyPDF2")
@@ -980,15 +1060,18 @@ def load_pdf_file(file_path):
         return text
     except Exception as e:
         raise Exception(f"Ошибка при загрузке PDF файла {file_path}: {e}")
+
 def clean_text(text):
     original_length = len(text)
     # Исправленная строка с корректным экранированием апострофа
-    text = re.sub(r'[^\w\s\.\,\!\?\-\:\;\(\)\"\\\'\u0400-\u04FF]', ' ', text)
+    # Оставляем больше специальных символов для диалогов и JSON
+    text = re.sub(r'[^\w\s\.\,\!\?\-\:\;\(\)\"\\\'\u0400-\u04FF<>/\[\]{}]', ' ', text)
     text = re.sub(r'\s+', ' ', text)
     text = re.sub(r'\n+', '\n', text)
     cleaned_length = len(text)
     logger.info(f"Текст очищен: {original_length} -> {cleaned_length} символов")
     return text.strip()
+
 # ------------------
 # Управление моделями
 # ------------------
@@ -997,6 +1080,7 @@ def get_model_files():
     model_files = glob.glob(os.path.join(MODELS_DIR, "gpt_model_*.pth"))
     model_files.sort(key=os.path.getctime, reverse=True)
     return model_files
+
 def cleanup_old_models():
     model_files = get_model_files()
     if len(model_files) > MAX_SAVED_MODELS:
@@ -1007,6 +1091,7 @@ def cleanup_old_models():
                 logger.info(f"Удалена старая модель: {os.path.basename(old_model)}")
             except Exception as e:
                 logger.error(f"Ошибка при удалении модели {old_model}: {e}")
+
 # Исправленная функция загрузки модели с weights_only=False
 def save_model_with_timestamp(model, tokenizer_path, vocab_size,
                             loss=0.0, token_type="bpe", perplexity=None,
@@ -1055,6 +1140,7 @@ def save_model_with_timestamp(model, tokenizer_path, vocab_size,
     except Exception as e:
         logger.error(f"Ошибка при сохранении модели: {e}")
         return None
+
 def load_model_with_dicts(model_path, device):
     try:
         # Установка weights_only=False для совместимости с PyTorch 2.6+
@@ -1093,6 +1179,7 @@ def load_model_with_dicts(model_path, device):
     except Exception as e:
         logger.error(f"Ошибка при загрузке модели {model_path}: {e}")
         return None, None, None, None, None, None, None
+
 def list_available_models():
     model_files = get_model_files()
     if not model_files:
@@ -1115,6 +1202,7 @@ def list_available_models():
         except Exception as e:
             print(f"{i+1}. {os.path.basename(model_file)} (ошибка чтения: {e})")
     return model_files
+
 # ------------------
 # Определение профиля устройства
 # ------------------
@@ -1151,6 +1239,7 @@ def detect_hardware_profile():
         else: # Меньше 8 ГБ
              profile["profile_name"] = "low_memory_cpu"
     return profile
+
 # ------------------
 # Расчет перплексии
 # ------------------
@@ -1169,6 +1258,7 @@ def calculate_perplexity(model, data_loader, device, criterion):
     avg_loss = total_loss / total_samples
     perplexity = np.exp(avg_loss)
     return perplexity
+
 # ------------------
 # Генерация текста (обновлено)
 # ------------------
@@ -1296,7 +1386,7 @@ def chat_with_sin(model, tokenizer, device):
                 print(f"{ASSISTANT_NAME}: Извините, произошла ошибка при генерации ответа.")
 
 # ------------------
-# Обучение с улучшенной обработкой ошибок (исправленная логика логирования)
+# Обучение с улучшенной обработкой ошибок (обновленная логика логирования)
 # ------------------
 def train_model(model, train_loader, val_loader, criterion, optimizer, epochs, device,
                 tokenizer_path, vocab_size, token_type="bpe",
@@ -1350,7 +1440,11 @@ def train_model(model, train_loader, val_loader, criterion, optimizer, epochs, d
             logger.info(f"Эпоха {epoch+1}/{epochs} начата")
             # Training phase
             model.train()
-            # --- Исправленная логика логирования ---
+            # --- Обновленная логика логирования ---
+            # Оцениваем общее количество батчей в эпохе (приблизительно)
+            # Так как это IterableDataset, len(train_loader) не работает.
+            # Мы можем оценить, если у dataset есть __len__, иначе используем -1.
+            estimated_total_batches = len(train_loader.dataset) // train_loader.batch_size if hasattr(train_loader.dataset, '__len__') else -1
             log_interval = 100 # Логировать каждые 100 батчей
             # ---
             for batch_idx, (x_batch, y_batch) in enumerate(train_loader):
@@ -1372,9 +1466,11 @@ def train_model(model, train_loader, val_loader, criterion, optimizer, epochs, d
                     total_batches += 1
                     metrics_collector.add_batch_loss(loss.item())
                     # Логирование каждые log_interval батчей
+                    # Формат: "Текущий_батч/Общее_батчей_в_эпохе" или "Текущий_батч/-" если общее неизвестно
                     if batch_idx % log_interval == 0 and batch_idx > 0:
                         avg_batch_loss = total_loss / total_batches
-                        logger.info(f"Эпоха {epoch+1}/{epochs}, Батч {batch_idx}, Loss: {avg_batch_loss:.4f}")
+                        progress_str = f"{batch_idx}/{estimated_total_batches}" if estimated_total_batches > 0 else f"{batch_idx}/-"
+                        logger.info(f"Эпоха {epoch+1}/{epochs}, Батч {progress_str}, Loss: {avg_batch_loss:.4f}")
                         # Сбор метрик системы
                         metrics_collector.add_system_resources()
                 except RuntimeError as e:
@@ -1463,6 +1559,7 @@ def train_model(model, train_loader, val_loader, criterion, optimizer, epochs, d
     metrics_collector.save_metrics(f"final_metrics_{final_timestamp}.json")
     metrics_collector.plot_metrics(f"final_metrics_{final_timestamp}")
     return best_model_path, metrics_collector
+
 # ------------------
 # Интерактивный режим
 # ------------------
@@ -1931,13 +2028,15 @@ def interactive_mode():
             import traceback
             logger.error(traceback.format_exc())
             print(f"❌ Неожиданная ошибка: {e}")
+
 if __name__ == "__main__":
     print(f"🤖 Современный генеративный ИИ '{ASSISTANT_NAME}' с GPT-архитектурой (оптимизированная версия)")
-    print("Поддерживаемые форматы файлов: .txt, .docx, .pdf")
+    print("Поддерживаемые форматы файлов: .txt, .docx, .pdf, .json")
     print("Оптимизации для CPU: уменьшенные параметры модели, улучшенная обработка ошибок")
     print("Интеграция с tokenizers для BPE.")
     print("Поддержка обучения на тексте из веб-страниц (URL).")
     print("Потоковая обработка больших файлов для экономии памяти.")
+    print("Поддержка обучения на JSON-датасетах (например, SiberiaSoft/SiberianPersonaChat).")
     print(f"📁 Модели сохраняются в: {os.path.abspath(MODELS_DIR)}")
     print(f"📝 Логи сохраняются в: {os.path.abspath(LOGS_DIR)}")
     print(f"📊 Метрики сохраняются в: {os.path.abspath(METRICS_DIR)}")
