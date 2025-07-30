@@ -906,7 +906,7 @@ def process_json_to_dialogue_text(json_data):
     if not isinstance(json_data, list):
         logger.warning("JSON данные не являются списком. Попытка обработать как один элемент.")
         json_data = [json_data]
-    for item in json_ # Исправлено: было json_
+    for item in json_data: # Исправлено: было json_
         try:
             # Формат 1: instruction + input + output
             if "instruction" in item and "input" in item and "output" in item:
@@ -1245,6 +1245,12 @@ def generate_text(model, tokenizer, start_tokens,
             generated_ids = generated_ids[:-1]
         generated_text = detokenize_with_tokenizer(tokenizer, generated_ids)
         logger.info(f"Генерация завершена, сгенерировано {len(generated_ids)} токенов")
+        # --- Улучшенная постобработка ---
+        # Удаление лишних специальных токенов из начала/конца (на всякий случай)
+        generated_text = generated_text.replace('<BOT>', '').replace('<EOS>', '').strip()
+        # Простая очистка от повторяющихся пробелов и новых строк
+        generated_text = re.sub(r'\s+', ' ', generated_text)
+        # -------------------------------
         return generated_text # Возвращаем только сгенерированный текст
 # ------------------
 # Улучшенный класс для управления историей чата (обновлено)
@@ -1256,17 +1262,14 @@ class ChatHistory:
         self.max_context_tokens = max_context_tokens
         self.history = deque() # Используем deque для эффективного добавления/удаления с обоих концов
         self.total_tokens = 0
-        self.chat_log = [] # Для сохранения чата
     def add_user_message(self, message):
         """Добавление сообщения пользователя."""
         entry = f"<USER>{message}<EOS>"
         self._add_entry(entry)
-        self.chat_log.append({"role": "user", "content": message}) # Сохраняем в лог
     def add_assistant_message(self, message):
         """Добавление сообщения ассистента."""
         entry = f"<BOT>{message}<EOS>"
         self._add_entry(entry)
-        self.chat_log.append({"role": "assistant", "content": message}) # Сохраняем в лог
     def _add_entry(self, entry):
         """Добавление записи в историю."""
         tokens = tokenize_with_tokenizer(self.tokenizer, entry)
@@ -1284,41 +1287,6 @@ class ChatHistory:
         """Очистка истории."""
         self.history.clear()
         self.total_tokens = 0
-        self.chat_log.clear() # Очищаем лог
-    def save_chat(self, filename=None):
-        """Сохранение истории чата в файл."""
-        if filename is None:
-            filename = f"chat_log_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
-        filepath = os.path.join(MODELS_DIR, filename) # Сохраняем в models dir
-        try:
-            with open(filepath, 'w', encoding='utf-8') as f:
-                json.dump(self.chat_log, f, indent=2, ensure_ascii=False)
-            logger.info(f"История чата сохранена в {filepath}")
-            return filepath
-        except Exception as e:
-            logger.error(f"Ошибка при сохранении истории чата: {e}")
-            return None
-    def load_chat(self, filepath):
-        """Загрузка истории чата из файла."""
-        try:
-            with open(filepath, 'r', encoding='utf-8') as f:
-                loaded_log = json.load(f)
-            
-            self.clear() # Очищаем текущую историю
-            
-            # Восстанавливаем историю из файла
-            for msg in loaded_log:
-                if msg['role'] == 'user':
-                    self.add_user_message(msg['content'])
-                elif msg['role'] == 'assistant':
-                    self.add_assistant_message(msg['content'])
-            
-            logger.info(f"История чата загружена из {filepath}")
-            return True
-        except Exception as e:
-            logger.error(f"Ошибка при загрузке истории чата: {e}")
-            return False
-
 # ------------------
 # Чат с ассистентом Sin (обновлено)
 # ------------------
@@ -1328,26 +1296,12 @@ def chat_with_sin(model, tokenizer, device):
         print("❌ Нет загруженной модели или токенайзера для чата.")
         return
     print(f"\n🗣️  Начинаем чат с {ASSISTANT_NAME}. Введите '/exit' для выхода или '/clear' для очистки истории.")
-    print(f"Дополнительные команды: '/help', '/settings', '/save_chat', '/load_chat', '/model_info'")
-    
     # Используем улучшенный класс для управления историей
     chat_history = ChatHistory(tokenizer, max_context_tokens=384) # Оставляем запас
-    
-    # Настройки генерации по умолчанию
-    generation_settings = {
-        'temperature': 0.8,
-        'top_k': 50,
-        'top_p': 0.95,
-        'repetition_penalty': 1.1,
-        'max_new_tokens': 200
-    }
-    
     model.eval()
     with torch.no_grad():
         while True:
             user_input = input("\nВы: ").strip()
-            
-            # Обработка команд чата
             if user_input.lower() in ['/exit', '/quit']:
                 print(f"{ASSISTANT_NAME}: До скорой встречи!")
                 break
@@ -1355,83 +1309,11 @@ def chat_with_sin(model, tokenizer, device):
                 chat_history.clear()
                 print(f"{ASSISTANT_NAME}: История диалога очищена.")
                 continue
-            elif user_input.lower() in ['/help']:
-                print(f"\n{ASSISTANT_NAME}: Доступные команды:")
-                print("  /exit или /quit - Выйти из чата")
-                print("  /clear - Очистить историю диалога")
-                print("  /help - Показать эту справку")
-                print("  /settings - Изменить параметры генерации")
-                print("  /save_chat - Сохранить текущую историю чата")
-                print("  /load_chat - Загрузить историю чата из файла")
-                print("  /model_info - Показать информацию о текущей модели")
+            # --- Базовая фильтрация ввода пользователя ---
+            if not user_input or len(user_input.strip()) == 0:
+                print(f"{ASSISTANT_NAME}: Пожалуйста, введите сообщение.")
                 continue
-            elif user_input.lower() in ['/settings']:
-                try:
-                    print("\n--- Настройки генерации ---")
-                    temp_input = input(f"Температура ({generation_settings['temperature']:.2f}): ").strip()
-                    if temp_input:
-                        generation_settings['temperature'] = max(0.1, min(2.0, float(temp_input)))
-                    
-                    top_k_input = input(f"Top-K ({generation_settings['top_k']}): ").strip()
-                    if top_k_input:
-                        generation_settings['top_k'] = max(0, int(top_k_input))
-                    
-                    top_p_input = input(f"Top-P ({generation_settings['top_p']:.2f}): ").strip()
-                    if top_p_input:
-                        generation_settings['top_p'] = max(0.0, min(1.0, float(top_p_input)))
-                    
-                    rep_pen_input = input(f"Repetition Penalty ({generation_settings['repetition_penalty']:.2f}): ").strip()
-                    if rep_pen_input:
-                        generation_settings['repetition_penalty'] = max(0.1, min(2.0, float(rep_pen_input)))
-                    
-                    max_tokens_input = input(f"Max New Tokens ({generation_settings['max_new_tokens']}): ").strip()
-                    if max_tokens_input:
-                        generation_settings['max_new_tokens'] = max(10, min(500, int(max_tokens_input)))
-                    
-                    print("--- Настройки обновлены ---")
-                except ValueError:
-                    print(f"{ASSISTANT_NAME}: Ошибка ввода. Настройки не изменены.")
-                continue
-            elif user_input.lower() in ['/save_chat']:
-                saved_path = chat_history.save_chat()
-                if saved_path:
-                    print(f"{ASSISTANT_NAME}: История чата сохранена в {os.path.basename(saved_path)}")
-                else:
-                    print(f"{ASSISTANT_NAME}: Ошибка при сохранении истории чата.")
-                continue
-            elif user_input.lower() in ['/load_chat']:
-                chat_files = glob.glob(os.path.join(MODELS_DIR, "chat_log_*.json"))
-                if not chat_files:
-                    print(f"{ASSISTANT_NAME}: Нет доступных файлов истории чата.")
-                    continue
-                print("\nДоступные файлы истории:")
-                for i, chat_file in enumerate(chat_files):
-                    ts = os.path.basename(chat_file).replace("chat_log_", "").replace(".json", "")
-                    print(f"  {i+1}. {ts}")
-                try:
-                    choice = int(input("Выберите файл (номер): ")) - 1
-                    if 0 <= choice < len(chat_files):
-                        success = chat_history.load_chat(chat_files[choice])
-                        if success:
-                            print(f"{ASSISTANT_NAME}: История чата загружена.")
-                        else:
-                            print(f"{ASSISTANT_NAME}: Ошибка при загрузке истории чата.")
-                    else:
-                        print(f"{ASSISTANT_NAME}: Неверный номер файла.")
-                except ValueError:
-                    print(f"{ASSISTANT_NAME}: Неверный ввод.")
-                continue
-            elif user_input.lower() in ['/model_info']:
-                if model:
-                    print(f"\n{ASSISTANT_NAME}: Информация о модели:")
-                    print(model.get_model_info())
-                else:
-                    print(f"{ASSISTANT_NAME}: Модель не загружена.")
-                continue
-            
-            if not user_input:
-                continue # Игнорируем пустой ввод
-            
+            # --------------------------------------------
             # Формирование контекста с использованием улучшенного класса
             chat_history.add_user_message(user_input)
             context = chat_history.get_context() + "<BOT>"
@@ -1440,22 +1322,29 @@ def chat_with_sin(model, tokenizer, device):
                 # Генерация ответа
                 generated_text = generate_text(
                     model, tokenizer, context,
-                    max_new_tokens=generation_settings['max_new_tokens'],
-                    temperature=generation_settings['temperature'],
-                    top_k=generation_settings['top_k'],
-                    top_p=generation_settings['top_p'],
-                    repetition_penalty=generation_settings['repetition_penalty'],
-                    device=device
+                    max_new_tokens=200, # Максимум, но генерация остановится на <EOS>
+                    temperature=0.8, top_k=50, top_p=0.95,
+                    repetition_penalty=1.1, device=device
                 )
-                # Вывод сгенерированного текста (без специальных токенов)
-                # generated_text уже не содержит <BOT> в начале и <EOS> в конце благодаря generate_text
-                print(generated_text.strip())
-                # Обновление истории с ответом ассистента
-                chat_history.add_assistant_message(generated_text.strip())
+                # --- Базовая фильтрация ответа ---
+                # Простая проверка на пустоту или только специальные токены
+                if not generated_text or generated_text.strip() in ['<BOT>', '<EOS>', '']:
+                     print(f"{ASSISTANT_NAME}: Извините, я не могу сформулировать ответ.")
+                     # Не добавляем пустой ответ в историю
+                     # Удаляем последнее сообщение пользователя из истории, чтобы избежать зацикливания
+                     if chat_history.history and chat_history.history[-1][0].startswith('<USER>'):
+                         removed_entry, removed_tokens = chat_history.history.pop()
+                         chat_history.total_tokens -= removed_tokens
+                else:
+                    # Вывод сгенерированного текста (без специальных токенов)
+                    # generated_text уже не содержит <BOT> в начале и <EOS> в конце благодаря generate_text
+                    print(generated_text.strip())
+                    # Обновление истории с ответом ассистента
+                    chat_history.add_assistant_message(generated_text.strip())
+                # -----------------------------------
             except Exception as e:
                 logger.error(f"Ошибка при генерации ответа: {e}")
                 print(f"{ASSISTANT_NAME}: Извините, произошла ошибка при генерации ответа.")
-
 # ------------------
 # Обучение с улучшенной обработкой ошибок (обновленная логика логирования)
 # ------------------
