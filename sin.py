@@ -427,7 +427,6 @@ class StreamingTextIterableDataset(torch.utils.data.IterableDataset):
         self.chunk_size = chunk_size
         # Добавим оценку длины для совместимости (не точная)
         self._estimated_length = self._estimate_length()
-
     def _estimate_length(self):
         """Оценка количества последовательностей в файле."""
         try:
@@ -441,12 +440,10 @@ class StreamingTextIterableDataset(torch.utils.data.IterableDataset):
                 return 0
         except OSError:
             return 0
-
     def __len__(self):
         # Возвращаем оценку, но помним, что она может быть неточной.
         # Это позволяет использовать len(dataset) в некоторых случаях, но с осторожностью.
         return self._estimated_length
-
     def __iter__(self):
         """Итератор по данным."""
         worker_info = torch.utils.data.get_worker_info()
@@ -455,18 +452,18 @@ class StreamingTextIterableDataset(torch.utils.data.IterableDataset):
         start_offset = 0
         end_offset = file_size
         if worker_info is None:  # single-process loading
-            logger.info("StreamingTextIterableDataset: Single worker mode.")
+            logger.debug("StreamingTextIterableDataset: Single worker mode.")
         else:  # in a worker process
             # Разделение данных между воркерами (если используется num_workers > 0)
             # Это усложняет логику, но обеспечивает паралелизм.
             # Делим файл на равные части по количеству воркеров.
             # Это может привести к разрыву последовательностей на границах,
             # но это приемлемый компромисс для потоковой обработки.
-            logger.info(f"StreamingTextIterableDataset: Worker {worker_info.id} of {worker_info.num_workers}")
+            logger.debug(f"StreamingTextIterableDataset: Worker {worker_info.id} of {worker_info.num_workers}")
             per_worker = int(math.ceil(file_size / float(worker_info.num_workers)))
             start_offset = worker_info.id * per_worker
             end_offset = min(start_offset + per_worker, file_size)
-            logger.info(f"Worker {worker_info.id} will process bytes {start_offset} to {end_offset} (size: {end_offset - start_offset})")
+            logger.debug(f"Worker {worker_info.id} will process bytes {start_offset} to {end_offset} (size: {end_offset - start_offset})")
         try:
             # Открываем файл и устанавливаем начальную позицию
             file_handle = open(self.file_path, 'r', encoding='utf-8', errors='ignore')
@@ -504,9 +501,9 @@ class StreamingTextIterableDataset(torch.utils.data.IterableDataset):
                 # Оставляем в буфере только неполные последовательности для следующего чанка
                 # Это важно для корректной обработки перекрывающихся последовательностей
                 if len(buffer_tokens) > self.seq_length:
-                    # Оставляем последние токены, которые могут быть началом новой последовательности
-                    # Используем более точную логику перекрытия
-                    overlap_start_index = len(buffer_tokens) - ((len(buffer_tokens) - self.seq_length - 1) % self.stride + self.seq_length + 1)
+                    # Упрощенная логика: оставляем только то, что может быть началом новой последовательности
+                    # с учетом stride
+                    overlap_start_index = len(buffer_tokens) - (self.seq_length + 1)
                     if overlap_start_index < 0: overlap_start_index = 0
                     buffer_tokens = buffer_tokens[overlap_start_index:]
             # Обработка оставшихся токенов в конце файла/воркера
@@ -909,7 +906,7 @@ def process_json_to_dialogue_text(json_data):
     if not isinstance(json_data, list):
         logger.warning("JSON данные не являются списком. Попытка обработать как один элемент.")
         json_data = [json_data]
-    for item in json_data: # Исправлено: было json_
+    for item in json_ # Исправлено: было json_
         try:
             # Формат 1: instruction + input + output
             if "instruction" in item and "input" in item and "output" in item:
@@ -1207,8 +1204,12 @@ def calculate_perplexity(model, data_loader, device, criterion):
             loss = criterion(output.reshape(-1, output.size(-1)), y_batch.reshape(-1))
             total_loss += loss.item() * x_batch.size(0) * x_batch.size(1)
             total_samples += x_batch.size(0) * x_batch.size(1)
-    avg_loss = total_loss / total_samples
-    perplexity = np.exp(avg_loss)
+    if total_samples > 0:
+        avg_loss = total_loss / total_samples
+        perplexity = np.exp(avg_loss)
+    else:
+        avg_loss = float('inf')
+        perplexity = float('inf')
     return perplexity
 # ------------------
 # Генерация текста (обновлено)
@@ -1255,14 +1256,17 @@ class ChatHistory:
         self.max_context_tokens = max_context_tokens
         self.history = deque() # Используем deque для эффективного добавления/удаления с обоих концов
         self.total_tokens = 0
+        self.chat_log = [] # Для сохранения чата
     def add_user_message(self, message):
         """Добавление сообщения пользователя."""
         entry = f"<USER>{message}<EOS>"
         self._add_entry(entry)
+        self.chat_log.append({"role": "user", "content": message}) # Сохраняем в лог
     def add_assistant_message(self, message):
         """Добавление сообщения ассистента."""
         entry = f"<BOT>{message}<EOS>"
         self._add_entry(entry)
+        self.chat_log.append({"role": "assistant", "content": message}) # Сохраняем в лог
     def _add_entry(self, entry):
         """Добавление записи в историю."""
         tokens = tokenize_with_tokenizer(self.tokenizer, entry)
@@ -1280,6 +1284,41 @@ class ChatHistory:
         """Очистка истории."""
         self.history.clear()
         self.total_tokens = 0
+        self.chat_log.clear() # Очищаем лог
+    def save_chat(self, filename=None):
+        """Сохранение истории чата в файл."""
+        if filename is None:
+            filename = f"chat_log_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
+        filepath = os.path.join(MODELS_DIR, filename) # Сохраняем в models dir
+        try:
+            with open(filepath, 'w', encoding='utf-8') as f:
+                json.dump(self.chat_log, f, indent=2, ensure_ascii=False)
+            logger.info(f"История чата сохранена в {filepath}")
+            return filepath
+        except Exception as e:
+            logger.error(f"Ошибка при сохранении истории чата: {e}")
+            return None
+    def load_chat(self, filepath):
+        """Загрузка истории чата из файла."""
+        try:
+            with open(filepath, 'r', encoding='utf-8') as f:
+                loaded_log = json.load(f)
+            
+            self.clear() # Очищаем текущую историю
+            
+            # Восстанавливаем историю из файла
+            for msg in loaded_log:
+                if msg['role'] == 'user':
+                    self.add_user_message(msg['content'])
+                elif msg['role'] == 'assistant':
+                    self.add_assistant_message(msg['content'])
+            
+            logger.info(f"История чата загружена из {filepath}")
+            return True
+        except Exception as e:
+            logger.error(f"Ошибка при загрузке истории чата: {e}")
+            return False
+
 # ------------------
 # Чат с ассистентом Sin (обновлено)
 # ------------------
@@ -1289,12 +1328,26 @@ def chat_with_sin(model, tokenizer, device):
         print("❌ Нет загруженной модели или токенайзера для чата.")
         return
     print(f"\n🗣️  Начинаем чат с {ASSISTANT_NAME}. Введите '/exit' для выхода или '/clear' для очистки истории.")
+    print(f"Дополнительные команды: '/help', '/settings', '/save_chat', '/load_chat', '/model_info'")
+    
     # Используем улучшенный класс для управления историей
     chat_history = ChatHistory(tokenizer, max_context_tokens=384) # Оставляем запас
+    
+    # Настройки генерации по умолчанию
+    generation_settings = {
+        'temperature': 0.8,
+        'top_k': 50,
+        'top_p': 0.95,
+        'repetition_penalty': 1.1,
+        'max_new_tokens': 200
+    }
+    
     model.eval()
     with torch.no_grad():
         while True:
             user_input = input("\nВы: ").strip()
+            
+            # Обработка команд чата
             if user_input.lower() in ['/exit', '/quit']:
                 print(f"{ASSISTANT_NAME}: До скорой встречи!")
                 break
@@ -1302,6 +1355,83 @@ def chat_with_sin(model, tokenizer, device):
                 chat_history.clear()
                 print(f"{ASSISTANT_NAME}: История диалога очищена.")
                 continue
+            elif user_input.lower() in ['/help']:
+                print(f"\n{ASSISTANT_NAME}: Доступные команды:")
+                print("  /exit или /quit - Выйти из чата")
+                print("  /clear - Очистить историю диалога")
+                print("  /help - Показать эту справку")
+                print("  /settings - Изменить параметры генерации")
+                print("  /save_chat - Сохранить текущую историю чата")
+                print("  /load_chat - Загрузить историю чата из файла")
+                print("  /model_info - Показать информацию о текущей модели")
+                continue
+            elif user_input.lower() in ['/settings']:
+                try:
+                    print("\n--- Настройки генерации ---")
+                    temp_input = input(f"Температура ({generation_settings['temperature']:.2f}): ").strip()
+                    if temp_input:
+                        generation_settings['temperature'] = max(0.1, min(2.0, float(temp_input)))
+                    
+                    top_k_input = input(f"Top-K ({generation_settings['top_k']}): ").strip()
+                    if top_k_input:
+                        generation_settings['top_k'] = max(0, int(top_k_input))
+                    
+                    top_p_input = input(f"Top-P ({generation_settings['top_p']:.2f}): ").strip()
+                    if top_p_input:
+                        generation_settings['top_p'] = max(0.0, min(1.0, float(top_p_input)))
+                    
+                    rep_pen_input = input(f"Repetition Penalty ({generation_settings['repetition_penalty']:.2f}): ").strip()
+                    if rep_pen_input:
+                        generation_settings['repetition_penalty'] = max(0.1, min(2.0, float(rep_pen_input)))
+                    
+                    max_tokens_input = input(f"Max New Tokens ({generation_settings['max_new_tokens']}): ").strip()
+                    if max_tokens_input:
+                        generation_settings['max_new_tokens'] = max(10, min(500, int(max_tokens_input)))
+                    
+                    print("--- Настройки обновлены ---")
+                except ValueError:
+                    print(f"{ASSISTANT_NAME}: Ошибка ввода. Настройки не изменены.")
+                continue
+            elif user_input.lower() in ['/save_chat']:
+                saved_path = chat_history.save_chat()
+                if saved_path:
+                    print(f"{ASSISTANT_NAME}: История чата сохранена в {os.path.basename(saved_path)}")
+                else:
+                    print(f"{ASSISTANT_NAME}: Ошибка при сохранении истории чата.")
+                continue
+            elif user_input.lower() in ['/load_chat']:
+                chat_files = glob.glob(os.path.join(MODELS_DIR, "chat_log_*.json"))
+                if not chat_files:
+                    print(f"{ASSISTANT_NAME}: Нет доступных файлов истории чата.")
+                    continue
+                print("\nДоступные файлы истории:")
+                for i, chat_file in enumerate(chat_files):
+                    ts = os.path.basename(chat_file).replace("chat_log_", "").replace(".json", "")
+                    print(f"  {i+1}. {ts}")
+                try:
+                    choice = int(input("Выберите файл (номер): ")) - 1
+                    if 0 <= choice < len(chat_files):
+                        success = chat_history.load_chat(chat_files[choice])
+                        if success:
+                            print(f"{ASSISTANT_NAME}: История чата загружена.")
+                        else:
+                            print(f"{ASSISTANT_NAME}: Ошибка при загрузке истории чата.")
+                    else:
+                        print(f"{ASSISTANT_NAME}: Неверный номер файла.")
+                except ValueError:
+                    print(f"{ASSISTANT_NAME}: Неверный ввод.")
+                continue
+            elif user_input.lower() in ['/model_info']:
+                if model:
+                    print(f"\n{ASSISTANT_NAME}: Информация о модели:")
+                    print(model.get_model_info())
+                else:
+                    print(f"{ASSISTANT_NAME}: Модель не загружена.")
+                continue
+            
+            if not user_input:
+                continue # Игнорируем пустой ввод
+            
             # Формирование контекста с использованием улучшенного класса
             chat_history.add_user_message(user_input)
             context = chat_history.get_context() + "<BOT>"
@@ -1310,9 +1440,12 @@ def chat_with_sin(model, tokenizer, device):
                 # Генерация ответа
                 generated_text = generate_text(
                     model, tokenizer, context,
-                    max_new_tokens=200, # Максимум, но генерация остановится на <EOS>
-                    temperature=0.8, top_k=50, top_p=0.95,
-                    repetition_penalty=1.1, device=device
+                    max_new_tokens=generation_settings['max_new_tokens'],
+                    temperature=generation_settings['temperature'],
+                    top_k=generation_settings['top_k'],
+                    top_p=generation_settings['top_p'],
+                    repetition_penalty=generation_settings['repetition_penalty'],
+                    device=device
                 )
                 # Вывод сгенерированного текста (без специальных токенов)
                 # generated_text уже не содержит <BOT> в начале и <EOS> в конце благодаря generate_text
@@ -1322,6 +1455,7 @@ def chat_with_sin(model, tokenizer, device):
             except Exception as e:
                 logger.error(f"Ошибка при генерации ответа: {e}")
                 print(f"{ASSISTANT_NAME}: Извините, произошла ошибка при генерации ответа.")
+
 # ------------------
 # Обучение с улучшенной обработкой ошибок (обновленная логика логирования)
 # ------------------
@@ -1373,6 +1507,9 @@ def train_model(model, train_loader, val_loader, criterion, optimizer, epochs, d
     best_perplexity = float('inf')
     best_model_path = None
     training_start_time = time.time()
+    # --- Переменная для отслеживания пути к постоянному токенизатору ---
+    permanent_tokenizer_path = None
+    # ---
     try:
         for epoch in range(epochs):
             epoch_start_time = time.time()
@@ -1416,7 +1553,7 @@ def train_model(model, train_loader, val_loader, criterion, optimizer, epochs, d
                     # Логирование каждые log_interval батчей
                     # Формат: "Текущий_батч/Общее_батчей_в_эпохе" или "Текущий_батч/-" если общее неизвестно (например, для IterableDataset)
                     if batch_idx % log_interval == 0 and batch_idx > 0:
-                        avg_batch_loss = total_loss / total_batches
+                        avg_batch_loss = total_loss / total_batches if total_batches > 0 else 0.0
                         progress_str = f"{batch_idx}/{estimated_total_batches}" if estimated_total_batches > 0 else f"{batch_idx}/-"
                         logger.info(f"Эпоха {epoch+1}/{epochs}, Батч {progress_str}, Loss: {avg_batch_loss:.4f}")
                         # Сбор метрик системы
@@ -1457,10 +1594,10 @@ def train_model(model, train_loader, val_loader, criterion, optimizer, epochs, d
                 val_loss = float('inf')
             scheduler.step()
             # Calculate perplexity
-            train_perplexity = np.exp(total_loss / max(total_batches, 1))
+            avg_train_loss = total_loss / max(total_batches, 1)
+            train_perplexity = np.exp(avg_train_loss) if total_batches > 0 else float('inf')
             val_perplexity = calculate_perplexity(model, val_loader, device, criterion)
             epoch_time = time.time() - epoch_start_time
-            avg_train_loss = total_loss / max(total_batches, 1)
             current_lr = optimizer.param_groups[0]['lr']
             # Сбор метрик
             metrics_collector.add_training_loss(avg_train_loss)
@@ -1485,27 +1622,12 @@ def train_model(model, train_loader, val_loader, criterion, optimizer, epochs, d
                 best_perplexity = val_perplexity
                 metrics_collector.collect_weight_statistics(model)
                 # --- Копирование токенизатора ---
-                permanent_tokenizer_path = None
-                if tokenizer_path and os.path.exists(tokenizer_path):
-                    try:
-                        # Генерируем имя файла токенизатора на основе имени модели
-                        model_filename = os.path.basename(model_path) if 'model_path' in locals() else f"gpt_model_{datetime.now().strftime('%Y%m%d_%H%M%S')}.pth"
-                        model_name_without_ext = os.path.splitext(model_filename)[0]
-                        permanent_tokenizer_filename = f"{model_name_without_ext}_tokenizer.json"
-                        permanent_tokenizer_path = os.path.join(MODELS_DIR, permanent_tokenizer_filename)
-                        # Копируем временный файл токенизатора в постоянное место
-                        shutil.copy2(tokenizer_path, permanent_tokenizer_path)
-                        logger.info(f"Файл токенизатора скопирован в: {permanent_tokenizer_path}")
-                        tokenizer_path_to_save = permanent_tokenizer_path
-                    except Exception as copy_e:
-                        logger.error(f"Ошибка копирования токенизатора: {copy_e}")
-                        tokenizer_path_to_save = tokenizer_path # fallback к исходному пути
-                else:
-                    tokenizer_path_to_save = tokenizer_path # fallback если исходный файл не найден
-                # -------------------------------
-
+                # Переместил копирование сюда, чтобы оно происходило только один раз в конце обучения
+                # или если пользователь вручную сохраняет модель после обучения.
+                # В save_model_with_timestamp теперь просто передается permanent_tokenizer_path.
+                # ---
                 model_path = save_model_with_timestamp(model,
-                                                     tokenizer_path_to_save, # <-- Используем постоянный путь
+                                                     permanent_tokenizer_path, # <-- Используем постоянный путь, который будет установлен позже
                                                      vocab_size, val_loss, token_type, val_perplexity,
                                                      training_config, metrics_collector, model_type)
                 if model_path:
@@ -1526,7 +1648,37 @@ def train_model(model, train_loader, val_loader, criterion, optimizer, epochs, d
     final_timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     metrics_collector.save_metrics(f"final_metrics_{final_timestamp}.json")
     metrics_collector.plot_metrics(f"final_metrics_{final_timestamp}")
-    return best_model_path, metrics_collector
+    # --- Копирование токенизатора после завершения обучения ---
+    if tokenizer_path and os.path.exists(tokenizer_path) and permanent_tokenizer_path is None:
+       try:
+           # Генерируем имя файла токенизатора на основе имени модели
+           # Так как у нас нет имени модели здесь, используем временную метку
+           model_name_without_ext = f"gpt_model_{final_timestamp}"
+           permanent_tokenizer_filename = f"{model_name_without_ext}_tokenizer.json"
+           permanent_tokenizer_path = os.path.join(MODELS_DIR, permanent_tokenizer_filename)
+           # Копируем временный файл токенизатора в постоянное место
+           shutil.copy2(tokenizer_path, permanent_tokenizer_path)
+           logger.info(f"Файл токенизатора скопирован в: {permanent_tokenizer_path}")
+       except Exception as copy_e:
+           logger.error(f"Ошибка копирования токенизатора: {copy_e}")
+           permanent_tokenizer_path = tokenizer_path # fallback к исходному пути
+    else:
+        permanent_tokenizer_path = tokenizer_path # fallback если исходный файл не найден
+    # ---
+    # Обновляем путь к токенизатору в лучшей сохраненной модели
+    if best_model_path and permanent_tokenizer_path:
+        try:
+            # Перезагружаем чекпойнт
+            checkpoint = torch.load(best_model_path, map_location='cpu', weights_only=False)
+            # Обновляем путь к токенизатору
+            checkpoint['tokenizer_path'] = permanent_tokenizer_path
+            # Сохраняем обновленный чекпойнт
+            torch.save(checkpoint, best_model_path)
+            logger.info(f"Путь к токенизатору обновлен в лучшей модели: {permanent_tokenizer_path}")
+        except Exception as update_e:
+            logger.error(f"Ошибка обновления пути к токенизатору в лучшей модели: {update_e}")
+    # ---
+    return best_model_path, metrics_collector, permanent_tokenizer_path # Возвращаем также путь к токенизатору
 # ------------------
 # Интерактивный режим
 # ------------------
@@ -1833,7 +1985,7 @@ def interactive_mode():
                     current_model_type = "gpt"
                     print("🔄 Начало обучения...")
                     # Передаем параметры нормализации градиентов и шума
-                    model_path, metrics_collector = train_model(
+                    model_path, metrics_collector, permanent_tokenizer_path = train_model(
                         current_model, train_loader, val_loader, criterion, optimizer,
                         epochs, device,
                         current_tokenizer_path, vocab_size,
@@ -1844,6 +1996,8 @@ def interactive_mode():
                     if model_path:
                         print(f"✅ Обучение завершено! Модель сохранена в {os.path.basename(model_path)}")
                         print(f"📊 Метрики сохранены в {METRICS_DIR}")
+                        # Обновляем путь к токенизатору после обучения
+                        current_tokenizer_path = permanent_tokenizer_path
                         # Загружаем модель после обучения, чтобы она была готова к использованию
                         loaded_model, loaded_tokenizer_path, loaded_token_type, loaded_model_type, loaded_perplexity, loaded_weight_stats, loaded_training_config = load_model_with_dicts(model_path, device)
                         if loaded_model is not None:
