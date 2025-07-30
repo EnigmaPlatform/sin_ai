@@ -454,6 +454,28 @@ class StreamingTextIterableDataset(torch.utils.data.IterableDataset):
         self.seq_length = seq_length
         self.stride = stride if stride is not None else seq_length // 2
         self.chunk_size = chunk_size
+        # Добавим оценку длины для совместимости (не точная)
+        self._estimated_length = self._estimate_length()
+
+    def _estimate_length(self):
+        """Оценка количества последовательностей в файле."""
+        try:
+            file_size = os.path.getsize(self.file_path)
+            # Это очень грубая оценка. В реальности зависит от токенизатора.
+            # Предположим в среднем 4 символа на токен.
+            estimated_tokens = file_size // 4
+            if estimated_tokens >= self.seq_length:
+                return (estimated_tokens - self.seq_length) // self.stride + 1
+            else:
+                return 0
+        except OSError:
+            return 0
+
+    def __len__(self):
+        # Возвращаем оценку, но помним, что она может быть неточной.
+        # Это позволяет использовать len(dataset) в некоторых случаях, но с осторожностью.
+        return self._estimated_length
+
     def __iter__(self):
         worker_info = torch.utils.data.get_worker_info()
         file_handle = None
@@ -1271,9 +1293,8 @@ def chat_with_sin(model, tokenizer, device):
                 print(f"{ASSISTANT_NAME}: Извините, произошла ошибка при генерации ответа.")
 
 # ------------------
-# Обучение с улучшенной обработкой ошибок
+# Обучение с улучшенной обработкой ошибок (исправленная логика логирования)
 # ------------------
-# ... (в основном без изменений, но адаптировано под новые классы датасетов)
 def train_model(model, train_loader, val_loader, criterion, optimizer, epochs, device,
                 tokenizer_path, vocab_size, token_type="bpe",
                 learning_rate=DEFAULT_LEARNING_RATE, model_type="gpt"):
@@ -1326,6 +1347,10 @@ def train_model(model, train_loader, val_loader, criterion, optimizer, epochs, d
             logger.info(f"Эпоха {epoch+1}/{epochs} начата")
             # Training phase
             model.train()
+            # --- Исправленная логика логирования ---
+            # Вместо вычисления 10% батчей, логируем каждые N батчей
+            log_interval = 100 # Логировать каждые 100 батчей
+            # ---
             for batch_idx, (x_batch, y_batch) in enumerate(train_loader):
                 try:
                     x_batch, y_batch = x_batch.to(device), y_batch.to(device)
@@ -1344,8 +1369,9 @@ def train_model(model, train_loader, val_loader, criterion, optimizer, epochs, d
                     total_loss += loss.item()
                     total_batches += 1
                     metrics_collector.add_batch_loss(loss.item())
-                    # Логирование каждые 10% батчей
-                    if batch_idx % max(1, len(train_loader) // 10) == 0 and batch_idx > 0:
+                    # Логирование каждые log_interval батчей
+                    # if batch_idx % max(1, len(train_loader) // 10) == 0 and batch_idx > 0: # <-- Старая строка
+                    if batch_idx % log_interval == 0 and batch_idx > 0: # <-- Новая строка
                         avg_batch_loss = total_loss / total_batches
                         logger.info(f"Эпоха {epoch+1}/{epochs}, Батч {batch_idx}, Loss: {avg_batch_loss:.4f}")
                         # Сбор метрик системы
@@ -1361,7 +1387,8 @@ def train_model(model, train_loader, val_loader, criterion, optimizer, epochs, d
                         raise e
                 except Exception as e:
                     logger.error(f"Ошибка в батче {batch_idx}: {e}")
-                    continue
+                    # Удалено: raise e # Не прерываем эпоху из-за одной ошибки батча
+                    continue # Продолжаем со следующего батча
             # Validation phase
             model.eval()
             val_loss = 0
