@@ -1466,7 +1466,7 @@ def train_model(model, train_loader, val_loader, criterion, optimizer, epochs, d
                     total_batches += 1
                     metrics_collector.add_batch_loss(loss.item())
                     # Логирование каждые log_interval батчей
-                    # Формат: "Текущий_батч/Общее_батчей_в_эпохе" или "Текущий_батч/-" если общее неизвестно
+                    # Формат: "Текущий_батч/Общее_батчей_в_эпохе" или "Текущий_батч/-" если общее неизвестно (например, для IterableDataset)
                     if batch_idx % log_interval == 0 and batch_idx > 0:
                         avg_batch_loss = total_loss / total_batches
                         progress_str = f"{batch_idx}/{estimated_total_batches}" if estimated_total_batches > 0 else f"{batch_idx}/-"
@@ -1786,13 +1786,23 @@ def interactive_mode():
                     with open(temp_text_file_for_streaming, 'w', encoding='utf-8') as f:
                         f.write(text)
                     print("🔄 Обучение BPE токенайзера...")
-                    # Обучение токенайзера на оригинальном тексте (или на части)
+                    # --- Создание оптимального файла для обучения токенизатора ---
+                    # Автоматически создаем временный файл с первыми 50 МБ оригинального текста
+                    temp_tokenizer_train_file = os.path.join(CACHE_DIR, "temp_tokenizer_train_sample.txt")
+                    max_sample_size_bytes = 50 * 1024 * 1024 # 50 MB
+                    bytes_written = 0
+                    with open(temp_text_file_for_streaming, 'r', encoding='utf-8', errors='ignore') as source_file, \
+                         open(temp_tokenizer_train_file, 'w', encoding='utf-8') as sample_file:
+                        while bytes_written < max_sample_size_bytes:
+                            chunk = source_file.read(1024 * 1024) # Читаем по 1MB
+                            if not chunk:
+                                break
+                            sample_file.write(chunk)
+                            bytes_written += len(chunk.encode('utf-8'))
+                    logger.info(f"Создан временный файл для обучения токенизатора: {temp_tokenizer_train_file} (размер: {bytes_written} байт)")
+                    # Обучение токенайзера на уменьшенном образце
                     temp_tokenizer_file = os.path.join(CACHE_DIR, "temp_tokenizer.json")
-                    # Для обучения токенайзера нужно сохранить текст во временный файл
-                    temp_text_file = os.path.join(CACHE_DIR, "temp_train_text.txt")
-                    with open(temp_text_file, 'w', encoding='utf-8') as f:
-                        f.write(text)
-                    current_tokenizer = train_tokenizer([temp_text_file], vocab_size=vocab_size_input)
+                    current_tokenizer = train_tokenizer([temp_tokenizer_train_file], vocab_size=vocab_size_input)
                     current_tokenizer.save(temp_tokenizer_file)
                     current_tokenizer_path = temp_tokenizer_file
                     vocab_size = current_tokenizer.get_vocab_size()
@@ -1879,7 +1889,12 @@ def interactive_mode():
                     else:
                         print("⚠️  Обучение завершено, но модель не была сохранена")
                     # Очистка временных файлов
-                    temp_files_to_cleanup = [temp_text_file_for_streaming, temp_text_file, temp_val_text_file, temp_tokenizer_file]
+                    temp_files_to_cleanup = [
+                        temp_text_file_for_streaming, 
+                        temp_tokenizer_train_file, # Удаляем файл для обучения токенизатора
+                        temp_val_text_file, 
+                        temp_tokenizer_file
+                    ]
                     for temp_file in temp_files_to_cleanup:
                          if os.path.exists(temp_file):
                              try:
@@ -1895,7 +1910,7 @@ def interactive_mode():
                     # Очистка временных файлов в случае ошибки
                     temp_files_to_cleanup = [
                         temp_text_file_for_streaming if 'temp_text_file_for_streaming' in locals() else None,
-                        temp_text_file if 'temp_text_file' in locals() else None,
+                        temp_tokenizer_train_file if 'temp_tokenizer_train_file' in locals() else None, # Удаляем файл для обучения токенизатора
                         temp_val_text_file if 'temp_val_text_file' in locals() else None,
                         temp_tokenizer_file if 'temp_tokenizer_file' in locals() else None
                     ]
