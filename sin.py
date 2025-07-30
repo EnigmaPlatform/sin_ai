@@ -382,24 +382,18 @@ class ModernGPT(nn.Module):
                 if next_token.item() == eos_token_id:
                     break
         return input_ids
-    def get_model_info(self):
-        info = f"ModernGPT Model:
-"
-        info += f"  Vocabulary size: {self.token_embedding.num_embeddings}
-"
-        info += f"  Hidden size: {self.hidden_size}
-"
-        info += f"  Number of layers: {self.num_layers}
-"
-        info += f"  Attention heads: {self.blocks[0].attention.num_heads}
-"
-        info += f"  Feed-forward hidden size: {self.blocks[0].ffn.linear1.out_features}
-"
-        info += f"  Max sequence length: {self.max_seq_length}
-"
-        info += f"  Parameters: {sum(p.numel() for p in self.parameters()):,}
-"
-        info += f"  Trainable parameters: {sum(p.numel() for p in self.parameters() if p.requires_grad):,}"
+        def get_model_info(self):
+        info = (
+            f"ModernGPT Model:\n"
+            f"  Vocabulary size: {self.token_embedding.num_embeddings}\n"
+            f"  Hidden size: {self.hidden_size}\n"
+            f"  Number of layers: {self.num_layers}\n"
+            f"  Attention heads: {self.blocks[0].attention.num_heads}\n"
+            f"  Feed-forward hidden size: {self.blocks[0].ffn.linear1.out_features}\n"
+            f"  Max sequence length: {self.max_seq_length}\n"
+            f"  Parameters: {sum(p.numel() for p in self.parameters()):,}\n"
+            f"  Trainable parameters: {sum(p.numel() for p in self.parameters() if p.requires_grad):,}"
+        )
         return info
 # ------------------
 # Пользовательский Dataset для потоковой обработки (улучшенная реализация __getitem__)
