@@ -53,18 +53,6 @@ try:
 except ImportError:
     TOKENIZERS_SUPPORT = False
     print("⚠️  tokenizers не установлен. Установите его для поддержки BPE: pip install tokenizers")
-# --- Импорты для сжатия ---
-try:
-    from sklearn.cluster import KMeans
-    KMEANS_AVAILABLE = True
-except ImportError:
-    KMEANS_AVAILABLE = False
-    print("⚠️  sklearn не установлен. Установите его для поддержки сжатия моделей: pip install scikit-learn")
-import heapq
-import struct
-import io
-# --------------------------
-
 # --- Новый базовый путь ---
 BASE_DIR = r"C:\Users\User\Downloads"
 # --------------------------
@@ -73,9 +61,6 @@ MODELS_DIR = os.path.join(BASE_DIR, "models")
 LOGS_DIR = os.path.join(BASE_DIR, "logs")
 METRICS_DIR = os.path.join(BASE_DIR, "metrics")
 CACHE_DIR = os.path.join(BASE_DIR, "cache")
-# --- Постоянный токенайзер ---
-PERSISTENT_TOKENIZER_PATH = os.path.join(MODELS_DIR, "persistent_tokenizer.json")
-# --------------------------
 # Создание необходимых директорий
 os.makedirs(MODELS_DIR, exist_ok=True)
 os.makedirs(LOGS_DIR, exist_ok=True)
@@ -102,7 +87,7 @@ DEFAULT_EPOCHS = 50        # Уменьшено с 100
 DEFAULT_LEARNING_RATE = 3e-4
 # --- Измененные параметры ---
 DEFAULT_HIDDEN_SIZE = 256  # Увеличено с 128
-DEFAULT_NUM_LAYERS = 8     # Увеличено с 2
+DEFAULT_NUM_LAYERS = 50    # Увеличено до 50
 # ---------------------------
 DEFAULT_ATTENTION_HEADS = 8 # Уменьшено с 12
 DEFAULT_FF_HIDDEN_SIZE = 2048 # Уменьшено с 3072
@@ -110,7 +95,6 @@ DEFAULT_DROPOUT = 0.1
 MAX_SAVED_MODELS = 5
 DEFAULT_TOKEN_TYPE = "bpe" # Теперь это будет означать использование tokenizers BPE
 DEFAULT_MODEL_TYPE = "gpt"
-DEFAULT_COMPRESSION_N_CLUSTERS = 256 # По умолчанию для VQ
 # Имя ассистента
 ASSISTANT_NAME = "Sin"
 # ------------------
@@ -122,60 +106,70 @@ ADAPTIVE_CONFIGS = {
         "batch_size": 16,
         "epochs": 100,
         "hidden_size": 768,
-        "num_layers": 12,
+        "num_layers": 24, # Увеличено
         "num_heads": 12,
         "ff_hidden_size": 3072,
         "dropout": 0.1,
         "learning_rate": 3e-4,
-        "token_type": "bpe"
+        "token_type": "bpe",
+        "gradient_clipping": 1.0, # Добавлен параметр нормализации градиентов
+        "gradient_noise_sigma": 1e-3 # Добавлен параметр шума градиента
     },
     "mid_end_gpu": {
         "seq_length": 256,
         "batch_size": 8,
         "epochs": 75,
         "hidden_size": 512,
-        "num_layers": 8,
+        "num_layers": 16, # Увеличено
         "num_heads": 8,
         "ff_hidden_size": 2048,
         "dropout": 0.1,
         "learning_rate": 3e-4,
-        "token_type": "bpe"
+        "token_type": "bpe",
+        "gradient_clipping": 1.0,
+        "gradient_noise_sigma": 1e-3
     },
     "low_end_gpu": {
         "seq_length": 128,
         "batch_size": 4,
         "epochs": 50,
         "hidden_size": 256,
-        "num_layers": 4,
+        "num_layers": 12, # Увеличено
         "num_heads": 4,
         "ff_hidden_size": 1024,
         "dropout": 0.1,
         "learning_rate": 3e-4,
-        "token_type": "bpe"
+        "token_type": "bpe",
+        "gradient_clipping": 1.0,
+        "gradient_noise_sigma": 1e-3
     },
     "high_memory_cpu": {
         "seq_length": 256,
         "batch_size": 4,
         "epochs": 30,
         "hidden_size": 512,
-        "num_layers": 6,
+        "num_layers": 12, # Увеличено
         "num_heads": 8,
         "ff_hidden_size": 2048,
         "dropout": 0.1,
         "learning_rate": 3e-4,
-        "token_type": "bpe"
+        "token_type": "bpe",
+        "gradient_clipping": 1.0,
+        "gradient_noise_sigma": 1e-3
     },
     "mid_memory_cpu": {
         "seq_length": 128,
         "batch_size": 2,
         "epochs": 20,
         "hidden_size": 256,
-        "num_layers": 4,
+        "num_layers": 8, # Увеличено
         "num_heads": 4,
         "ff_hidden_size": 1024,
         "dropout": 0.1,
         "learning_rate": 3e-4,
-        "token_type": "bpe"
+        "token_type": "bpe",
+        "gradient_clipping": 1.0,
+        "gradient_noise_sigma": 1e-3
     },
     # --- Обновленная конфигурация для CPU с увеличенными параметрами ---
     "low_memory_cpu": {
@@ -188,7 +182,24 @@ ADAPTIVE_CONFIGS = {
         "ff_hidden_size": 1024,
         "dropout": 0.1,
         "learning_rate": 3e-4,
-        "token_type": "bpe"
+        "token_type": "bpe",
+        "gradient_clipping": 1.0,
+        "gradient_noise_sigma": 1e-3
+    },
+    # --- Новая конфигурация для экспериментов с очень глубокими моделями ---
+    "deep_model_experiment": {
+        "seq_length": 256,
+        "batch_size": 2, # Может потребоваться уменьшить
+        "epochs": 20,
+        "hidden_size": 512,
+        "num_layers": 50, # Целевое количество слоев
+        "num_heads": 8,
+        "ff_hidden_size": 2048,
+        "dropout": 0.1,
+        "learning_rate": 1e-4, # Может потребоваться меньший LR
+        "token_type": "bpe",
+        "gradient_clipping": 0.5, # Более агрессивная нормализация
+        "gradient_noise_sigma": 1e-4 # Меньший шум
     }
     # ------------------------------------------------------------
 }
@@ -296,7 +307,7 @@ class FeedForward(nn.Module):
         x = self.dropout(x)
         return x
 # ------------------
-# Transformer Block
+# Transformer Block (с остаточными связями внутри блока)
 # ------------------
 class TransformerBlock(nn.Module):
     def __init__(self, hidden_size, num_heads, ff_hidden_size, dropout=0.1):
@@ -310,13 +321,13 @@ class TransformerBlock(nn.Module):
     def forward(self, x, attention_mask=None, position_ids=None):
         # Self-attention with residual connection
         attn_output, attn_weights = self.attention(self.ln1(x), attention_mask, position_ids)
-        x = x + self.dropout1(attn_output)
+        x = x + self.dropout1(attn_output) # Остаточная связь
         # Feed-forward with residual connection
         ffn_output = self.ffn(self.ln2(x))
-        x = x + self.dropout2(ffn_output)
+        x = x + self.dropout2(ffn_output) # Остаточная связь
         return x, attn_weights
 # ------------------
-# Современная GPT-Style модель
+# Современная GPT-Style модель (с остаточными связями между блоками)
 # ------------------
 class ModernGPT(nn.Module):
     def __init__(self, vocab_size, hidden_size=512, num_layers=6, num_heads=8,
@@ -709,14 +720,22 @@ class LabelSmoothingLoss(nn.Module):
         loss = self.confidence * nll_loss + self.smoothing * smooth_loss
         return loss.mean()
 # ------------------
-# Gradient Noise
+# Gradient Noise и нормализация
 # ------------------
 def add_gradient_noise(optimizer, sigma=1e-3):
+    """Добавление шума к градиентам."""
+    # Примечание: в текущей реализации этот шум добавляется в train_model
+    # Этот метод оставлен для совместимости и потенциального расширения.
     for group in optimizer.param_groups:
         for param in group['params']:
             if param.grad is not None:
                 noise = torch.randn_like(param.grad) * sigma
                 param.grad.add_(noise)
+
+def clip_gradients(model, max_norm=1.0):
+    """Нормализация градиентов."""
+    return torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm)
+
 # ------------------
 # Подготовка данных с tokenizers (обновлено)
 # ------------------
@@ -865,7 +884,7 @@ def process_json_to_dialogue_text(json_data):
     if not isinstance(json_data, list):
         logger.warning("JSON данные не являются списком. Попытка обработать как один элемент.")
         json_data = [json_data]
-    for item in json_data:
+    for item in json_
         try:
             # Формат 1: instruction + input + output
             if "instruction" in item and "input" in item and "output" in item:
@@ -983,11 +1002,9 @@ def clean_text(text):
 # Управление моделями
 # ------------------
 def get_model_files():
-    # Теперь ищем только сжатые модели
-    model_files = glob.glob(os.path.join(MODELS_DIR, "compressed_gpt_model_*.pth"))
+    model_files = glob.glob(os.path.join(MODELS_DIR, "gpt_model_*.pth"))
     model_files.sort(key=os.path.getctime, reverse=True)
     return model_files
-
 def cleanup_old_models():
     model_files = get_model_files()
     if len(model_files) > MAX_SAVED_MODELS:
@@ -998,27 +1015,34 @@ def cleanup_old_models():
                 logger.info(f"Удалена старая модель: {os.path.basename(old_model)}")
             except Exception as e:
                 logger.error(f"Ошибка при удалении модели {old_model}: {e}")
-
 # Исправленная функция загрузки модели с weights_only=False
-def save_compressed_model_with_timestamp(model, tokenizer_path, vocab_size,
+def save_model_with_timestamp(model, tokenizer_path, vocab_size,
                             loss=0.0, token_type="bpe", perplexity=None,
-                            training_config=None, metrics_collector=None, model_type="gpt",
-                            n_clusters=DEFAULT_COMPRESSION_N_CLUSTERS):
-    """Сохраняет только сжатую модель."""
-    if not KMEANS_AVAILABLE:
-        logger.warning("sklearn не установлен. Сохранение обычной модели.")
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        model_filename = f"gpt_model_{timestamp}.pth" # Обычное имя, если сжатие невозможно
-        model_path = os.path.join(MODELS_DIR, model_filename)
+                            training_config=None, metrics_collector=None, model_type="gpt"):
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    model_filename = f"gpt_model_{timestamp}.pth"
+    model_path = os.path.join(MODELS_DIR, model_filename)
+    try:
+        weight_stats = {}
+        for name, param in model.named_parameters():
+            if param.requires_grad:
+                weight_stats[name] = {
+                    'mean': param.data.mean().item(),
+                    'std': param.data.std().item(),
+                    'min': param.data.min().item(),
+                    'max': param.data.max().item(),
+                    'shape': list(param.data.shape)
+                }
         torch.save({
             'model_state_dict': model.state_dict(),
-            'tokenizer_path': tokenizer_path,
+            'tokenizer_path': tokenizer_path, # Сохраняем путь к токенайзеру
             'vocab_size': vocab_size,
             'timestamp': timestamp,
             'loss': loss,
             'perplexity': perplexity,
             'token_type': token_type,
             'model_type': model_type,
+            'weight_statistics': weight_stats,
             'training_config': training_config,
             'model_config': {
                 'hidden_size': getattr(model, 'hidden_size', 512),
@@ -1029,54 +1053,7 @@ def save_compressed_model_with_timestamp(model, tokenizer_path, vocab_size,
                 'model_type': type(model).__name__
             }
         }, model_path)
-        logger.info(f"Модель (без сжатия) сохранена: {model_path}")
-        if metrics_collector:
-            metrics_filename = f"metrics_{timestamp}.json"
-            metrics_collector.save_metrics(metrics_filename)
-            metrics_collector.plot_metrics(f"metrics_{timestamp}")
-        cleanup_old_models()
-        return model_path
-
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    model_filename = f"compressed_gpt_model_{timestamp}.pth" # Имя для сжатой модели
-    model_path = os.path.join(MODELS_DIR, model_filename)
-    try:
-        # --- Сжатие ---
-        logger.info(f"Начало сжатия модели в {model_path}...")
-        compressed_data = {}
-        total_original_size = 0
-        total_compressed_size = 0
-
-        for name, param in model.named_parameters():
-            if param.requires_grad:
-                logger.debug(f"Сжатие слоя: {name}")
-                weights_np = param.data.cpu().numpy()
-                original_size = weights_np.nbytes
-                total_original_size += original_size
-
-                # 1. Векторное квантование
-                indices, centers, shape = quantize_layer(weights_np, n_clusters=n_clusters)
-                
-                # 2. Простое сохранение индексов и центров
-                compressed_data[name] = {
-                    'indices': indices,
-                    'centers': centers,
-                    'shape': shape
-                }
-                
-                # Оценка размера (приблизительная)
-                compressed_size = indices.nbytes + centers.nbytes
-                total_compressed_size += compressed_size
-                logger.debug(f"  Оригинал: {original_size} байт, Сжато: ~{compressed_size} байт")
-
-        # Сохраняем в файл
-        torch.save(compressed_data, model_path)
-        compression_ratio = total_original_size / total_compressed_size if total_compressed_size > 0 else float('inf')
-        logger.info(f"Сжатие модели завершено. Соотношение: {compression_ratio:.2f}x. Файл: {model_path}")
-        print(f"✅ Модель успешно сжата и сохранена в {os.path.basename(model_path)} (Соотношение: {compression_ratio:.2f}x)")
-        # --- Конец сжатия ---
-        
-        # Сохраняем метрики и т.д. (это можно улучшить, сохранив их отдельно или в том же файле)
+        logger.info(f"Модель сохранена: {model_path}")
         if metrics_collector:
             metrics_filename = f"metrics_{timestamp}.json"
             metrics_collector.save_metrics(metrics_filename)
@@ -1084,138 +1061,62 @@ def save_compressed_model_with_timestamp(model, tokenizer_path, vocab_size,
         cleanup_old_models()
         return model_path
     except Exception as e:
-        logger.error(f"Ошибка при сохранении сжатой модели: {e}")
+        logger.error(f"Ошибка при сохранении модели: {e}")
         return None
-
-def load_compressed_model(model, compressed_model_path, device="cpu"):
-    """Загружает сжатую модель и восстанавливает веса в переданную модель."""
-    try:
-        logger.info(f"Начало загрузки сжатой модели из {compressed_model_path}...")
-        compressed_data = torch.load(compressed_model_path, weights_only=False) # weights_only=False для загрузки словаря
-        
-        for name, param in model.named_parameters():
-            if name in compressed_data and param.requires_grad:
-                layer_data = compressed_data[name]
-                
-                # Восстановление индексов и центров
-                indices = layer_data['indices']
-                centers = layer_data['centers']
-                shape = layer_data['shape']
-                
-                # Восстановление весов из индексов и центров
-                weights = centers[indices].reshape(shape)
-                
-                # Загрузка весов в модель
-                param.data = torch.tensor(weights, dtype=param.dtype, device=device)
-                
-        logger.info("Сжатая модель успешно загружена и веса восстановлены.")
-        return True
-    except Exception as e:
-        logger.error(f"Ошибка при загрузке сжатой модели: {e}")
-        import traceback
-        logger.error(traceback.format_exc())
-        return False
-
 def load_model_with_dicts(model_path, device):
-    """
-    Загружает модель из сжатого файла.
-    model_path - путь к сжатому файлу.
-    """
     try:
         # Установка weights_only=False для совместимости с PyTorch 2.6+
-        # Загружаем чекпоинт, чтобы получить конфигурацию модели
-        # Предполагаем, что чекпоинт содержит необходимую информацию
-        # В реальном сценарии, эту информацию нужно сохранять в сжатый файл тоже.
-        # Здесь мы попробуем получить её из имени файла или из отдельного файла конфигурации.
-        # Для простоты, предположим, что мы можем извлечь её из оригинального имени файла
-        # или что она была сохранена отдельно.
-        # В этом примере, мы будем использовать информацию из training_config, если она доступна.
-        # Но для загрузки нам нужно знать архитектуру. Попробуем извлечь её из имени файла.
-        # Это не самый надежный способ, но сработает для нашего случая.
-        
-        # Загружаем данные из сжатого файла для получения конфигурации
-        compressed_data = torch.load(model_path, map_location='cpu', weights_only=False)
-        # Предполагаем, что в сжатом файле есть ключ 'training_config' или 'model_config'
-        # В реальной реализации это должно быть частью сохраненного состояния.
-        # Здесь мы делаем предположение, что чекпоинт содержит эту информацию.
-        # Это не идеально, но для демонстрации сойдет.
-        # Лучше было бы сохранять конфигурацию модели в отдельный файл или в тот же сжатый файл.
-        # Попробуем загрузить чекпоинт, чтобы получить конфигурацию.
-        # Так как мы сохраняем только сжатую модель, нам нужно где-то хранить конфигурацию.
-        # Можно сохранить её в отдельный .json файл с тем же именем.
-        config_path = model_path.replace(".pth", ".json")
-        model_config = {}
-        training_config = {}
-        if os.path.exists(config_path):
-             try:
-                 with open(config_path, 'r') as f:
-                     config_data = json.load(f)
-                 model_config = config_data.get('model_config', {})
-                 training_config = config_data.get('training_config', {})
-                 logger.info(f"Конфигурация загружена из {config_path}")
-             except Exception as e:
-                 logger.warning(f"Не удалось загрузить конфигурацию из {config_path}: {e}")
+        checkpoint = torch.load(model_path, map_location=device, weights_only=False)
+        model_config = checkpoint.get('model_config', {})
+        model_type = checkpoint.get('model_type', 'gpt')
+        if model_type == 'gpt':
+            model = ModernGPT(
+                checkpoint['vocab_size'],
+                model_config.get('hidden_size', 512),
+                model_config.get('num_layers', 6),
+                model_config.get('num_heads', 8),
+                model_config.get('ff_hidden_size', 2048),
+                dropout=model_config.get('dropout', 0.1)
+            )
         else:
-             logger.warning(f"Файл конфигурации {config_path} не найден. Используются значения по умолчанию.")
-        
-        vocab_size = training_config.get('vocab_size', model_config.get('vocab_size', 30000)) # fallback
-        model_type = training_config.get('model_type', model_config.get('model_type', 'gpt'))
-        
-        # Создаем модель
-        model = ModernGPT(
-            vocab_size,
-            model_config.get('hidden_size', 512),
-            model_config.get('num_layers', 6),
-            model_config.get('num_heads', 8),
-            model_config.get('ff_hidden_size', 2048),
-            dropout=model_config.get('dropout', 0.1)
-        )
-        
-        # Загружаем веса из сжатого файла
-        if load_compressed_model(model, model_path, device):
-            logger.info(f"Модель загружена: {model_path}")
-            # Возвращаем необходимые данные. Для совместимости с предыдущим кодом.
-            tokenizer_path = training_config.get('tokenizer_path', PERSISTENT_TOKENIZER_PATH)
-            timestamp = training_config.get('timestamp', 'unknown')
-            loss = training_config.get('loss', 0.0)
-            token_type = training_config.get('token_type', 'bpe')
-            model_type = training_config.get('model_type', 'gpt')
-            perplexity = training_config.get('perplexity', None)
-            weight_stats = training_config.get('weight_statistics', {}) # Может быть пустым
-            
-            return model, tokenizer_path, token_type, model_type, perplexity, weight_stats, training_config
-        else:
-            logger.error("Не удалось загрузить веса из сжатого файла.")
-            return None, None, None, None, None, None, None
-            
+            model = ModernGPT(
+                checkpoint['vocab_size'],
+                model_config.get('hidden_size', 512),
+                model_config.get('num_layers', 6),
+                model_config.get('num_heads', 8),
+                model_config.get('ff_hidden_size', 2048),
+                dropout=model_config.get('dropout', 0.1)
+            )
+        model.load_state_dict(checkpoint['model_state_dict'])
+        tokenizer_path = checkpoint.get('tokenizer_path', None)
+        timestamp = checkpoint.get('timestamp', 'unknown')
+        loss = checkpoint.get('loss', 0.0)
+        token_type = checkpoint.get('token_type', 'bpe')
+        model_type = checkpoint.get('model_type', 'gpt')
+        perplexity = checkpoint.get('perplexity', None)
+        weight_stats = checkpoint.get('weight_statistics', {})
+        training_config = checkpoint.get('training_config', {})
+        logger.info(f"Модель загружена: {model_path} (timestamp: {timestamp}, loss: {loss:.4f})")
+        return model, tokenizer_path, token_type, model_type, perplexity, weight_stats, training_config
     except Exception as e:
         logger.error(f"Ошибка при загрузке модели {model_path}: {e}")
-        import traceback
-        logger.error(traceback.format_exc())
         return None, None, None, None, None, None, None
-
 def list_available_models():
     model_files = get_model_files()
     if not model_files:
         print("Нет доступных моделей")
         return []
-    print("\nДоступные сжатые модели:")
+    print("\nДоступные модели:")
     for i, model_file in enumerate(model_files):
         try:
-            # Попробуем загрузить конфигурацию из соседнего .json файла
-            config_path = model_file.replace(".pth", ".json")
-            config_data = {}
-            if os.path.exists(config_path):
-                with open(config_path, 'r') as f:
-                    config_data = json.load(f)
-            
-            timestamp = config_data.get('training_config', {}).get('timestamp', 'unknown')
-            loss = config_data.get('training_config', {}).get('loss', 0.0)
-            vocab_size = config_data.get('training_config', {}).get('vocab_size', 0)
-            token_type = config_data.get('training_config', {}).get('token_type', 'bpe')
-            model_type = config_data.get('training_config', {}).get('model_type', 'gpt')
-            perplexity = config_data.get('training_config', {}).get('perplexity', 'N/A')
-            
+            # Установка weights_only=False для совместимости с PyTorch 2.6+
+            checkpoint = torch.load(model_file, map_location='cpu', weights_only=False)
+            timestamp = checkpoint.get('timestamp', 'unknown')
+            loss = checkpoint.get('loss', 0.0)
+            vocab_size = checkpoint.get('vocab_size', 0)
+            token_type = checkpoint.get('token_type', 'bpe')
+            model_type = checkpoint.get('model_type', 'gpt')
+            perplexity = checkpoint.get('perplexity', 'N/A')
             print(f"{i+1}. {os.path.basename(model_file)}")
             print(f"   Дата: {timestamp}, Loss: {loss:.4f}, Perplexity: {perplexity}")
             print(f"   Vocab: {vocab_size}, Type: {token_type}, Model: {model_type}")
@@ -1380,25 +1281,12 @@ def chat_with_sin(model, tokenizer, device):
                 logger.error(f"Ошибка при генерации ответа: {e}")
                 print(f"{ASSISTANT_NAME}: Извините, произошла ошибка при генерации ответа.")
 # ------------------
-# Модуль сжатия моделей (VQ)
-# ------------------
-def quantize_layer(weights, n_clusters=256):
-    """Применяет векторное квантование к слою."""
-    if not KMEANS_AVAILABLE:
-        raise Exception("sklearn не установлен. Необходим для VQ.")
-    shape = weights.shape
-    flattened = weights.reshape(-1, 1)  # Преобразуем в 1D
-    kmeans = KMeans(n_clusters=n_clusters, n_init='auto', random_state=42).fit(flattened)
-    indices = kmeans.labels_.astype(np.uint8)  # 1 байт на индекс
-    centers = kmeans.cluster_centers_.astype(np.float16)  # Центры в float16
-    return indices, centers, shape
-# ------------------
 # Обучение с улучшенной обработкой ошибок (обновленная логика логирования)
 # ------------------
 def train_model(model, train_loader, val_loader, criterion, optimizer, epochs, device,
                 tokenizer_path, vocab_size, token_type="bpe",
                 learning_rate=DEFAULT_LEARNING_RATE, model_type="gpt",
-                n_clusters_for_compression=DEFAULT_COMPRESSION_N_CLUSTERS):
+                gradient_clipping=1.0, gradient_noise_sigma=1e-3): # Новые параметры
     logger.info(f"Начало обучения модели на устройстве {device}")
     logger.info(f"Параметры обучения: epochs={epochs}, batch_size={train_loader.batch_size}")
     metrics_collector = MetricsCollector()
@@ -1413,8 +1301,8 @@ def train_model(model, train_loader, val_loader, criterion, optimizer, epochs, d
         'device': str(device),
         'model_parameters': sum(p.numel() for p in model.parameters()),
         'trainable_parameters': sum(p.numel() for p in model.parameters() if p.requires_grad),
-        'n_clusters_for_compression': n_clusters_for_compression,
-        'tokenizer_path': tokenizer_path # Добавляем путь к токенайзеру
+        'gradient_clipping': gradient_clipping, # Сохраняем параметры
+        'gradient_noise_sigma': gradient_noise_sigma
     }
     model.to(device)
     model.train()
@@ -1467,9 +1355,18 @@ def train_model(model, train_loader, val_loader, criterion, optimizer, epochs, d
                         loss = criterion(output.reshape(-1, output.size(-1)), y_batch.reshape(-1))
                     scaled_loss = scaler.scale(loss)
                     scaled_loss.backward()
-                    scaler.unscale_(optimizer)
-                    grad_norm = torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
-                    add_gradient_noise(optimizer, sigma=1e-3)
+                    
+                    # --- Применение нормализации градиентов и шума ---
+                    scaler.unscale_(optimizer) # Необходимо для правильной нормализации при использовании scaler
+                    grad_norm = clip_gradients(model, max_norm=gradient_clipping) # Нормализация градиентов
+                    # Добавление шума к градиентам (реализация внутри функции)
+                    for group in optimizer.param_groups:
+                        for param in group['params']:
+                            if param.grad is not None:
+                                noise = torch.randn_like(param.grad) * gradient_noise_sigma
+                                param.grad.add_(noise)
+                    # ---------------------------------------------------
+                    
                     scaler.step(optimizer)
                     scaler.update()
                     total_loss += loss.item()
@@ -1541,42 +1438,18 @@ def train_model(model, train_loader, val_loader, criterion, optimizer, epochs, d
             if early_stopping(val_loss):
                 logger.info(f"Early stopping на эпохе {epoch+1}")
                 break
-            # Сохранение лучшей модели (только сжатой)
+            # Сохранение лучшей модели
             if val_loss < best_loss:
                 best_loss = val_loss
                 best_perplexity = val_perplexity
                 metrics_collector.collect_weight_statistics(model)
-                # --- Сохраняем только сжатую модель ---
-                model_path = save_compressed_model_with_timestamp(model,
+                model_path = save_model_with_timestamp(model,
                                                      tokenizer_path,
                                                      vocab_size, val_loss, token_type, val_perplexity,
-                                                     training_config, metrics_collector, model_type,
-                                                     n_clusters=n_clusters_for_compression)
-                # --- Сохраняем конфигурацию отдельно ---
-                if model_path:
-                    config_data_to_save = {
-                        'model_config': {
-                            'hidden_size': getattr(model, 'hidden_size', 512),
-                            'num_layers': getattr(model, 'num_layers', 6),
-                            'num_heads': getattr(model, 'blocks', [None])[0].attention.num_heads if hasattr(model, 'blocks') and len(model.blocks) > 0 else 8,
-                            'ff_hidden_size': getattr(model, 'blocks', [None])[0].ffn.linear1.out_features if hasattr(model, 'blocks') and len(model.blocks) > 0 else 2048,
-                            'dropout': getattr(model, 'blocks', [None])[0].dropout1.p if hasattr(model, 'blocks') and len(model.blocks) > 0 else 0.1,
-                            'model_type': type(model).__name__,
-                            'vocab_size': vocab_size
-                        },
-                        'training_config': training_config
-                    }
-                    config_path = model_path.replace(".pth", ".json")
-                    try:
-                        with open(config_path, 'w', encoding='utf-8') as f:
-                            json.dump(config_data_to_save, f, indent=2, ensure_ascii=False)
-                        logger.info(f"Конфигурация модели сохранена в {config_path}")
-                    except Exception as e:
-                        logger.error(f"Ошибка при сохранении конфигурации модели: {e}")
-                # --------------------------------------
+                                                     training_config, metrics_collector, model_type)
                 if model_path:
                     best_model_path = model_path
-                    logger.info(f"Новая лучшая модель (сжатая) сохранена: loss {val_loss:.4f}, perplexity {val_perplexity:.4f}")
+                    logger.info(f"Новая лучшая модель сохранена: loss {val_loss:.4f}, perplexity {val_perplexity:.4f}")
             # Принудительная очистка памяти после каждой эпохи
             torch.cuda.empty_cache() if torch.cuda.is_available() else None
             gc.collect()
@@ -1601,6 +1474,7 @@ def interactive_mode():
     logger.info(f"Запуск интерактивного режима на устройстве: {device}")
     current_model = None
     current_tokenizer = None
+    current_tokenizer_path = None
     vocab_size = 0
     current_token_type = "bpe"
     current_model_type = "gpt"
@@ -1614,13 +1488,12 @@ def interactive_mode():
     print(f"📝 Логи сохраняются в: {os.path.abspath(LOGS_DIR)}")
     print(f"📊 Метрики сохраняются в: {os.path.abspath(METRICS_DIR)}")
     print(f"Кэширование в: {os.path.abspath(CACHE_DIR)}")
-    print(f"Постоянный токенайзер: {os.path.abspath(PERSISTENT_TOKENIZER_PATH)}")
     print("\nДоступные команды:")
     print("  generate     - Генерация текста (продвинутая)")
     print("  train        - Обучение модели (поддерживаются файлы и URL)")
-    print("  save         - Сохранение текущей модели (только сжатая)")
-    print("  load         - Загрузка модели (только сжатая)")
-    print("  list         - Список доступных моделей (только сжатые)")
+    print("  save         - Сохранение текущей модели")
+    print("  load         - Загрузка модели")
+    print("  list         - Список доступных моделей")
     print("  info         - Информация о текущей модели")
     print("  weights      - Просмотр статистик весов")
     print("  metrics      - Просмотр метрик обучения")
@@ -1631,15 +1504,15 @@ def interactive_mode():
     try:
         model_files = get_model_files()
         if model_files:
-            logger.info(f"Найдено {len(model_files)} сохраненных сжатых моделей. Попытка автозагрузки последней...")
+            logger.info(f"Найдено {len(model_files)} сохраненных моделей. Попытка автозагрузки последней...")
             for i, latest_model_path in enumerate(model_files): # Цикл для повторных попыток
                 model_basename = os.path.basename(latest_model_path)
                 logger.info(f"Попытка загрузки модели {i+1}/{len(model_files)}: {model_basename}")
                 try:
-                    # Загружаем сжатую модель
                     loaded_model, loaded_tokenizer_path, loaded_token_type, loaded_model_type, loaded_perplexity, loaded_weight_stats, loaded_training_config = load_model_with_dicts(latest_model_path, device)
                     if loaded_model is not None:
                         current_model = loaded_model
+                        current_tokenizer_path = loaded_tokenizer_path
                         current_token_type = loaded_token_type
                         current_model_type = loaded_model_type
                         current_perplexity = loaded_perplexity
@@ -1648,25 +1521,25 @@ def interactive_mode():
                         vocab_size_from_checkpoint = loaded_training_config.get('vocab_size', 0)
                         # Попытка загрузить токенайзер
                         tokenizer_loaded_successfully = False
-                        if os.path.exists(PERSISTENT_TOKENIZER_PATH) and TOKENIZERS_SUPPORT:
+                        if current_tokenizer_path and os.path.exists(current_tokenizer_path) and TOKENIZERS_SUPPORT:
                             try:
-                                current_tokenizer = Tokenizer.from_file(PERSISTENT_TOKENIZER_PATH)
+                                current_tokenizer = Tokenizer.from_file(current_tokenizer_path)
                                 vocab_size = current_tokenizer.get_vocab_size() if hasattr(current_tokenizer, 'get_vocab_size') else vocab_size_from_checkpoint
                                 # Простая проверка работоспособности токенайзера
                                 test_text = "проверка"
                                 test_ids = tokenize_with_tokenizer(current_tokenizer, test_text)
                                 test_decoded = detokenize_with_tokenizer(current_tokenizer, test_ids[:3]) # Декодируем часть для проверки
-                                logger.info(f"✅ Постоянный токенайзер успешно загружен и протестирован.")
+                                logger.info(f"✅ Токенайзер успешно загружен и протестирован.")
                                 tokenizer_loaded_successfully = True
                             except Exception as tok_e:
-                                logger.warning(f"⚠️ Ошибка при тестировании постоянного токенайзера из {PERSISTENT_TOKENIZER_PATH}: {tok_e}")
+                                logger.warning(f"⚠️ Ошибка при тестировании загруженного токенайзера из {current_tokenizer_path}: {tok_e}")
                                 current_tokenizer = None
-                        elif not os.path.exists(PERSISTENT_TOKENIZER_PATH):
-                            logger.warning(f"⚠️ Постоянный файл токенайзера не найден: {PERSISTENT_TOKENIZER_PATH}")
-                        elif not TOKENIZERS_SUPPORT:
+                        elif current_tokenizer_path and not os.path.exists(current_tokenizer_path):
+                            logger.warning(f"⚠️ Файл токенайзера не найден по указанному пути: {current_tokenizer_path}")
+                        elif current_tokenizer_path and not TOKENIZERS_SUPPORT:
                             logger.warning(f"⚠️ Библиотека tokenizers не доступна для загрузки токенайзера.")
                         if not tokenizer_loaded_successfully:
-                            logger.warning(f"⚠️ Постоянный токенайзер не доступен или не работает. Будет использован vocab_size из чекпойнта.")
+                            logger.warning(f"⚠️ Токенайзер для модели {model_basename} не доступен или не работает. Будет использован vocab_size из чекпойнта.")
                             current_tokenizer = None
                             vocab_size = vocab_size_from_checkpoint
                         logger.info(f"✅ Модель успешно автозагружена из {model_basename}")
@@ -1683,7 +1556,7 @@ def interactive_mode():
                         logger.error("Не удалось загрузить ни одну из доступных моделей.")
                     continue # Пробуем следующую модель в списке
         else:
-            logger.info("Нет сохраненных сжатых моделей для автозагрузки.")
+            logger.info("Нет сохраненных моделей для автозагрузки.")
     except Exception as e:
         logger.error(f"Неожиданная ошибка при попытке автозагрузки модели: {e}")
     # --- Конец автозагрузки ---
@@ -1693,39 +1566,12 @@ def interactive_mode():
             if command == "quit":
                 if current_model is not None:
                     print("Автоматическое сохранение модели...")
-                    # --- Сохраняем только сжатую модель ---
-                    model_path = save_compressed_model_with_timestamp(current_model,
-                                            PERSISTENT_TOKENIZER_PATH, # Используем постоянный путь
+                    save_model_with_timestamp(current_model,
+                                            current_tokenizer_path,
                                             vocab_size, token_type=current_token_type,
                                             model_type=current_model_type,
                                             perplexity=current_perplexity,
                                             training_config=current_training_config)
-                    # --- Сохраняем конфигурацию отдельно ---
-                    if model_path:
-                        config_data_to_save = {
-                            'model_config': {
-                                'hidden_size': getattr(current_model, 'hidden_size', 512),
-                                'num_layers': getattr(current_model, 'num_layers', 6),
-                                'num_heads': getattr(current_model, 'blocks', [None])[0].attention.num_heads if hasattr(current_model, 'blocks') and len(current_model.blocks) > 0 else 8,
-                                'ff_hidden_size': getattr(current_model, 'blocks', [None])[0].ffn.linear1.out_features if hasattr(current_model, 'blocks') and len(current_model.blocks) > 0 else 2048,
-                                'dropout': getattr(current_model, 'blocks', [None])[0].dropout1.p if hasattr(current_model, 'blocks') and len(current_model.blocks) > 0 else 0.1,
-                                'model_type': type(current_model).__name__,
-                                'vocab_size': vocab_size
-                            },
-                            'training_config': current_training_config
-                        }
-                        config_path = model_path.replace(".pth", ".json")
-                        try:
-                            with open(config_path, 'w', encoding='utf-8') as f:
-                                json.dump(config_data_to_save, f, indent=2, ensure_ascii=False)
-                            logger.info(f"Конфигурация модели сохранена в {config_path}")
-                        except Exception as e:
-                            logger.error(f"Ошибка при сохранении конфигурации модели: {e}")
-                    # --------------------------------------
-                    if model_path:
-                        print(f"✅ Модель (сжатая) сохранена в {os.path.basename(model_path)}")
-                    else:
-                        print("❌ Ошибка при сохранении модели")
                 print("До свидания!")
                 break
             elif command == "generate":
@@ -1837,15 +1683,6 @@ def interactive_mode():
                         vocab_size_input = max(1000, vocab_size_input)
                     except ValueError:
                         vocab_size_input = 30000
-                    
-                    # --- Запрос параметров сжатия ---
-                    try:
-                        n_clusters_for_compression = int(input(f"Число кластеров для VQ сжатия (по умолчанию {DEFAULT_COMPRESSION_N_CLUSTERS}): ") or str(DEFAULT_COMPRESSION_N_CLUSTERS))
-                        n_clusters_for_compression = max(2, min(65536, n_clusters_for_compression)) # Ограничение
-                    except ValueError:
-                        n_clusters_for_compression = DEFAULT_COMPRESSION_N_CLUSTERS
-                    # -------------------------------
-                    
                     print("🔄 Очистка текста...")
                     text = clean_text(text)
                     # --- Потоковая обработка ---
@@ -1869,13 +1706,12 @@ def interactive_mode():
                             bytes_written += len(chunk.encode('utf-8'))
                     logger.info(f"Создан временный файл для обучения токенизатора: {temp_tokenizer_train_file} (размер: {bytes_written} байт)")
                     # Обучение токенайзера на уменьшенном образце
+                    temp_tokenizer_file = os.path.join(CACHE_DIR, "temp_tokenizer.json")
                     current_tokenizer = train_tokenizer([temp_tokenizer_train_file], vocab_size=vocab_size_input)
-                    # --- Обновление постоянного токенайзера ---
-                    current_tokenizer.save(PERSISTENT_TOKENIZER_PATH)
-                    logger.info(f"✅ Постоянный токенайзер обновлён: {PERSISTENT_TOKENIZER_PATH}")
-                    print(f"✅ Постоянный токенайзер обновлён. Размер словаря: {current_tokenizer.get_vocab_size()}")
-                    # -------------------------------------
+                    current_tokenizer.save(temp_tokenizer_file)
+                    current_tokenizer_path = temp_tokenizer_file
                     vocab_size = current_tokenizer.get_vocab_size()
+                    print(f"✅ Токенайзер обучен. Размер словаря: {vocab_size}")
                     # --- Улучшенное создание валидационного датасета ---
                     print("🔄 Подготовка данных с потоковой обработкой...")
                     # Создаем тренировочный датасет с потоковой обработкой
@@ -1934,35 +1770,40 @@ def interactive_mode():
                     current_token_type = token_type
                     current_model_type = "gpt"
                     print("🔄 Начало обучения...")
-                    model_path, metrics_collector = train_model(current_model, train_loader, val_loader, criterion, optimizer,
-                                                              epochs, device,
-                                                              PERSISTENT_TOKENIZER_PATH, vocab_size, # Используем постоянный путь
-                                                              token_type, learning_rate, current_model_type,
-                                                              n_clusters_for_compression=n_clusters_for_compression) # Передаем параметр сжатия
+                    # Передаем параметры нормализации градиентов и шума
+                    model_path, metrics_collector = train_model(
+                        current_model, train_loader, val_loader, criterion, optimizer,
+                        epochs, device,
+                        current_tokenizer_path, vocab_size,
+                        token_type, learning_rate, current_model_type,
+                        gradient_clipping=adaptive_config.get('gradient_clipping', 1.0),
+                        gradient_noise_sigma=adaptive_config.get('gradient_noise_sigma', 1e-3)
+                    )
                     if model_path:
-                        print(f"✅ Обучение завершено! Модель (сжатая) сохранена в {os.path.basename(model_path)}")
+                        print(f"✅ Обучение завершено! Модель сохранена в {os.path.basename(model_path)}")
                         print(f"📊 Метрики сохранены в {METRICS_DIR}")
                         # Загружаем модель после обучения, чтобы она была готова к использованию
-                        # Также пытаемся загрузить сжатую версию, если она была создана
                         loaded_model, loaded_tokenizer_path, loaded_token_type, loaded_model_type, loaded_perplexity, loaded_weight_stats, loaded_training_config = load_model_with_dicts(model_path, device)
                         if loaded_model is not None:
                             current_model = loaded_model
+                            current_tokenizer_path = loaded_tokenizer_path
                             current_token_type = loaded_token_type
                             current_model_type = loaded_model_type
                             current_perplexity = loaded_perplexity
                             current_weight_stats = loaded_weight_stats
                             current_training_config = loaded_training_config
-                            # Перезагружаем токенайзер из постоянного файла
-                            if os.path.exists(PERSISTENT_TOKENIZER_PATH):
-                                current_tokenizer = Tokenizer.from_file(PERSISTENT_TOKENIZER_PATH)
-                            print("✅ Модель и постоянный токенайзер перезагружены после обучения.")
+                            # Перезагружаем токенайзер
+                            if current_tokenizer_path and os.path.exists(current_tokenizer_path):
+                                current_tokenizer = Tokenizer.from_file(current_tokenizer_path)
+                            print("✅ Модель и токенайзер перезагружены после обучения.")
                     else:
                         print("⚠️  Обучение завершено, но модель не была сохранена")
                     # Очистка временных файлов
                     temp_files_to_cleanup = [
                         temp_text_file_for_streaming, 
                         temp_tokenizer_train_file, # Удаляем файл для обучения токенизатора
-                        temp_val_text_file
+                        temp_val_text_file, 
+                        temp_tokenizer_file
                     ]
                     for temp_file in temp_files_to_cleanup:
                          if os.path.exists(temp_file):
@@ -1980,7 +1821,8 @@ def interactive_mode():
                     temp_files_to_cleanup = [
                         temp_text_file_for_streaming if 'temp_text_file_for_streaming' in locals() else None,
                         temp_tokenizer_train_file if 'temp_tokenizer_train_file' in locals() else None, # Удаляем файл для обучения токенизатора
-                        temp_val_text_file if 'temp_val_text_file' in locals() else None
+                        temp_val_text_file if 'temp_val_text_file' in locals() else None,
+                        temp_tokenizer_file if 'temp_tokenizer_file' in locals() else None
                     ]
                     for temp_file in temp_files_to_cleanup:
                         if temp_file and os.path.exists(temp_file):
@@ -1989,40 +1831,17 @@ def interactive_mode():
                             except Exception as rm_e:
                                 logger.warning(f"Не удалось удалить временный файл {temp_file}: {rm_e}")
             elif command == "save":
-                if current_model is None:
-                    print("❌ Нет модели для сохранения")
+                if current_model is None or current_tokenizer_path is None:
+                    print("❌ Нет модели или токенайзера для сохранения")
                     continue
-                # --- Сохраняем только сжатую модель ---
-                model_path = save_compressed_model_with_timestamp(current_model,
-                                                     PERSISTENT_TOKENIZER_PATH, # Используем постоянный путь
+                model_path = save_model_with_timestamp(current_model,
+                                                     current_tokenizer_path,
                                                      vocab_size, token_type=current_token_type,
                                                      model_type=current_model_type,
                                                      perplexity=current_perplexity,
                                                      training_config=current_training_config)
-                # --- Сохраняем конфигурацию отдельно ---
                 if model_path:
-                    config_data_to_save = {
-                        'model_config': {
-                            'hidden_size': getattr(current_model, 'hidden_size', 512),
-                            'num_layers': getattr(current_model, 'num_layers', 6),
-                            'num_heads': getattr(current_model, 'blocks', [None])[0].attention.num_heads if hasattr(current_model, 'blocks') and len(current_model.blocks) > 0 else 8,
-                            'ff_hidden_size': getattr(current_model, 'blocks', [None])[0].ffn.linear1.out_features if hasattr(current_model, 'blocks') and len(current_model.blocks) > 0 else 2048,
-                            'dropout': getattr(current_model, 'blocks', [None])[0].dropout1.p if hasattr(current_model, 'blocks') and len(current_model.blocks) > 0 else 0.1,
-                            'model_type': type(current_model).__name__,
-                            'vocab_size': vocab_size
-                        },
-                        'training_config': current_training_config
-                    }
-                    config_path = model_path.replace(".pth", ".json")
-                    try:
-                        with open(config_path, 'w', encoding='utf-8') as f:
-                            json.dump(config_data_to_save, f, indent=2, ensure_ascii=False)
-                        logger.info(f"Конфигурация модели сохранена в {config_path}")
-                    except Exception as e:
-                        logger.error(f"Ошибка при сохранении конфигурации модели: {e}")
-                # --------------------------------------
-                if model_path:
-                    print(f"✅ Модель (сжатая) сохранена в {os.path.basename(model_path)}")
+                    print(f"✅ Модель сохранена в {os.path.basename(model_path)}")
                 else:
                     print("❌ Ошибка при сохранении модели")
             elif command == "load":
@@ -2033,27 +1852,28 @@ def interactive_mode():
                     choice = int(input("Выберите модель (номер): ")) - 1
                     if 0 <= choice < len(model_files):
                         model_path = model_files[choice]
-                        # Загружаем сжатую модель
                         loaded_model, loaded_tokenizer_path, loaded_token_type, loaded_model_type, loaded_perplexity, loaded_weight_stats, loaded_training_config = load_model_with_dicts(model_path, device)
                         if loaded_model is not None:
                             current_model = loaded_model
+                            current_tokenizer_path = loaded_tokenizer_path
                             current_token_type = loaded_token_type
                             current_model_type = loaded_model_type
                             current_perplexity = loaded_perplexity
                             current_weight_stats = loaded_weight_stats
                             current_training_config = loaded_training_config
-                            vocab_size = loaded_training_config.get('vocab_size', 0) # Получаем из чекпойнта
+                            checkpoint = torch.load(model_path, map_location=device, weights_only=False) # Исправлено
+                            vocab_size = checkpoint.get('vocab_size', 0) # Получаем из чекпойнта
                             print(f"✅ Модель загружена из {os.path.basename(model_path)}")
                             print(f"   Тип токенизации: {current_token_type}")
                             print(f"   Тип модели: {current_model_type}")
                             if current_perplexity:
                                 print(f"   Perplexity: {current_perplexity:.4f}")
-                            # Загрузка токенайзера из постоянного файла
-                            if os.path.exists(PERSISTENT_TOKENIZER_PATH):
-                                current_tokenizer = Tokenizer.from_file(PERSISTENT_TOKENIZER_PATH)
-                                print(f"✅ Постоянный токенайзер загружен из {PERSISTENT_TOKENIZER_PATH}")
+                            # Загрузка токенайзера
+                            if current_tokenizer_path and os.path.exists(current_tokenizer_path):
+                                current_tokenizer = Tokenizer.from_file(current_tokenizer_path)
+                                print(f"✅ Токенайзер загружен из {current_tokenizer_path}")
                             else:
-                                print("⚠️  Постоянный токенайзер не найден.")
+                                print("⚠️  Токенайзер не найден или путь некорректен.")
                                 current_tokenizer = None
                         else:
                             print("❌ Ошибка при загрузке модели")
@@ -2081,7 +1901,7 @@ def interactive_mode():
                 print(f"  Models directory: {os.path.abspath(MODELS_DIR)}")
                 print(f"  Metrics directory: {os.path.abspath(METRICS_DIR)}")
                 print(f"  Cache directory: {os.path.abspath(CACHE_DIR)}")
-                print(f"  Tokenizer path: {PERSISTENT_TOKENIZER_PATH}") # Показываем постоянный путь
+                print(f"  Tokenizer path: {current_tokenizer_path}")
                 if current_training_config:
                     print("\nКонфигурация обучения:")
                     for key, value in current_training_config.items():
@@ -2120,39 +1940,12 @@ def interactive_mode():
             print("\n⚠️  Прерывание программы...")
             if current_model is not None:
                 print("Автоматическое сохранение модели...")
-                # --- Сохраняем только сжатую модель ---
-                model_path = save_compressed_model_with_timestamp(current_model,
-                                        PERSISTENT_TOKENIZER_PATH, # Используем постоянный путь
+                save_model_with_timestamp(current_model,
+                                        current_tokenizer_path,
                                         vocab_size, token_type=current_token_type,
                                         model_type=current_model_type,
                                         perplexity=current_perplexity,
                                         training_config=current_training_config)
-                # --- Сохраняем конфигурацию отдельно ---
-                if model_path:
-                    config_data_to_save = {
-                        'model_config': {
-                            'hidden_size': getattr(current_model, 'hidden_size', 512),
-                            'num_layers': getattr(current_model, 'num_layers', 6),
-                            'num_heads': getattr(current_model, 'blocks', [None])[0].attention.num_heads if hasattr(current_model, 'blocks') and len(current_model.blocks) > 0 else 8,
-                            'ff_hidden_size': getattr(current_model, 'blocks', [None])[0].ffn.linear1.out_features if hasattr(current_model, 'blocks') and len(current_model.blocks) > 0 else 2048,
-                            'dropout': getattr(current_model, 'blocks', [None])[0].dropout1.p if hasattr(current_model, 'blocks') and len(current_model.blocks) > 0 else 0.1,
-                            'model_type': type(current_model).__name__,
-                            'vocab_size': vocab_size
-                        },
-                        'training_config': current_training_config
-                    }
-                    config_path = model_path.replace(".pth", ".json")
-                    try:
-                        with open(config_path, 'w', encoding='utf-8') as f:
-                            json.dump(config_data_to_save, f, indent=2, ensure_ascii=False)
-                        logger.info(f"Конфигурация модели сохранена в {config_path}")
-                    except Exception as e:
-                        logger.error(f"Ошибка при сохранении конфигурации модели: {e}")
-                # --------------------------------------
-                if model_path:
-                    print(f"✅ Модель (сжатая) сохранена в {os.path.basename(model_path)}")
-                else:
-                    print("❌ Ошибка при сохранении модели")
             print("До свидания!")
             break
         except Exception as e:
@@ -2169,11 +1962,15 @@ if __name__ == "__main__":
     print("Поддержка обучения на тексте из веб-страниц (URL).")
     print("Потоковая обработка больших файлов для экономии памяти.")
     print("Поддержка обучения на JSON-датасетах (например, SiberiaSoft/SiberianPersonaChat).")
-    print("Интеграция VQ-сжатия моделей. Теперь сохраняются и загружаются только сжатые модели.")
+    print("Улучшения для глубоких моделей:")
+    print("  - Увеличено количество слоев до 50 (DEFAULT_NUM_LAYERS)")
+    print("  - Добавлены остаточные связи между блоками трансформера (уже были внутри блоков)")
+    print("  - Добавлены методы нормализации градиентов (Gradient Clipping) и шума (Gradient Noise)")
+    print("  - Добавлена новая конфигурация 'deep_model_experiment' для 50 слоев")
+    print("  - Поддержка QAT может быть интегрирована через внешние библиотеки (например, torch.quantization)")
     print(f"📁 Модели сохраняются в: {os.path.abspath(MODELS_DIR)}")
     print(f"📝 Логи сохраняются в: {os.path.abspath(LOGS_DIR)}")
     print(f"📊 Метрики сохраняются в: {os.path.abspath(METRICS_DIR)}")
     print(f"Кэширование в: {os.path.abspath(CACHE_DIR)}")
-    print(f"Постоянный токенайзер: {os.path.abspath(PERSISTENT_TOKENIZER_PATH)}")
     print("\n🚀 Запуск интерактивного режима...")
     interactive_mode()
