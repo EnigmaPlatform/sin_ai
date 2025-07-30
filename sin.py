@@ -82,8 +82,10 @@ DEFAULT_SEQ_LENGTH = 256   # Уменьшено с 512
 DEFAULT_BATCH_SIZE = 8     # Уменьшено с 16
 DEFAULT_EPOCHS = 50        # Уменьшено с 100
 DEFAULT_LEARNING_RATE = 3e-4
-DEFAULT_HIDDEN_SIZE = 512  # Уменьшено с 768
-DEFAULT_NUM_LAYERS = 6     # Уменьшено с 12
+# --- Измененные параметры ---
+DEFAULT_HIDDEN_SIZE = 256  # Увеличено с 128
+DEFAULT_NUM_LAYERS = 8     # Увеличено с 2
+# ---------------------------
 DEFAULT_ATTENTION_HEADS = 8 # Уменьшено с 12
 DEFAULT_FF_HIDDEN_SIZE = 2048 # Уменьшено с 3072
 DEFAULT_DROPOUT = 0.1
@@ -93,7 +95,7 @@ DEFAULT_MODEL_TYPE = "gpt"
 # Имя ассистента
 ASSISTANT_NAME = "Sin"
 # ------------------
-# Адаптивные конфигурации
+# Адаптивные конфигурации (обновлены значения по умолчанию для CPU)
 # ------------------
 ADAPTIVE_CONFIGS = {
     "high_end_gpu": {
@@ -156,18 +158,20 @@ ADAPTIVE_CONFIGS = {
         "learning_rate": 3e-4,
         "token_type": "bpe"
     },
+    # --- Обновленная конфигурация для CPU с увеличенными параметрами ---
     "low_memory_cpu": {
         "seq_length": 64,
-        "batch_size": 1,
+        "batch_size": 1, # Остается 1
         "epochs": 10,
-        "hidden_size": 128,
-        "num_layers": 2,
-        "num_heads": 2,
-        "ff_hidden_size": 512,
+        "hidden_size": 256, # Увеличено до 256
+        "num_layers": 8,    # Увеличено до 8
+        "num_heads": 4,
+        "ff_hidden_size": 1024,
         "dropout": 0.1,
         "learning_rate": 3e-4,
         "token_type": "bpe"
     }
+    # ------------------------------------------------------------
 }
 # ------------------
 # Layer Normalization
@@ -1647,7 +1651,9 @@ def interactive_mode():
                 hw_profile = detect_hardware_profile()
                 print(f"Обнаружен профиль устройства: {hw_profile}")
                 # 2. Получить адаптивные конфигурации
+                # --- Используем обновленную конфигурацию для low_memory_cpu ---
                 adaptive_config = ADAPTIVE_CONFIGS.get(hw_profile["profile_name"], ADAPTIVE_CONFIGS["low_memory_cpu"]) # fallback
+                # ------------------------------------------------------------
                 try:
                     token_type = input(f"Тип токенизации (bpe для tokenizers, по умолчанию {adaptive_config['token_type']}): ").strip().lower()
                     if token_type != "bpe":
