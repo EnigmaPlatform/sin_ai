@@ -1,4 +1,4 @@
-﻿import torch
+import torch
 # Исправлен импорт autocast для PyTorch >= 2.4
 try:
     from torch.amp import autocast
@@ -53,11 +53,16 @@ try:
 except ImportError:
     TOKENIZERS_SUPPORT = False
     print("⚠️  tokenizers не установлен. Установите его для поддержки BPE: pip install tokenizers")
+
+# --- Новый базовый путь ---
+BASE_DIR = r"C:\Users\User\Downloads"
+# --------------------------
+
 # Создание директории для моделей
-MODELS_DIR = "models"
-LOGS_DIR = "logs"
-METRICS_DIR = "metrics"
-CACHE_DIR = "cache"
+MODELS_DIR = os.path.join(BASE_DIR, "models")
+LOGS_DIR = os.path.join(BASE_DIR, "logs")
+METRICS_DIR = os.path.join(BASE_DIR, "metrics")
+CACHE_DIR = os.path.join(BASE_DIR, "cache")
 # Создание необходимых директорий
 os.makedirs(MODELS_DIR, exist_ok=True)
 os.makedirs(LOGS_DIR, exist_ok=True)
@@ -387,7 +392,6 @@ class StreamingTextDataset(torch.utils.data.Dataset):
         # Предварительный подсчет общего количества токенов и последовательностей
         self.total_sequences = self._count_sequences()
         logger.info(f"Dataset: Всего последовательностей: {self.total_sequences}")
-
     def _count_sequences(self):
         logger.info("Подсчет общего количества последовательностей...")
         total_tokens = 0
@@ -405,17 +409,14 @@ class StreamingTextDataset(torch.utils.data.Dataset):
             return (total_tokens - self.seq_length) // self.stride + 1
         else:
             return 0
-
     def __len__(self):
         return self.total_sequences
-
     def __getitem__(self, idx):
         # Реализация __getitem__ для StreamingTextDataset.
         # Это требует поиска idx-ой последовательности в файле.
         # Это неэффективно для потоковой обработки, но возможно.
         if idx >= len(self):
             raise IndexError(f"Index {idx} is out of bounds for dataset with {len(self)} sequences")
-
         # Найдем приблизительное смещение в файле, где может начинаться нужная последовательность.
         # Это не точно, так как длина токенов после кодирования не равна длине символов.
         # Но это точка старта для поиска.
@@ -449,7 +450,6 @@ class StreamingTextDataset(torch.utils.data.Dataset):
                     buffer_tokens = buffer_tokens[-overlap:]
                     current_token_index = len(buffer_tokens) - overlap # Это упрощение, может быть неточно
         raise IndexError(f"Could not find sequence at index {idx}. File reading logic might need refinement.")
-
 # ------------------
 # IterableDataset для потоковой обработки (улучшенная реализация worker split)
 # ------------------
@@ -462,7 +462,6 @@ class StreamingTextIterableDataset(torch.utils.data.IterableDataset):
         self.chunk_size = chunk_size
         # Добавим оценку длины для совместимости (не точная)
         self._estimated_length = self._estimate_length()
-
     def _estimate_length(self):
         """Оценка количества последовательностей в файле."""
         try:
@@ -476,19 +475,16 @@ class StreamingTextIterableDataset(torch.utils.data.IterableDataset):
                 return 0
         except OSError:
             return 0
-
     def __len__(self):
         # Возвращаем оценку, но помним, что она может быть неточной.
         # Это позволяет использовать len(dataset) в некоторых случаях, но с осторожностью.
         return self._estimated_length
-
     def __iter__(self):
         worker_info = torch.utils.data.get_worker_info()
         file_handle = None
         file_size = os.path.getsize(self.file_path)
         start_offset = 0
         end_offset = file_size
-
         if worker_info is None:  # single-process loading
             logger.info("StreamingTextIterableDataset: Single worker mode.")
         else:  # in a worker process
@@ -502,19 +498,16 @@ class StreamingTextIterableDataset(torch.utils.data.IterableDataset):
             start_offset = worker_info.id * per_worker
             end_offset = min(start_offset + per_worker, file_size)
             logger.info(f"Worker {worker_info.id} will process bytes {start_offset} to {end_offset} (size: {end_offset - start_offset})")
-
         try:
             # Открываем файл и устанавливаем начальную позицию
             file_handle = open(self.file_path, 'r', encoding='utf-8', errors='ignore')
             file_handle.seek(start_offset)
-
             # Если это не первый воркер, нам нужно найти начало следующего "полного" чанка/предложения/строки
             # чтобы избежать разрывов внутри слов/токенов. Простейший способ - пропустить до конца текущей строки.
             if worker_info is not None and worker_info.id > 0:
                 # Пропускаем остаток строки, чтобы начать с новой
                 file_handle.readline()
                 logger.debug(f"Worker {worker_info.id} skipped to start of next line.")
-
             buffer_tokens = []
             bytes_read = start_offset
             # Если это не первый воркер, начальный индекс токенов в буфере может быть не 0
@@ -529,11 +522,9 @@ class StreamingTextIterableDataset(torch.utils.data.IterableDataset):
                 if not chunk:
                     break
                 bytes_read += len(chunk.encode('utf-8', errors='ignore')) # Приблизительный подсчет байт
-
                 # Токенизируем чанк
                 chunk_tokens = self.tokenizer.encode(chunk).ids
                 buffer_tokens.extend(chunk_tokens)
-
                 # Генерируем последовательности из буфера
                 i = 0
                 while i + self.seq_length + 1 <= len(buffer_tokens):
@@ -541,7 +532,6 @@ class StreamingTextIterableDataset(torch.utils.data.IterableDataset):
                     y = buffer_tokens[i+1:i+self.seq_length+1]
                     yield (torch.tensor(x, dtype=torch.long), torch.tensor(y, dtype=torch.long))
                     i += self.stride
-
                 # Оставляем в буфере только неполные последовательности для следующего чанка
                 # Это важно для корректной обработки перекрывающихся последовательностей
                 if len(buffer_tokens) > self.seq_length:
@@ -550,11 +540,9 @@ class StreamingTextIterableDataset(torch.utils.data.IterableDataset):
                     overlap_start_index = len(buffer_tokens) - ((len(buffer_tokens) - self.seq_length - 1) % self.stride + self.seq_length + 1)
                     if overlap_start_index < 0: overlap_start_index = 0
                     buffer_tokens = buffer_tokens[overlap_start_index:]
-
         finally:
             if file_handle:
                 file_handle.close()
-
 # ------------------
 # Класс для сбора метрик
 # ------------------
@@ -811,18 +799,15 @@ def train_tokenizer(files, vocab_size=30000, special_tokens=None):
     #     special_tokens=[("<BOS>", special_tokens.index("<BOS>")), ("<EOS>", special_tokens.index("<EOS>"))],
     # )
     return tokenizer
-
 def tokenize_with_tokenizer(tokenizer, text):
     if not TOKENIZERS_SUPPORT:
         raise Exception("Поддержка tokenizers не доступна. Установите tokenizers")
     encoding = tokenizer.encode(text)
     return encoding.ids
-
 def detokenize_with_tokenizer(tokenizer, ids):
     if not TOKENIZERS_SUPPORT:
         raise Exception("Поддержка tokenizers не доступна. Установите tokenizers")
     return tokenizer.decode(ids)
-
 # ------------------
 # Новая функция для загрузки текста с URL
 # ------------------
@@ -917,7 +902,6 @@ def load_text_from_url(url):
     except Exception as e:
         logger.error(f"Ошибка при парсинге {url}: {e}")
         raise Exception(f"Ошибка при обработке содержимого URL {url}: {e}")
-
 # ------------------
 # Новые функции для загрузки и обработки JSON
 # ------------------
@@ -932,7 +916,6 @@ def load_json_file(file_path):
     except Exception as e:
         logger.error(f"Ошибка при загрузке JSON файла {file_path}: {e}")
         raise
-
 def process_json_to_dialogue_text(json_data):
     """
     Преобразует данные JSON в форматированный текст диалога.
@@ -942,11 +925,9 @@ def process_json_to_dialogue_text(json_data):
     """
     logger.info("Начало преобразования JSON в текст диалога...")
     dialogue_texts = []
-    
     if not isinstance(json_data, list):
         logger.warning("JSON данные не являются списком. Попытка обработать как один элемент.")
         json_data = [json_data]
-
     for item in json_data:
         try:
             # Формат 1: instruction + input + output
@@ -954,7 +935,6 @@ def process_json_to_dialogue_text(json_data):
                 instruction = item.get("instruction", "").strip()
                 user_input = item.get("input", "").strip()
                 bot_output = item.get("output", "").strip()
-                
                 if bot_output: # Только если есть ответ
                     # Формируем контекст: инструкция + вход
                     context_parts = []
@@ -963,15 +943,12 @@ def process_json_to_dialogue_text(json_data):
                     if user_input:
                         context_parts.append(user_input)
                     context = " ".join(context_parts)
-                    
                     dialogue_text = f"<USER>{context}<EOS><BOT>{bot_output}<EOS>"
                     dialogue_texts.append(dialogue_text)
-            
             # Формат 2: input + output
             elif "input" in item and "output" in item:
                 user_input = item.get("input", "").strip()
                 bot_output = item.get("output", "").strip()
-                
                 if user_input and bot_output: # Только если есть и запрос, и ответ
                     dialogue_text = f"<USER>{user_input}<EOS><BOT>{bot_output}<EOS>"
                     dialogue_texts.append(dialogue_text)
@@ -980,11 +957,9 @@ def process_json_to_dialogue_text(json_data):
         except Exception as e:
             logger.warning(f"Ошибка при обработке записи JSON {item}: {e}")
             continue
-            
     combined_text = "\n".join(dialogue_texts)
     logger.info(f"Преобразование JSON завершено. Обработано {len(dialogue_texts)} диалогов. Общий размер текста: {len(combined_text)} символов.")
     return combined_text
-
 # ------------------
 # Обновленные функции загрузки текста
 # ------------------
@@ -1012,7 +987,6 @@ def load_text(file_path):
     except Exception as e:
         logger.error(f"Ошибка при загрузке файла {file_path}: {e}")
         raise
-
 def load_txt_file(file_path):
     encodings = ['utf-8', 'windows-1251', 'cp1251', 'koi8-r', 'latin1']
     for encoding in encodings:
@@ -1033,7 +1007,6 @@ def load_txt_file(file_path):
         return text
     except Exception as e:
         raise Exception(f"Не удалось загрузить файл {file_path} ни с одной кодировкой: {e}")
-
 def load_docx_file(file_path):
     if not DOCX_SUPPORT:
         raise Exception("Поддержка DOCX файлов не доступна. Установите python-docx")
@@ -1046,7 +1019,6 @@ def load_docx_file(file_path):
         return text
     except Exception as e:
         raise Exception(f"Ошибка при загрузке DOCX файла {file_path}: {e}")
-
 def load_pdf_file(file_path):
     if not PDF_SUPPORT:
         raise Exception("Поддержка PDF файлов не доступна. Установите PyPDF2")
@@ -1060,7 +1032,6 @@ def load_pdf_file(file_path):
         return text
     except Exception as e:
         raise Exception(f"Ошибка при загрузке PDF файла {file_path}: {e}")
-
 def clean_text(text):
     original_length = len(text)
     # Исправленная строка с корректным экранированием апострофа
@@ -1071,7 +1042,6 @@ def clean_text(text):
     cleaned_length = len(text)
     logger.info(f"Текст очищен: {original_length} -> {cleaned_length} символов")
     return text.strip()
-
 # ------------------
 # Управление моделями
 # ------------------
@@ -1080,7 +1050,6 @@ def get_model_files():
     model_files = glob.glob(os.path.join(MODELS_DIR, "gpt_model_*.pth"))
     model_files.sort(key=os.path.getctime, reverse=True)
     return model_files
-
 def cleanup_old_models():
     model_files = get_model_files()
     if len(model_files) > MAX_SAVED_MODELS:
@@ -1091,7 +1060,6 @@ def cleanup_old_models():
                 logger.info(f"Удалена старая модель: {os.path.basename(old_model)}")
             except Exception as e:
                 logger.error(f"Ошибка при удалении модели {old_model}: {e}")
-
 # Исправленная функция загрузки модели с weights_only=False
 def save_model_with_timestamp(model, tokenizer_path, vocab_size,
                             loss=0.0, token_type="bpe", perplexity=None,
@@ -1140,7 +1108,6 @@ def save_model_with_timestamp(model, tokenizer_path, vocab_size,
     except Exception as e:
         logger.error(f"Ошибка при сохранении модели: {e}")
         return None
-
 def load_model_with_dicts(model_path, device):
     try:
         # Установка weights_only=False для совместимости с PyTorch 2.6+
@@ -1179,7 +1146,6 @@ def load_model_with_dicts(model_path, device):
     except Exception as e:
         logger.error(f"Ошибка при загрузке модели {model_path}: {e}")
         return None, None, None, None, None, None, None
-
 def list_available_models():
     model_files = get_model_files()
     if not model_files:
@@ -1202,7 +1168,6 @@ def list_available_models():
         except Exception as e:
             print(f"{i+1}. {os.path.basename(model_file)} (ошибка чтения: {e})")
     return model_files
-
 # ------------------
 # Определение профиля устройства
 # ------------------
@@ -1239,7 +1204,6 @@ def detect_hardware_profile():
         else: # Меньше 8 ГБ
              profile["profile_name"] = "low_memory_cpu"
     return profile
-
 # ------------------
 # Расчет перплексии
 # ------------------
@@ -1258,7 +1222,6 @@ def calculate_perplexity(model, data_loader, device, criterion):
     avg_loss = total_loss / total_samples
     perplexity = np.exp(avg_loss)
     return perplexity
-
 # ------------------
 # Генерация текста (обновлено)
 # ------------------
@@ -1268,19 +1231,16 @@ def generate_text(model, tokenizer, start_tokens,
     """Генерация текста с ранней остановкой и динамической длиной."""
     logger.info(f"Начало генерации текста: '{start_tokens}', max_new_tokens: {max_new_tokens}")
     logger.info(f"Параметры: температура={temperature}, top_k={top_k}, top_p={top_p}, repetition_penalty={repetition_penalty}")
-    
     model.eval()
     with torch.no_grad():
         # Токенизация начального текста
         input_ids_list = tokenize_with_tokenizer(tokenizer, start_tokens)
         input_ids = torch.tensor([input_ids_list], dtype=torch.long).to(device)
-        
         # Получаем ID токена EOS
         eos_token_id = tokenizer.token_to_id('<EOS>')
         if eos_token_id is None:
             logger.warning("Токен <EOS> не найден в токенайзере. Используется ID 0 как EOS.")
             eos_token_id = 0 # fallback
-
         # Генерация с ранней остановкой
         output_ids = model.generate(
             input_ids,
@@ -1289,18 +1249,14 @@ def generate_text(model, tokenizer, start_tokens,
             temperature=temperature,
             do_sample=True # Всегда используем сэмплирование для генерации
         )
-        
         # Декодируем только сгенерированную часть (без начального контекста)
         generated_ids = output_ids[0, len(input_ids_list):].tolist()
-        
         # Удаляем EOS токен из финального текста, если он есть
         if generated_ids and generated_ids[-1] == eos_token_id:
             generated_ids = generated_ids[:-1]
-            
         generated_text = detokenize_with_tokenizer(tokenizer, generated_ids)
         logger.info(f"Генерация завершена, сгенерировано {len(generated_ids)} токенов")
         return generated_text # Возвращаем только сгенерированный текст
-
 # ------------------
 # Улучшенный класс для управления историей чата (обновлено)
 # ------------------
@@ -1310,15 +1266,12 @@ class ChatHistory:
         self.max_context_tokens = max_context_tokens
         self.history = deque() # Используем deque для эффективного добавления/удаления с обоих концов
         self.total_tokens = 0
-
     def add_user_message(self, message):
         entry = f"<USER>{message}<EOS>"
         self._add_entry(entry)
-
     def add_assistant_message(self, message):
         entry = f"<BOT>{message}<EOS>"
         self._add_entry(entry)
-
     def _add_entry(self, entry):
         tokens = tokenize_with_tokenizer(self.tokenizer, entry)
         self.history.append((entry, len(tokens)))
@@ -1327,15 +1280,12 @@ class ChatHistory:
         while self.total_tokens > self.max_context_tokens and self.history:
             removed_entry, removed_tokens = self.history.popleft()
             self.total_tokens -= removed_tokens
-
     def get_context(self):
         # Собираем контекст из истории
         return "".join([entry for entry, _ in self.history])
-
     def clear(self):
         self.history.clear()
         self.total_tokens = 0
-
 # ------------------
 # Чат с ассистентом Sin (обновлено)
 # ------------------
@@ -1344,10 +1294,8 @@ def chat_with_sin(model, tokenizer, device):
         print("❌ Нет загруженной модели или токенайзера для чата.")
         return
     print(f"\n🗣️  Начинаем чат с {ASSISTANT_NAME}. Введите '/exit' для выхода или '/clear' для очистки истории.")
-    
     # Используем улучшенный класс для управления историей
     chat_history = ChatHistory(tokenizer, max_context_tokens=384) # Оставляем запас
-
     model.eval()
     with torch.no_grad():
         while True:
@@ -1359,11 +1307,9 @@ def chat_with_sin(model, tokenizer, device):
                 chat_history.clear()
                 print(f"{ASSISTANT_NAME}: История диалога очищена.")
                 continue
-
             # Формирование контекста с использованием улучшенного класса
             chat_history.add_user_message(user_input)
             context = chat_history.get_context() + "<BOT>"
-            
             print(f"{ASSISTANT_NAME}: ", end='', flush=True)
             try:
                 # Генерация ответа
@@ -1373,18 +1319,14 @@ def chat_with_sin(model, tokenizer, device):
                     temperature=0.8, top_k=50, top_p=0.95,
                     repetition_penalty=1.1, device=device
                 )
-                
                 # Вывод сгенерированного текста (без специальных токенов)
                 # generated_text уже не содержит <BOT> в начале и <EOS> в конце благодаря generate_text
                 print(generated_text.strip())
-                
                 # Обновление истории с ответом ассистента
                 chat_history.add_assistant_message(generated_text.strip())
-
             except Exception as e:
                 logger.error(f"Ошибка при генерации ответа: {e}")
                 print(f"{ASSISTANT_NAME}: Извините, произошла ошибка при генерации ответа.")
-
 # ------------------
 # Обучение с улучшенной обработкой ошибок (обновленная логика логирования)
 # ------------------
@@ -1559,7 +1501,6 @@ def train_model(model, train_loader, val_loader, criterion, optimizer, epochs, d
     metrics_collector.save_metrics(f"final_metrics_{final_timestamp}.json")
     metrics_collector.plot_metrics(f"final_metrics_{final_timestamp}")
     return best_model_path, metrics_collector
-
 # ------------------
 # Интерактивный режим
 # ------------------
@@ -1634,7 +1575,7 @@ def interactive_mode():
                         elif current_tokenizer_path and not TOKENIZERS_SUPPORT:
                             logger.warning(f"⚠️ Библиотека tokenizers не доступна для загрузки токенайзера.")
                         if not tokenizer_loaded_successfully:
-                            logger.warning(f"⚠️ Токенайзер для модели {model_basename} не доступен или не работает. Будет использован vocab_size из чекпоинта.")
+                            logger.warning(f"⚠️ Токенайзер для модели {model_basename} не доступен или не работает. Будет использован vocab_size из чекпойнта.")
                             current_tokenizer = None
                             vocab_size = vocab_size_from_checkpoint
                         logger.info(f"✅ Модель успешно автозагружена из {model_basename}")
@@ -2043,7 +1984,6 @@ def interactive_mode():
             import traceback
             logger.error(traceback.format_exc())
             print(f"❌ Неожиданная ошибка: {e}")
-
 if __name__ == "__main__":
     print(f"🤖 Современный генеративный ИИ '{ASSISTANT_NAME}' с GPT-архитектурой (оптимизированная версия)")
     print("Поддерживаемые форматы файлов: .txt, .docx, .pdf, .json")
