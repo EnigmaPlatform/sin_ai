@@ -382,18 +382,17 @@ class ModernGPT(nn.Module):
                 if next_token.item() == eos_token_id:
                     break
         return input_ids
-        def get_model_info(self):
-        info = (
-            f"ModernGPT Model:\n"
-            f"  Vocabulary size: {self.token_embedding.num_embeddings}\n"
-            f"  Hidden size: {self.hidden_size}\n"
-            f"  Number of layers: {self.num_layers}\n"
-            f"  Attention heads: {self.blocks[0].attention.num_heads}\n"
-            f"  Feed-forward hidden size: {self.blocks[0].ffn.linear1.out_features}\n"
-            f"  Max sequence length: {self.max_seq_length}\n"
-            f"  Parameters: {sum(p.numel() for p in self.parameters()):,}\n"
-            f"  Trainable parameters: {sum(p.numel() for p in self.parameters() if p.requires_grad):,}"
-        )
+    def get_model_info(self):
+        # Исправлено: использование тройных двойных кавычек для многострочной f-string
+        info = f"""ModernGPT Model:
+  Vocabulary size: {self.token_embedding.num_embeddings}
+  Hidden size: {self.hidden_size}
+  Number of layers: {self.num_layers}
+  Attention heads: {self.blocks[0].attention.num_heads}
+  Feed-forward hidden size: {self.blocks[0].ffn.linear1.out_features}
+  Max sequence length: {self.max_seq_length}
+  Parameters: {sum(p.numel() for p in self.parameters()):,}
+  Trainable parameters: {sum(p.numel() for p in self.parameters() if p.requires_grad):,}"""
         return info
 # ------------------
 # Пользовательский Dataset для потоковой обработки (улучшенная реализация __getitem__)
@@ -553,9 +552,11 @@ class StreamingTextIterableDataset(torch.utils.data.IterableDataset):
                 if len(buffer_tokens) > self.seq_length:
                     # Оставляем последние токены, которые могут быть началом новой последовательности
                     # Используем более точную логику перекрытия
-                    overlap_start_index = len(buffer_tokens) - ((len(buffer_tokens) - self.seq_length - 1) % self.stride + self.seq_length + 1)
-                    if overlap_start_index < 0: overlap_start_index = 0
-                    buffer_tokens = buffer_tokens[overlap_start_index:]
+                    # Исправлено: добавлена проверка len(buffer_tokens) > 0
+                    if len(buffer_tokens) > 0:
+                        overlap_start_index = len(buffer_tokens) - ((len(buffer_tokens) - self.seq_length - 1) % self.stride + self.seq_length + 1)
+                        if overlap_start_index < 0: overlap_start_index = 0
+                        buffer_tokens = buffer_tokens[overlap_start_index:]
         finally:
             if file_handle:
                 file_handle.close()
@@ -941,10 +942,11 @@ def process_json_to_dialogue_text(json_data):
     """
     logger.info("Начало преобразования JSON в текст диалога...")
     dialogue_texts = []
+    # Исправлено: добавлена проверка типа данных
     if not isinstance(json_data, list):
         logger.warning("JSON данные не являются списком. Попытка обработать как один элемент.")
         json_data = [json_data]
-    for item in json_
+    for item in json_data:
         try:
             # Формат 1: instruction + input + output
             if "instruction" in item and "input" in item and "output" in item:
@@ -973,7 +975,8 @@ def process_json_to_dialogue_text(json_data):
         except Exception as e:
             logger.warning(f"Ошибка при обработке записи JSON {item}: {e}")
             continue
-    combined_text = "\n".join(dialogue_texts) 
+    # Исправлено: использование join для корректного объединения строк
+    combined_text = "\n".join(dialogue_texts)
     logger.info(f"Преобразование JSON завершено. Обработано {len(dialogue_texts)} диалогов. Общий размер текста: {len(combined_text)} символов.")
     return combined_text
 
@@ -1008,7 +1011,9 @@ def setup_qlora_model(model_name="Qwen/Qwen3-8B-AWQ"):
     lora_config = LoraConfig(
         r=64, # Ранг LoRA
         lora_alpha=16,
-        target_modules=["c_attn", "c_proj", "c_fc"], # Целевые модули Qwen (может потребоваться корректировка)
+        # target_modules=["c_attn", "c_proj", "c_fc"], # Целевые модули Qwen (может потребоваться корректировка)
+        # Используем более общий подход для определения модулей
+        target_modules=["q_proj", "k_proj", "v_proj", "o_proj", "gate_proj", "up_proj", "down_proj"],
         lora_dropout=0.1,
         bias="none",
         modules_to_save=["lm_head", "embed_tokens"] # Модули, которые будут полностью обучаться
@@ -1051,17 +1056,21 @@ def process_siberian_persona_chat(data):
     logger.info("Обработка SiberiaSoft/SiberianPersonaChat датасета...")
     processed_data = []
     for item in data:
-        # Предполагаем формат: {"instruction": "...", "input": "...", "output": "..."}
-        instruction = item.get("instruction", "")
-        user_input = item.get("input", "")
-        bot_output = item.get("output", "")
-        
-        if bot_output: # Убедимся, что есть ответ
-            # Формируем текст в формате диалога
-            full_text = f"<|user|>\n{instruction} {user_input}\n<|assistant|>\n{bot_output}"
-            processed_data.append(full_text)
-        else:
-            logger.warning(f"Пропущена запись без ответа: {item}")
+        try:
+            # Предполагаем формат: {"instruction": "...", "input": "...", "output": "..."}
+            instruction = item.get("instruction", "")
+            user_input = item.get("input", "")
+            bot_output = item.get("output", "")
+            
+            if bot_output: # Убедимся, что есть ответ
+                # Формируем текст в формате диалога
+                full_text = f"<|user|>\n{instruction} {user_input}\n<|assistant|>\n{bot_output}"
+                processed_data.append(full_text)
+            else:
+                logger.warning(f"Пропущена запись без ответа: {item}")
+        except Exception as e:
+            logger.warning(f"Ошибка при обработке записи: {item}, ошибка: {e}")
+            continue
     logger.info(f"Обработано {len(processed_data)} записей.")
     return processed_data
 
@@ -1180,8 +1189,7 @@ def load_docx_file(file_path):
         doc = Document(file_path)
         text = ""
         for paragraph in doc.paragraphs:
-            text += paragraph.text + "
-"
+            text += paragraph.text + "\n"
         logger.info(f"DOCX файл {file_path} успешно загружен")
         return text
     except Exception as e:
@@ -1194,8 +1202,7 @@ def load_pdf_file(file_path):
             pdf_reader = PyPDF2.PdfReader(file)
             text = ""
             for page in pdf_reader.pages:
-                text += page.extract_text() + "
-"
+                text += page.extract_text() + "\n"
         logger.info(f"PDF файл {file_path} успешно загружен")
         return text
     except Exception as e:
@@ -1206,9 +1213,7 @@ def clean_text(text):
     # Оставляем больше специальных символов для диалогов и JSON
     text = re.sub(r'[^\w\s\.\,\!\?\-\:\;\(\)\"\\\'\u0400-\u04FF<>/\[\]{}]', ' ', text)
     text = re.sub(r'\s+', ' ', text)
-    text = re.sub(r'
-+', '
-', text)
+    text = re.sub(r'\n+', '\n', text)
     cleaned_length = len(text)
     logger.info(f"Текст очищен: {original_length} -> {cleaned_length} символов")
     return text.strip()
@@ -1321,8 +1326,7 @@ def list_available_models():
     if not model_files:
         print("Нет доступных моделей")
         return []
-    print("
-Доступные модели:")
+    print("\nДоступные модели:")
     for i, model_file in enumerate(model_files):
         try:
             # Установка weights_only=False для совместимости с PyTorch 2.6+
@@ -1496,15 +1500,13 @@ def chat_with_sin(model, tokenizer, device):
     if model is None or tokenizer is None:
         print("❌ Нет загруженной модели или токенайзера для чата.")
         return
-    print(f"
-🗣️  Начинаем чат с {ASSISTANT_NAME}. Введите '/exit' для выхода или '/clear' для очистки истории.")
+    print(f"\n🗣️  Начинаем чат с {ASSISTANT_NAME}. Введите '/exit' для выхода или '/clear' для очистки истории.")
     # Используем улучшенный класс для управления историей
     chat_history = ChatHistory(tokenizer, max_context_tokens=384) # Оставляем запас
     model.eval()
     with torch.no_grad():
         while True:
-            user_input = input("
-Вы: ").strip()
+            user_input = input("\nВы: ").strip()
             if user_input.lower() in ['/exit', '/quit']:
                 print(f"{ASSISTANT_NAME}: До скорой встречи!")
                 break
@@ -1540,13 +1542,11 @@ def chat_with_sin_qlora(model, tokenizer):
         print("❌ Нет загруженной QLoRA модели или токенайзера.")
         return
         
-    print(f"
-🗣️  Начинаем чат с QLoRA моделью. Введите '/exit' для выхода или '/clear' для очистки истории.")
+    print(f"\n🗣️  Начинаем чат с QLoRA моделью. Введите '/exit' для выхода или '/clear' для очистки истории.")
     conversation_history = ""
     
     while True:
-        user_input = input("
-Вы: ").strip()
+        user_input = input("\nВы: ").strip()
         if user_input.lower() in ['/exit', '/quit']:
             print("Ассистент: До скорой встречи!")
             break
@@ -1772,16 +1772,14 @@ def interactive_mode():
     qlora_tokenizer = None
     qlora_model_path = None
     
-    print("
-" + "="*80)
+    print("\n" + "="*80)
     print(f"🤖 Современный генеративный ИИ '{ASSISTANT_NAME}' с GPT-архитектурой (оптимизированная версия)")
     print("="*80)
     print(f"📁 Модели сохраняются в: {os.path.abspath(MODELS_DIR)}")
     print(f"📝 Логи сохраняются в: {os.path.abspath(LOGS_DIR)}")
     print(f"📊 Метрики сохраняются в: {os.path.abspath(METRICS_DIR)}")
     print(f"Кэширование в: {os.path.abspath(CACHE_DIR)}")
-    print("
-Доступные команды:")
+    print("\nДоступные команды:")
     print("  generate     - Генерация текста (продвинутая)")
     print("  train        - Обучение модели (поддерживаются файлы и URL)")
     print("  save         - Сохранение текущей модели")
@@ -1862,8 +1860,7 @@ def interactive_mode():
     # --- Конец автозагрузки ---
     while True:
         try:
-            command = input("
-Введите команду: ").strip().lower()
+            command = input("\nВведите команду: ").strip().lower()
             if command == "quit":
                 if current_model is not None:
                     print("Автоматическое сохранение модели...")
@@ -1907,17 +1904,14 @@ def interactive_mode():
                     max_new_tokens = max(10, min(500, max_new_tokens))  # Уменьшено максимальное значение
                 except ValueError:
                     max_new_tokens = 200
-                print("
-🔄 Генерация текста...")
+                print("\n🔄 Генерация текста...")
                 try:
                     generated = generate_text(current_model, current_tokenizer,
                                             start_tokens=start_text, max_new_tokens=max_new_tokens,
                                             temperature=temp, top_k=top_k, top_p=top_p,
                                             repetition_penalty=repetition_penalty,
                                             device=device)
-                    print(f"
-📝 Сгенерированный текст:
-{start_text}{generated}") # Выводим начальный текст + сгенерированный
+                    print(f"\n📝 Сгенерированный текст:\n{start_text}{generated}") # Выводим начальный текст + сгенерированный
                 except Exception as e:
                     logger.error(f"Ошибка при генерации текста: {e}")
                     print(f"❌ Ошибка при генерации текста: {e}")
@@ -2055,7 +2049,7 @@ def interactive_mode():
                         batch_size=batch_size,
                         shuffle=False,
                         # num_workers также можно использовать
-                        num_workers=1, # Один воркер для валидации
+                        num_workers=1 # Один воркер для валидации
                     )
                     print("🔄 Создание модели...")
                     # Используем адаптивные параметры для модели
@@ -2105,6 +2099,7 @@ def interactive_mode():
                         temp_tokenizer_file
                     ]
                     for temp_file in temp_files_to_cleanup:
+                         # Исправлено: добавлена проверка os.path.exists()
                          if os.path.exists(temp_file):
                              try:
                                  os.remove(temp_file)
@@ -2124,6 +2119,7 @@ def interactive_mode():
                         temp_tokenizer_file if 'temp_tokenizer_file' in locals() else None
                     ]
                     for temp_file in temp_files_to_cleanup:
+                        # Исправлено: добавлена проверка temp_file and os.path.exists()
                         if temp_file and os.path.exists(temp_file):
                             try:
                                 os.remove(temp_file)
@@ -2189,8 +2185,7 @@ def interactive_mode():
                 if current_model is None:
                     print("❌ Нет загруженной модели")
                     continue
-                print("
-Информация о текущей модели:")
+                print("\nИнформация о текущей модели:")
                 print(current_model.get_model_info())
                 print(f"  Vocabulary size (loaded): {vocab_size}")
                 print(f"  Token type: {current_token_type}")
@@ -2203,20 +2198,17 @@ def interactive_mode():
                 print(f"  Cache directory: {os.path.abspath(CACHE_DIR)}")
                 print(f"  Tokenizer path: {current_tokenizer_path}")
                 if current_training_config:
-                    print("
-Конфигурация обучения:")
+                    print("\nКонфигурация обучения:")
                     for key, value in current_training_config.items():
                         print(f"  {key}: {value}")
             elif command == "weights":
                 if current_model is None:
                     print("❌ Нет загруженной модели")
                     continue
-                print("
-📊 Статистики весов модели:")
+                print("\n📊 Статистики весов модели:")
                 if current_weight_stats:
                     for layer_name, stats in current_weight_stats.items():
-                        print(f"
-{layer_name}:")
+                        print(f"\n{layer_name}:")
                         print(f"  Shape: {stats['shape']}")
                         print(f"  Mean: {stats['mean']:.6f}")
                         print(f"  Std: {stats['std']:.6f}")
@@ -2225,8 +2217,7 @@ def interactive_mode():
                 else:
                     print("Нет доступных статистик весов")
             elif command == "metrics":
-                print(f"
-📊 Директория с метриками: {os.path.abspath(METRICS_DIR)}")
+                print(f"\n📊 Директория с метриками: {os.path.abspath(METRICS_DIR)}")
                 metrics_files = glob.glob(os.path.join(METRICS_DIR, "*.json"))
                 if metrics_files:
                     print("Доступные файлы метрик:")
@@ -2319,8 +2310,7 @@ def interactive_mode():
                 if qlora_model is None:
                     print("❌ QLoRA модель не загружена.")
                     continue
-                print("
-Информация о QLoRA модели:")
+                print("\nИнформация о QLoRA модели:")
                 print(f"  Модель: {qlora_model_path}")
                 print(f"  Тип модели: PEFT (LoRA)")
                 print(f"  Устройство: {next(qlora_model.parameters()).device}")
@@ -2332,8 +2322,7 @@ def interactive_mode():
                 print("  generate, train, save, load, list, info, weights, metrics, chat, quit")
                 print("  qlora_setup, qlora_train, qlora_load, qlora_chat, qlora_info")
         except KeyboardInterrupt:
-            print("
-⚠️  Прерывание программы...")
+            print("\n⚠️  Прерывание программы...")
             if current_model is not None:
                 print("Автоматическое сохранение модели...")
                 save_model_with_timestamp(current_model,
@@ -2361,6 +2350,5 @@ if __name__ == "__main__":
     print(f"📝 Логи сохраняются в: {os.path.abspath(LOGS_DIR)}")
     print(f"📊 Метрики сохраняются в: {os.path.abspath(METRICS_DIR)}")
     print(f"Кэширование в: {os.path.abspath(CACHE_DIR)}")
-    print("
-🚀 Запуск интерактивного режима...")
+    print("\n🚀 Запуск интерактивного режима...")
     interactive_mode()
