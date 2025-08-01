@@ -1648,7 +1648,7 @@ class VocabularyLearningSystem:
         # 4. Из ранее изученных определений (новые слова из определений)
         for word in list(self.learned_words)[-10:]:  # Последние 10 изученных слов
             definition_data = self.get_word_definition(word)
-            if definition_
+            if definition_data:
                 # Извлекаем новые слова из определений
                 for definition in definition_data.get('definitions', []):
                     def_tokens = self.network.tokenizer.tokenize_basic(definition)
