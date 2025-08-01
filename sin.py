@@ -821,7 +821,7 @@ def chat():
              memory.save()
              kg.save()
          except Exception as e:
-        #      logging.error(f"Ошибка сохранения после диалога: {e}")
+              logging.error(f"Ошибка сохранения после диалога: {e}")
     # Финальное сохранение модели при выходе из чата
     try:
         sin.save()
