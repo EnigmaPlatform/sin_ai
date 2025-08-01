@@ -1630,7 +1630,7 @@ class VocabularyLearningSystem:
         
         # 3. Из памяти
         for memory_id, memory_data in list(self.network.memory_system.long_term_memory.items())[-20:]:
-            if 'data' in memory_:
+            if 'data' in memory_data:
                 data_content = str(memory_data['data'])
                 tokens = self.network.tokenizer.tokenize_basic(data_content)
                 for token in tokens:
