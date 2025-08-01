@@ -133,7 +133,7 @@ def rotate_half(x):
     x1, x2 = x.chunk(2, dim=-1)
     return torch.cat((-x2, x1), dim=-1)
 class MultiHeadAttention(nn.Module):
-    """Многоголовое внимание с RoPE."""
+      """Многоголовое внимание с RoPE."""
     def __init__(self, hidden_size, num_heads, dropout=0.1):
         super().__init__()
         self.hidden_size = hidden_size
@@ -178,7 +178,7 @@ class MultiHeadAttention(nn.Module):
         output = self.o_proj(attn_output)
         return output
 class FeedForward(nn.Module):
-    """Полносвязная сеть."""
+      """Полносвязная сеть."""
     def __init__(self, hidden_size, ff_hidden_size, dropout=0.1):
         super().__init__()
         self.w1 = nn.Linear(hidden_size, ff_hidden_size, bias=False)
@@ -191,7 +191,7 @@ class FeedForward(nn.Module):
         x = self.w2(x)
         return x
 class TransformerBlock(nn.Module):
-    """Блок трансформера с остаточными связями."""
+      """Блок трансформера с остаточными связями."""
     def __init__(self, hidden_size, num_heads, ff_hidden_size, dropout=0.1):
         super().__init__()
         self.attention = MultiHeadAttention(hidden_size, num_heads, dropout)
@@ -211,7 +211,7 @@ class TransformerBlock(nn.Module):
         x = x + ffn_output
         return x
 class ModernGPT(nn.Module):
-    """Современная GPT модель с биологически-ориентированной архитектурой."""
+      """Современная GPT модель с биологически-ориентированной архитектурой."""
     def __init__(self, vocab_size, hidden_size, num_layers, num_heads, ff_hidden_size, max_seq_length):
         super().__init__()
         self.vocab_size = vocab_size
@@ -256,7 +256,7 @@ class ModernGPT(nn.Module):
         return logits
 # Биологически-ориентированные компоненты
 class AnchorNeuron:
-    """Нейрон-якорь с ассоциативными связями."""
+      """Нейрон-якорь с ассоциативными связями."""
     def __init__(self, neuron_id, anchor_type="concept"):
         self.id = neuron_id
         self.type = anchor_type  # concept, image, emotion, memory, sensory
@@ -313,7 +313,7 @@ class AnchorNeuron:
             'timestamp': time.time()
         })
 class AnchorSystem:
-    """Система управления якорями."""
+      """Система управления якорями."""
     def __init__(self):
         self.anchors = {}  # Якоря
         self.association_network = {}  # Сеть ассоциаций
@@ -359,7 +359,7 @@ class AnchorSystem:
                     active_queue.append((assoc, new_strength))
         return activated_chain
 class EmotionalLearningSystem:
-    """Система эмоционального обучения."""
+      """Система эмоционального обучения."""
     def __init__(self):
         self.emotional_states = {
             'curiosity': 0.0,
