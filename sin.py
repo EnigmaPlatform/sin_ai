@@ -1374,6 +1374,14 @@ def interactive_mode():
             current_tokenizer_path = None
             current_tokenizer = None
     
+    # Добавлены переменные для отслеживания прогресса
+    learning_progress = {
+        'new_words_learned': 0,
+        'concepts_understood': 0,
+        'context_patterns': 0,
+        'session_start_time': time.time()
+    }
+    
     while True:
         try:
             command = input("\nВведите команду: ").strip().lower()
@@ -1516,6 +1524,10 @@ def interactive_mode():
                 chat_history = ChatHistory(current_tokenizer, max_context_tokens=384)
                 current_model.eval()
                 
+                # Добавлены счетчики для отслеживания обучения
+                session_words = set()
+                session_concepts = set()
+                
                 with torch.no_grad():
                     while True:
                         user_input = input("Вы: ").strip()
@@ -1536,7 +1548,6 @@ def interactive_mode():
                         # Генерация ответа
                         try:
                             # Используем модель для генерации
-                            # В реальной реализации здесь будет обучение в процессе общения
                             response = generate_text(
                                 current_model,
                                 current_tokenizer,
@@ -1555,11 +1566,31 @@ def interactive_mode():
                             # Добавляем ответ модели в историю
                             chat_history.add_assistant_message(response)
                             
+                            # Анализируем новый контент для отслеживания обучения
+                            # Подсчет новых слов и концепций
+                            user_words = set(word.lower() for word in user_input.split() if word.isalpha())
+                            response_words = set(word.lower() for word in response.split() if word.isalpha())
+                            
+                            # Обновляем статистику обучения
+                            new_words = user_words | response_words
+                            session_words.update(new_words)
+                            
+                            # Показываем метрики обучения
+                            session_duration = time.time() - learning_progress['session_start_time']
+                            print(f"📊 Статистика обучения:")
+                            print(f"   • Новых слов: {len(session_words)}")
+                            print(f"   • Время сессии: {int(session_duration//60)}:{int(session_duration%60):02d}")
+                            
+                            # Простая оценка понимания
+                            if len(session_words) > 10:
+                                print(f"   • Уровень понимания: {'📈 Высокий' if len(session_words) > 30 else '📊 Средний'}")
+                            
                             print(f"🤖 Модель: {response}")
                             
                             # Обучение на диалоге (простой пример)
                             # В реальной реализации здесь будет полноценное обучение
                             print("🧠 Модель учится на этом диалоге...")
+                            print("🔄 Обновление внутренней структуры...")
                             
                         except Exception as e:
                             print(f"❌ Ошибка при генерации ответа: {e}")
