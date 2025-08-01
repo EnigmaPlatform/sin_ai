@@ -811,7 +811,7 @@ def chat():
              logging.error(f"Ошибка записи диалога в файл: {e}")
 
          
-         print("Выполняется краткое дообучение на последнем диалоге...") # Информирование пользователя
+     print("Выполняется краткое дообучение на последнем диалоге...") # Информирование пользователя
          sin.fine_tune([f"[USER] {user_input}", f"[SIN] {response}"], epochs=1) # Используем 1 эпоху
          memory.add(user_input, source="chat")
          memory.add(response, source="chat")
