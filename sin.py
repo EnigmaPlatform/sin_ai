@@ -6,13 +6,15 @@ from collections import defaultdict, deque
 from typing import List, Dict, Any, Tuple, Set
 import re
 import logging
+import os
 
 # Настройка логгирования
+log_file_path = 'neural_network.log'
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(levelname)s - %(message)s',
     handlers=[
-        logging.FileHandler('neural_network.log', encoding='utf-8'),
+        logging.FileHandler(log_file_path, encoding='utf-8'),
         logging.StreamHandler()
     ]
 )
@@ -80,7 +82,6 @@ class ContextualNeuron:
         self.learning_history = []  # история обучения
         self.group = None  # группа, к которой принадлежит нейрон
         self.level = 0  # уровень абстракции
-        self.metadata = {}  # метаданные нейрона
 
     def activate(self, input_value: float = None) -> float:
         """Активация нейрона с учетом контекста"""
@@ -135,7 +136,6 @@ class ContextualConnection:
         self.context_history = []  # история контекста
         self.connection_type = "regular"  # тип связи: regular, logical, abstract
         self.level = 1  # уровень связи
-        self.metadata = {}  # метаданные связи
 
     def activate(self) -> float:
         """Активация связи с учетом контекста"""
@@ -156,114 +156,11 @@ class ContextualConnection:
             self.last_delta = delta
 
 # ======================
-# ИЕРАРХИЧЕСКАЯ СВЯЗЬ (СО СВЯЗЯМИ ВНУТРИ)
-# ======================
-class HierarchicalConnection:
-    """Иерархическая связь, способная содержать миллиарды нейронов"""
-    def __init__(self, id: int, connection_type: str = "hierarchical", capacity: int = 1000000000):
-        self.id = id
-        self.connection_type = connection_type
-        self.level = 0  # уровень иерархии
-        self.children = []  # дочерние связи/нейроны
-        self.parent = None  # родительская связь
-        self.weight = 1.0  # вес связи
-        self.context_weight = 1.0  # контекстный вес
-        self.strength = 1.0  # сила связи
-        self.is_active = False
-        self.context_history = []  # история контекста
-        self.metadata = {}  # метаданные связи
-        self.neurons = []  # нейроны внутри связи (может быть миллиард)
-        self.child_connections = []  # дочерние связи внутри этой связи
-        self.capacity = capacity  # максимальная емкость связи
-        self.activation_energy = 0.0  # энергия активации
-        self.complexity = 0.0  # уровень сложности внутри связи
-        self.learning_history = []  # история обучения внутри связи
-
-    def add_child_neuron(self, neuron: ContextualNeuron):
-        """Добавить нейрон в эту связь"""
-        if len(self.neurons) < self.capacity:
-            self.neurons.append(neuron)
-            neuron.metadata['connection_id'] = self.id
-            neuron.metadata['hierarchical_level'] = self.level
-            neuron.metadata['hierarchy_depth'] = self.level
-            return True
-        return False
-
-    def add_child_connection(self, child_conn: 'HierarchicalConnection'):
-        """Добавить дочернюю связь в эту связь"""
-        if len(self.child_connections) < self.capacity:
-            self.child_connections.append(child_conn)
-            child_conn.parent = self
-            child_conn.level = self.level + 1
-            child_conn.metadata['parent_connection'] = self.id
-            child_conn.metadata['hierarchy_depth'] = child_conn.level
-            return True
-        return False
-
-    def activate(self) -> float:
-        """Активация иерархической связи"""
-        # Активируем все нейроны внутри связи
-        total_signal = 0.0
-        active_neurons = 0
-        
-        for neuron in self.neurons:
-            if neuron.is_active:
-                total_signal += neuron.value * self.weight
-                active_neurons += 1
-                
-        # Активируем дочерние связи
-        for child_conn in self.child_connections:
-            child_conn.activate()
-        
-        # Обновляем энергию активации
-        self.activation_energy = min(1.0, self.activation_energy + 0.05 * active_neurons / len(self.neurons) if self.neurons else 0)
-        
-        # Обновляем сложность
-        self.complexity = min(1.0, self.complexity + 0.01 * (active_neurons / len(self.neurons) if self.neurons else 0))
-        
-        self.is_active = True
-        self.context_history.append((total_signal, time.time(), active_neurons))
-        self.learning_history.append({
-            'timestamp': time.time(),
-            'active_neurons': active_neurons,
-            'total_neurons': len(self.neurons),
-            'activation_energy': self.activation_energy,
-            'complexity': self.complexity
-        })
-        
-        return total_signal
-
-    def update_weight(self, error: float):
-        """Обновление веса иерархической связи"""
-        self.weight += self.weight * error * 0.01  # простое обновление
-        self.weight = max(0.0, min(2.0, self.weight))  # ограничение весов
-        self.strength += self.strength * error * 0.01
-        self.strength = max(0.0, min(2.0, self.strength))
-
-    def get_total_neurons(self) -> int:
-        """Получить общее количество нейронов в этой связи"""
-        count = len(self.neurons)
-        for child_conn in self.child_connections:
-            count += child_conn.get_total_neurons()
-        return count
-
-    def get_total_connections(self) -> int:
-        """Получить общее количество дочерних связей"""
-        count = len(self.child_connections)
-        for child_conn in self.child_connections:
-            count += child_conn.get_total_connections()
-        return count
-
-    def get_complexity_score(self) -> float:
-        """Получить показатель сложности связи"""
-        return self.complexity * (1.0 + len(self.child_connections) * 0.1)
-
-# ======================
 # СВЯЗИ МЕЖДУ СВЯЗЯМИ
 # ======================
 class ConnectionConnection:
     """Связь между связями (уровень 2 абстракции)"""
-    def __init__(self, parent_conn1: HierarchicalConnection, parent_conn2: HierarchicalConnection, 
+    def __init__(self, parent_conn1: ContextualConnection, parent_conn2: ContextualConnection, 
                  influence_strength: float = 0.1):
         self.conn1 = parent_conn1
         self.conn2 = parent_conn2
@@ -272,8 +169,6 @@ class ConnectionConnection:
         self.connection_history = []  # история влияния
         self.strength_change = 0.0  # изменение силы связи
         self.level = 2  # уровень связи между связями
-        self.metadata = {}  # метаданные связи
-        self.learning_history = []  # история обучения
 
     def activate_influence(self):
         """Активация влияния одной связи на другую"""
@@ -282,22 +177,9 @@ class ConnectionConnection:
             influence = self.conn1.weight * self.influence_strength
             self.conn2.strength += influence
             self.conn2.context_weight += influence * 0.1  # дополнительный контекст
-            
-            # Обновляем метаданные
-            self.conn2.metadata['influenced_by'] = self.conn1.id
-            self.conn2.metadata['influence_strength'] = influence
-            
             self.active = True
             self.connection_history.append((influence, time.time()))
             self.strength_change = influence
-            
-            # Логгируем обучение
-            self.learning_history.append({
-                'timestamp': time.time(),
-                'source_connection': self.conn1.id,
-                'target_connection': self.conn2.id,
-                'influence': influence
-            })
             return influence
         return 0.0
 
@@ -315,8 +197,6 @@ class ConnectionConnectionConnection:
         self.connection_history = []  # история влияния
         self.strength_change = 0.0  # изменение силы связи
         self.level = 3  # уровень связи между связями связей
-        self.metadata = {}  # метаданные связи
-        self.learning_history = []  # история обучения
 
     def activate_influence(self):
         """Активация влияния одной связи связей на другую"""
@@ -324,19 +204,8 @@ class ConnectionConnectionConnection:
             # Влияние связи связей 1 на связь связей 2
             influence = self.conn_conn1.strength_change * self.influence_strength
             self.conn_conn2.strength_change += influence
-            
-            # Обновляем метаданные
-            self.conn_conn2.metadata['influenced_by'] = self.conn_conn1.conn1.id
-            self.conn_conn2.metadata['influence_strength'] = influence
-            
             self.active = True
             self.connection_history.append((influence, time.time()))
-            self.learning_history.append({
-                'timestamp': time.time(),
-                'source_connection': self.conn_conn1.conn1.id,
-                'target_connection': self.conn_conn2.conn1.id,
-                'influence': influence
-            })
             return influence
         return 0.0
 
@@ -355,8 +224,6 @@ class ConnectionConnectionConnectionConnection:
         self.connection_history = []  # история влияния
         self.strength_change = 0.0  # изменение силы связи
         self.level = 4  # уровень связи между связями связей связей
-        self.metadata = {}  # метаданные связи
-        self.learning_history = []  # история обучения
 
     def activate_influence(self):
         """Активация влияния одной связи связей связей на другую"""
@@ -364,19 +231,8 @@ class ConnectionConnectionConnectionConnection:
             # Влияние связи связей связей 1 на связь связей связей 2
             influence = self.conn_conn_conn1.strength_change * self.influence_strength
             self.conn_conn_conn2.strength_change += influence
-            
-            # Обновляем метаданные
-            self.conn_conn_conn2.metadata['influenced_by'] = self.conn_conn_conn1.conn_conn1.conn1.id
-            self.conn_conn_conn2.metadata['influence_strength'] = influence
-            
             self.active = True
             self.connection_history.append((influence, time.time()))
-            self.learning_history.append({
-                'timestamp': time.time(),
-                'source_connection': self.conn_conn_conn1.conn_conn1.conn1.id,
-                'target_connection': self.conn_conn_conn2.conn_conn1.conn1.id,
-                'influence': influence
-            })
             return influence
         return 0.0
 
@@ -395,15 +251,11 @@ class NeuronGroup:
         self.group_context = {}  # контекст группы
         self.learning_history = []
         self.level = 0  # уровень группы
-        self.metadata = {}  # метаданные группы
-        self.cortical_layer = 0  # слой коры головного мозга
-        self.neural_network_density = 0.0  # плотность нейронной сети
 
     def add_neuron(self, neuron: ContextualNeuron):
         """Добавить нейрон в группу"""
         neuron.group = self
         self.neurons.append(neuron)
-        self.neural_network_density = len(self.neurons) / (len(self.neurons) + 1)  # Простой расчет плотности
 
     def add_connection(self, connection: ContextualConnection):
         """Добавить связь в группу"""
@@ -430,13 +282,11 @@ class MultiLevelNeuralNetwork:
     def __init__(self):
         self.neurons = {}  # {id: Neuron}
         self.connections = []  # список Connection объектов
-        self.hierarchical_connections = []  # иерархические связи
         self.connection_connections = []  # связи между связями
         self.connection_connection_connections = []  # связи между связями связей
         self.connection_connection_connection_connections = []  # связи между связями связей связей
         self.groups = {}  # группы нейронов
         self.next_neuron_id = 0
-        self.next_hierarchical_id = 0
         self.next_group_id = 0
         self.training_history = []
         self.context_history = []  # история контекста
@@ -444,8 +294,6 @@ class MultiLevelNeuralNetwork:
         self.structure_levels = {}  # структура по уровням
         self.input_neurons = []  # входные нейроны
         self.output_neurons = []  # выходные нейроны
-        self.cortical_layers = {}  # слои коры головного мозга
-        self.memory_systems = {}  # системы памяти
 
     def add_neuron(self, neuron: ContextualNeuron = None) -> ContextualNeuron:
         """Добавление нейрона в сеть"""
@@ -454,14 +302,6 @@ class MultiLevelNeuralNetwork:
             self.next_neuron_id += 1
         self.neurons[neuron.id] = neuron
         return neuron
-
-    def create_hierarchical_connection(self, connection_type: str = "hierarchical", 
-                                      capacity: int = 1000000000) -> HierarchicalConnection:
-        """Создание иерархической связи"""
-        connection = HierarchicalConnection(self.next_hierarchical_id, connection_type, capacity)
-        self.hierarchical_connections.append(connection)
-        self.next_hierarchical_id += 1
-        return connection
 
     def create_connection(self, from_neuron_id: int, to_neuron_id: int, 
                          weight: float = None) -> ContextualConnection:
@@ -474,7 +314,7 @@ class MultiLevelNeuralNetwork:
         to_neuron.inputs.append(connection)
         return connection
 
-    def create_connection_connection(self, conn1: HierarchicalConnection, conn2: HierarchicalConnection,
+    def create_connection_connection(self, conn1: ContextualConnection, conn2: ContextualConnection,
                                    influence_strength: float = 0.1) -> ConnectionConnection:
         """Создание связи между связями"""
         connection_connection = ConnectionConnection(conn1, conn2, influence_strength)
@@ -528,10 +368,6 @@ class MultiLevelNeuralNetwork:
         # Проходим по всем связям
         for connection in self.connections:
             connection.activate()
-        
-        # Активируем иерархические связи
-        for h_conn in self.hierarchical_connections:
-            h_conn.activate()
         
         # Активируем связи между связями (дополнительно)
         for conn_conn in self.connection_connections:
@@ -606,7 +442,6 @@ class MultiLevelNeuralNetwork:
             'total_sessions': len(self.training_history),
             'active_neurons': len([n for n in self.neurons.values() if n.is_active]),
             'total_connections': len(self.connections),
-            'total_hierarchical_connections': len(self.hierarchical_connections),
             'total_connection_connections': len(self.connection_connections),
             'total_connection_connection_connections': len(self.connection_connection_connections),
             'total_connection_connection_connection_connections': len(self.connection_connection_connection_connections),
@@ -615,43 +450,13 @@ class MultiLevelNeuralNetwork:
             'structure_levels': {
                 'neurons': len(self.neurons),
                 'connections': len(self.connections),
-                'hierarchical_connections': len(self.hierarchical_connections),
                 'connection_connections': len(self.connection_connections),
                 'connection_connection_connections': len(self.connection_connection_connections),
                 'connection_connection_connection_connections': len(self.connection_connection_connection_connections),
                 'groups': len(self.groups)
-            },
-            'network_complexity': self.calculate_network_complexity(),
-            'memory_efficiency': self.calculate_memory_efficiency()
+            }
         }
         return summary
-
-    def calculate_network_complexity(self) -> float:
-        """Расчет сложности сети"""
-        total_neurons = len(self.neurons)
-        total_connections = len(self.connections)
-        hierarchical_connections = len(self.hierarchical_connections)
-        
-        # Комбинируем разные параметры сложности
-        complexity = (
-            total_neurons * 0.1 +
-            total_connections * 0.3 +
-            hierarchical_connections * 0.6
-        )
-        return min(1.0, complexity / 1000000.0)  # нормализация
-
-    def calculate_memory_efficiency(self) -> float:
-        """Расчет эффективности использования памяти"""
-        total_neurons = len(self.neurons)
-        total_connections = len(self.connections)
-        
-        # Эффективность зависит от соотношения нейронов и связей
-        if total_connections > 0:
-            efficiency = min(1.0, total_neurons / (total_connections * 10))
-        else:
-            efficiency = 0.0
-            
-        return efficiency
 
 # ======================
 # ОБУЧАТЕЛЬ С ЛОГИРОВАНИЕМ
@@ -667,8 +472,6 @@ class MultiLevelTrainer:
         self.session_counter = 0
         self.new_knowledge_counter = 0
         self.structure_complexity = 0  # уровень сложности структуры
-        self.memory_capacity = 0  # емкость памяти
-        self.learning_efficiency = 0.0  # эффективность обучения
 
     def train_on_text(self, text: str, context: str = "", epochs: int = 1) -> Dict[str, Any]:
         """Обучение на тексте с логгированием"""
@@ -704,8 +507,7 @@ class MultiLevelTrainer:
             'session': self.session_counter,
             'timestamp': time.time(),
             'new_knowledge': True,
-            'complexity_level': self.structure_complexity,
-            'memory_usage': len(self.knowledge_log) / 1000.0  # пример использования памяти
+            'complexity_level': self.structure_complexity
         }
         self.knowledge_log.append(knowledge)
         self.session_counter += 1
@@ -716,9 +518,6 @@ class MultiLevelTrainer:
         
         # Увеличиваем сложность структуры
         self.structure_complexity += 0.1
-        
-        # Обновляем эффективность обучения
-        self.learning_efficiency = min(1.0, self.learning_efficiency + 0.001)
         
         logger.info(f"Обучение завершено. Новых знаний: {len(self.knowledge_log)}")
         return result
@@ -761,8 +560,7 @@ class MultiLevelTrainer:
             'session': self.session_counter,
             'timestamp': time.time(),
             'new_knowledge': True,
-            'complexity_level': self.structure_complexity,
-            'memory_usage': len(self.knowledge_log) / 1000.0
+            'complexity_level': self.structure_complexity
         }
         self.knowledge_log.append(knowledge)
         self.session_counter += 1
@@ -771,8 +569,6 @@ class MultiLevelTrainer:
         self.analyze_context(user_input, context)
         # Увеличиваем сложность структуры
         self.structure_complexity += 0.05
-        # Обновляем эффективность обучения
-        self.learning_efficiency = min(1.0, self.learning_efficiency + 0.0005)
         logger.info(f"Новое знание: {knowledge['input']}")
         return knowledge
 
@@ -788,7 +584,6 @@ class MultiLevelModelStorage:
         model_data = {
             'neurons': {},
             'connections': [],
-            'hierarchical_connections': [],
             'connection_connections': [],
             'connection_connection_connections': [],
             'connection_connection_connection_connections': [],
@@ -816,8 +611,7 @@ class MultiLevelModelStorage:
                 'context_strength': neuron.context_strength,
                 'memory_trace': neuron.memory_trace,
                 'group': neuron.group.name if neuron.group else None,
-                'level': neuron.level,
-                'metadata': neuron.metadata
+                'level': neuron.level
             }
         # Сохраняем связи
         for conn in network.connections:
@@ -828,55 +622,31 @@ class MultiLevelModelStorage:
                 'context_weight': conn.context_weight,
                 'strength': conn.strength,
                 'connection_type': conn.connection_type,
-                'level': conn.level,
-                'metadata': conn.metadata
-            })
-        # Сохраняем иерархические связи
-        for h_conn in network.hierarchical_connections:
-            model_data['hierarchical_connections'].append({
-                'id': h_conn.id,
-                'connection_type': h_conn.connection_type,
-                'level': h_conn.level,
-                'weight': h_conn.weight,
-                'context_weight': h_conn.context_weight,
-                'strength': h_conn.strength,
-                'is_active': h_conn.is_active,
-                'metadata': h_conn.metadata,
-                'neuron_ids': [n.id for n in h_conn.neurons],
-                'child_connection_ids': [c.id for c in h_conn.child_connections],
-                'capacity': h_conn.capacity,
-                'activation_energy': h_conn.activation_energy,
-                'complexity': h_conn.complexity
+                'level': conn.level
             })
         # Сохраняем связи между связями
         for conn_conn in network.connection_connections:
             model_data['connection_connections'].append({
-                'conn1': conn_conn.conn1.id,
-                'conn2': conn_conn.conn2.id,
+                'conn1': conn_conn.conn1.from_neuron.id,
+                'conn2': conn_conn.conn2.from_neuron.id,
                 'influence_strength': conn_conn.influence_strength,
-                'level': conn_conn.level,
-                'metadata': conn_conn.metadata,
-                'learning_history': conn_conn.learning_history
+                'level': conn_conn.level
             })
         # Сохраняем связи между связями связей
         for conn_conn_conn in network.connection_connection_connections:
             model_data['connection_connection_connections'].append({
-                'conn_conn1': conn_conn_conn.conn_conn1.conn1.id,
-                'conn_conn2': conn_conn_conn.conn_conn2.conn1.id,
+                'conn_conn1': conn_conn_conn.conn_conn1.conn1.from_neuron.id,
+                'conn_conn2': conn_conn_conn.conn_conn2.conn1.from_neuron.id,
                 'influence_strength': conn_conn_conn.influence_strength,
-                'level': conn_conn_conn.level,
-                'metadata': conn_conn_conn.metadata,
-                'learning_history': conn_conn_conn.learning_history
+                'level': conn_conn_conn.level
             })
         # Сохраняем связи между связями связей связей
         for conn_conn_conn_conn in network.connection_connection_connection_connections:
             model_data['connection_connection_connection_connections'].append({
-                'conn_conn_conn1': conn_conn_conn_conn.conn_conn_conn1.conn_conn1.conn1.id,
-                'conn_conn_conn2': conn_conn_conn_conn.conn_conn_conn2.conn_conn1.conn1.id,
+                'conn_conn_conn1': conn_conn_conn_conn.conn_conn_conn1.conn_conn1.conn1.from_neuron.id,
+                'conn_conn_conn2': conn_conn_conn_conn.conn_conn_conn2.conn_conn1.conn1.from_neuron.id,
                 'influence_strength': conn_conn_conn_conn.influence_strength,
-                'level': conn_conn_conn_conn.level,
-                'metadata': conn_conn_conn_conn.metadata,
-                'learning_history': conn_conn_conn_conn.learning_history
+                'level': conn_conn_conn_conn.level
             })
         # Сохраняем группы
         for group_name, group in network.groups.items():
@@ -887,10 +657,7 @@ class MultiLevelModelStorage:
                 'subgroup_names': [sg.name for sg in group.subgroups],
                 'activation_level': group.activation_level,
                 'group_context': group.group_context,
-                'level': group.level,
-                'metadata': group.metadata,
-                'cortical_layer': group.cortical_layer,
-                'neural_network_density': group.neural_network_density
+                'level': group.level
             }
         with open(filename, 'w', encoding='utf-8') as f:
             json.dump(model_data, f, ensure_ascii=False, indent=2)
@@ -922,7 +689,6 @@ class MultiLevelModelStorage:
                 neuron.context_strength = neuron_data['context_strength']
                 neuron.memory_trace = neuron_data['memory_trace']
                 neuron.level = neuron_data['level']
-                neuron.metadata = neuron_data['metadata']
                 network.neurons[neuron.id] = neuron
             
             # Восстанавливаем связи
@@ -934,51 +700,20 @@ class MultiLevelModelStorage:
                 conn.strength = conn_data['strength']
                 conn.connection_type = conn_data['connection_type']
                 conn.level = conn_data['level']
-                conn.metadata = conn_data['metadata']
                 network.connections.append(conn)
                 from_neuron.outputs.append(conn)
                 to_neuron.inputs.append(conn)
             
-            # Восстанавливаем иерархические связи
-            conn_id_map = {}  # для отслеживания связей по ID
-            for h_conn_data in model_data['hierarchical_connections']:
-                h_conn = HierarchicalConnection(h_conn_data['id'], h_conn_data['connection_type'], 
-                                              h_conn_data['capacity'])
-                h_conn.level = h_conn_data['level']
-                h_conn.weight = h_conn_data['weight']
-                h_conn.context_weight = h_conn_data['context_weight']
-                h_conn.strength = h_conn_data['strength']
-                h_conn.is_active = h_conn_data['is_active']
-                h_conn.metadata = h_conn_data['metadata']
-                h_conn.activation_energy = h_conn_data['activation_energy']
-                h_conn.complexity = h_conn_data['complexity']
-                network.hierarchical_connections.append(h_conn)
-                conn_id_map[h_conn.id] = h_conn
-            
-            # Восстанавливаем связи внутри иерархических связей
-            for h_conn_data in model_data['hierarchical_connections']:
-                h_conn = conn_id_map[h_conn_data['id']]
-                # Добавляем нейроны
-                for neuron_id in h_conn_data['neuron_ids']:
-                    if neuron_id in network.neurons:
-                        h_conn.add_child_neuron(network.neurons[neuron_id])
-                # Добавляем дочерние связи
-                for child_conn_id in h_conn_data['child_connection_ids']:
-                    if child_conn_id in conn_id_map:
-                        h_conn.add_child_connection(conn_id_map[child_conn_id])
-            
             # Восстанавливаем связи между связями
             for conn_conn_data in model_data['connection_connections']:
                 try:
-                    conn1 = next(c for c in network.hierarchical_connections 
-                                if c.id == conn_conn_data['conn1'])
-                    conn2 = next(c for c in network.hierarchical_connections 
-                                if c.id == conn_conn_data['conn2'])
+                    conn1 = next(c for c in network.connections 
+                                if c.from_neuron.id == conn_conn_data['conn1'])
+                    conn2 = next(c for c in network.connections 
+                                if c.from_neuron.id == conn_conn_data['conn2'])
                     conn_conn = network.create_connection_connection(conn1, conn2, 
                                                                    conn_conn_data['influence_strength'])
                     conn_conn.level = conn_conn_data['level']
-                    conn_conn.metadata = conn_conn_data['metadata']
-                    conn_conn.learning_history = conn_conn_data['learning_history']
                 except:
                     pass  # Пропускаем, если связи не найдены
             
@@ -986,14 +721,12 @@ class MultiLevelModelStorage:
             for conn_conn_conn_data in model_data['connection_connection_connections']:
                 try:
                     conn_conn1 = next(cc for cc in network.connection_connections 
-                                     if cc.conn1.id == conn_conn_conn_data['conn_conn1'])
+                                     if cc.conn1.from_neuron.id == conn_conn_conn_data['conn_conn1'])
                     conn_conn2 = next(cc for cc in network.connection_connections 
-                                     if cc.conn1.id == conn_conn_conn_data['conn_conn2'])
+                                     if cc.conn1.from_neuron.id == conn_conn_conn_data['conn_conn2'])
                     conn_conn_conn = network.create_connection_connection_connection(conn_conn1, conn_conn2, 
                                                                                   conn_conn_conn_data['influence_strength'])
                     conn_conn_conn.level = conn_conn_conn_data['level']
-                    conn_conn_conn.metadata = conn_conn_conn_data['metadata']
-                    conn_conn_conn.learning_history = conn_conn_conn_data['learning_history']
                 except:
                     pass
             
@@ -1001,14 +734,12 @@ class MultiLevelModelStorage:
             for conn_conn_conn_conn_data in model_data['connection_connection_connection_connections']:
                 try:
                     conn_conn_conn1 = next(ccc for ccc in network.connection_connection_connections 
-                                          if ccc.conn_conn1.conn1.id == conn_conn_conn_conn_data['conn_conn_conn1'])
+                                          if ccc.conn_conn1.conn1.from_neuron.id == conn_conn_conn_conn_data['conn_conn_conn1'])
                     conn_conn_conn2 = next(ccc for ccc in network.connection_connection_connections 
-                                          if ccc.conn_conn1.conn1.id == conn_conn_conn_conn_data['conn_conn_conn2'])
+                                          if ccc.conn_conn1.conn1.from_neuron.id == conn_conn_conn_conn_data['conn_conn_conn2'])
                     conn_conn_conn_conn = network.create_connection_connection_connection_connection(
                         conn_conn_conn1, conn_conn_conn2, conn_conn_conn_conn_data['influence_strength'])
                     conn_conn_conn_conn.level = conn_conn_conn_conn_data['level']
-                    conn_conn_conn_conn.metadata = conn_conn_conn_conn_data['metadata']
-                    conn_conn_conn_conn.learning_history = conn_conn_conn_conn_data['learning_history']
                 except:
                     pass
             
@@ -1018,9 +749,6 @@ class MultiLevelModelStorage:
                 group.activation_level = group_data['activation_level']
                 group.group_context = group_data['group_context']
                 group.level = group_data['level']
-                group.metadata = group_data['metadata']
-                group.cortical_layer = group_data['cortical_layer']
-                group.neural_network_density = group_data['neural_network_density']
                 # Восстанавливаем нейроны группы
                 for neuron_id in group_data['neuron_ids']:
                     if neuron_id in network.neurons:
@@ -1050,11 +778,40 @@ class MultiLevelModelStorage:
 class MultiLevelCLIInterface:
     """Консольный интерфейс с детальным логгированием"""
     def __init__(self):
+        # Проверяем наличие необходимых файлов и создаем их при необходимости
+        self.ensure_directories_and_files()
+        
         self.network, self.tokenizer, self.trainer = MultiLevelModelStorage.load_model()
         self.running = True
         self.conversation_history = []
         self.session_start_time = time.time()
         self.previous_knowledge_count = 0
+
+    def ensure_directories_and_files(self):
+        """Проверяем наличие необходимых файлов и папок"""
+        # Создаем директорию для логов, если её нет
+        log_dir = os.path.dirname(log_file_path)
+        if log_dir and not os.path.exists(log_dir):
+            os.makedirs(log_dir)
+            
+        # Проверяем наличие лог-файла
+        if not os.path.exists(log_file_path):
+            try:
+                with open(log_file_path, 'w', encoding='utf-8') as f:
+                    f.write("")
+                logger.info(f"Создан лог-файл: {log_file_path}")
+            except Exception as e:
+                logger.error(f"Ошибка создания лог-файла: {e}")
+        
+        # Проверяем наличие файла модели
+        model_file = "model.json"
+        if not os.path.exists(model_file):
+            # Если файла нет, создаем пустую модель
+            try:
+                self.network, self.tokenizer, self.trainer = MultiLevelModelStorage.load_model()
+                logger.info("Создана новая модель")
+            except Exception as e:
+                logger.error(f"Ошибка при создании модели: {e}")
 
     def start(self):
         """Запуск интерфейса"""
@@ -1075,7 +832,6 @@ class MultiLevelCLIInterface:
         print("Введите 'groups' для просмотра групп нейронов")
         print("Введите 'structure' для просмотра структуры сети")
         print("Введите 'complexity' для просмотра сложности структуры")
-        print("Введите 'brain' для просмотра биологических процессов")
         print("Введите 'train <file>' для обучения на файле")
         print("Введите 'chat' для режима чата")
         print()
@@ -1107,8 +863,6 @@ class MultiLevelCLIInterface:
                     self.show_structure()
                 elif command.lower() == 'complexity':
                     self.show_complexity()
-                elif command.lower() == 'brain':
-                    self.show_brain_processes()
                 elif command.startswith('train'):
                     self.train_from_file(command[6:].strip())
                 elif command.lower() == 'chat':
@@ -1137,7 +891,6 @@ class MultiLevelCLIInterface:
         print("  groups   - показать группы нейронов")
         print("  structure- показать структуру сети")
         print("  complexity- показать сложность структуры")
-        print("  brain    - показать биологические процессы")
         print("  clear    - очистить историю знаний")
         print("  train <file> - обучение на файле")
         print("  chat     - режим чата")
@@ -1161,7 +914,6 @@ class MultiLevelCLIInterface:
         print(f"🧠 Новых знаний: {len(self.trainer.knowledge_log)}")
         print(f"📈 Сессий обучения: {self.trainer.session_counter}")
         print(f"🌐 Активных нейронов: {len([n for n in self.network.neurons.values() if n.is_active])}")
-        print(f"🔗 Иерархических связей: {len(self.network.hierarchical_connections)}")
         print(f"🔗 Связей между связями: {len(self.network.connection_connections)}")
         print(f"🔗 Связей связей со связями: {len(self.network.connection_connection_connections)}")
         print(f"🔗 Связей связей связей со связями: {len(self.network.connection_connection_connection_connections)}")
@@ -1199,14 +951,11 @@ class MultiLevelCLIInterface:
         print(f"  Сессий: {context_summary['total_sessions']}")
         print(f"  Активных нейронов: {context_summary['active_neurons']}")
         print(f"  Связей: {context_summary['total_connections']}")
-        print(f"  Иерархических связей: {context_summary['total_hierarchical_connections']}")
         print(f"  Связей между связями: {context_summary['total_connection_connections']}")
         print(f"  Связей связей со связями: {context_summary['total_connection_connection_connections']}")
         print(f"  Связей связей связей со связями: {context_summary['total_connection_connection_connection_connections']}")
         print(f"  Групп: {context_summary['total_groups']}")
         print(f"  Скорость обучения: {context_summary['learning_rate']:.4f}")
-        print(f"  Сложность сети: {context_summary['network_complexity']:.3f}")
-        print(f"  Эффективность памяти: {context_summary['memory_efficiency']:.3f}")
         # Показать последние 5 шаблонов
         if self.trainer.patterns:
             print("\n📋 Последние шаблоны:")
@@ -1224,7 +973,6 @@ class MultiLevelCLIInterface:
         for name, group in self.network.groups.items():
             print(f"  {name}: {len(group.neurons)} нейронов, {len(group.connections)} связей")
             print(f"    Активация: {group.activation_level:.3f}")
-            print(f"    Плотность сети: {group.neural_network_density:.3f}")
             if group.subgroups:
                 print(f"    Подгруппы: {[sg.name for sg in group.subgroups]}")
         print()
@@ -1235,7 +983,6 @@ class MultiLevelCLIInterface:
         structure = self.network.get_context_summary()['structure_levels']
         print(f"  Нейроны: {structure['neurons']}")
         print(f"  Связи: {structure['connections']}")
-        print(f"  Иерархические связи: {structure['hierarchical_connections']}")
         print(f"  Связи между связями: {structure['connection_connections']}")
         print(f"  Связи связей со связями: {structure['connection_connection_connections']}")
         print(f"  Связи связей связей со связями: {structure['connection_connection_connection_connections']}")
@@ -1248,7 +995,6 @@ class MultiLevelCLIInterface:
         """Показать сложность структуры"""
         print("\n🧩 Сложность структуры:")
         print(f"  Уровень сложности: {self.trainer.structure_complexity:.3f}")
-        print(f"  Иерархических связей: {len(self.network.hierarchical_connections)}")
         print(f"  Связей между связями: {len(self.network.connection_connections)}")
         print(f"  Связей связей со связями: {len(self.network.connection_connection_connections)}")
         print(f"  Связей связей связей со связями: {len(self.network.connection_connection_connection_connections)}")
@@ -1258,23 +1004,6 @@ class MultiLevelCLIInterface:
         print(f"  Суммарная сложность: {total_connections}")
         print()
 
-    def show_brain_processes(self):
-        """Показать биологические процессы"""
-        print("\n🧠 Биологические процессы:")
-        print(f"  Эффективность обучения: {self.trainer.learning_efficiency:.3f}")
-        print(f"  Сложность сети: {self.network.calculate_network_complexity():.3f}")
-        print(f"  Эффективность памяти: {self.network.calculate_memory_efficiency():.3f}")
-        
-        # Показать активные нейроны с биологическими параметрами
-        active_neurons = [n for n in self.network.neurons.values() if n.is_active]
-        if active_neurons:
-            print(f"\n📊 Активные нейроны ({len(active_neurons)}):")
-            for i, neuron in enumerate(active_neurons[:5]):  # Показываем первые 5
-                print(f"  Нейрон {neuron.id}:")
-                print(f"    Значение: {neuron.value:.3f}")
-                print(f"    Уровень метаданных: {len(neuron.metadata)}")
-        print()
-
     def show_stats(self):
         """Показать статистику"""
         print("\n📊 Статистика:")
@@ -1282,7 +1011,6 @@ class MultiLevelCLIInterface:
         print(f"  Сессий: {self.trainer.session_counter}")
         print(f"  Нейронов: {len(self.network.neurons)}")
         print(f"  Связей: {len(self.network.connections)}")
-        print(f"  Иерархических связей: {len(self.network.hierarchical_connections)}")
         print(f"  Связей между связями: {len(self.network.connection_connections)}")
         print(f"  Связей связей со связями: {len(self.network.connection_connection_connections)}")
         print(f"  Связей связей связей со связями: {len(self.network.connection_connection_connection_connections)}")
@@ -1290,19 +1018,34 @@ class MultiLevelCLIInterface:
         print(f"  Уникальных слов: {self.tokenizer.vocab_size}")
         print(f"  Время работы: {(time.time() - self.session_start_time)/60:.1f} минут")
         print(f"  Сложность структуры: {self.trainer.structure_complexity:.3f}")
-        print(f"  Эффективность обучения: {self.trainer.learning_efficiency:.3f}")
         print()
 
     def train_from_file(self, filename: str):
         """Обучение на файле"""
         try:
+            # Удаляем кавычки, если они есть
+            filename = filename.strip('"\'')
+            
+            # Проверяем существование файла
+            if not os.path.exists(filename):
+                print(f"❌ Файл '{filename}' не найден")
+                return
+                
+            # Читаем содержимое файла
             with open(filename, 'r', encoding='utf-8') as f:
                 content = f.read()
+                
+            if not content or len(content.strip()) == 0:
+                print(f"❌ Не удалось прочитать содержимое файла '{filename}'")
+                return
+                
+            print(f"✅ Файл '{filename}' успешно прочитан")
+            print(f"   Размер содержимого: {len(content)} символов")
+            
+            # Обучаем модель
             self.trainer.train_on_text(content, f"Обучение на файле {filename}")
             print(f"✅ Обучение на файле '{filename}' завершено")
             self.show_progress()
-        except FileNotFoundError:
-            print(f"❌ Файл '{filename}' не найден")
         except Exception as e:
             print(f"❌ Ошибка при обучении: {e}")
             logger.error(f"Ошибка при обучении на файле: {e}")
@@ -1344,8 +1087,8 @@ class MultiLevelCLIInterface:
         print(f"📊 Сложность структуры: {self.trainer.structure_complexity:.3f}")
         # Показываем прогресс
         self.show_progress()
-        # Показываем биологические процессы
-        self.show_brain_processes()
+        # Показываем сложность
+        self.show_complexity()
         # Сохраняем историю
         self.conversation_history.append({
             'user': user_input,
@@ -1360,6 +1103,8 @@ class MultiLevelCLIInterface:
     def check_new_information(self, user_input: str) -> bool:
         """Проверяет, новая ли информация для нейросети"""
         # Простая проверка: если ввод содержит новые слова, значит новая информация
+        if self.tokenizer is None:
+            return False
         tokens = self.tokenizer.encode(user_input)
         if not tokens:
             return False
@@ -1399,6 +1144,8 @@ class MultiLevelCLIInterface:
     def generate_response(self, user_input: str) -> str:
         """Генерация ответа с учетом контекста"""
         # Проверяем, есть ли уже знания по этому запросу
+        if self.tokenizer is None:
+            return "Произошла ошибка: токенизатор не инициализирован"
         tokens = self.tokenizer.encode(user_input)
         # Простая реакция на контекст
         if len(tokens) == 0:
