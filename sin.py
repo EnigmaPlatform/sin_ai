@@ -1698,7 +1698,7 @@ class VocabularyLearningSystem:
                 # Получаем определение
                 definition_data = self.get_word_definition(word)
                 
-                if definition_
+                if definition_data:
                     # Обучаем нейросеть на новом слове
                     learning_result = self._train_on_word_definition(definition_data)
                     
