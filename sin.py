@@ -9,7 +9,7 @@ import torch
 import torch.nn as nn
 import torch.optim as optim
 from torch.utils.data import Dataset, DataLoader
-from collections import deque
+from collections import deque, OrderedDict
 import signal
 import sys
 from datetime import datetime
@@ -23,14 +23,25 @@ import threading
 from typing import List, Dict, Tuple, Optional, Any
 import traceback
 import regex as re
+import ast
+
+# Установка рабочей директории
+PROJECT_DIR = r"C:\Users\User\Downloads\SinChatBot"
+MODEL_DIR = os.path.join(PROJECT_DIR, "sin_model")
+LOG_FILE = os.path.join(PROJECT_DIR, "sin_chatbot.log")
+DEEPSEEK_VOCAB_FILE = os.path.join(MODEL_DIR, "tokenizer.json")
+
+# Создание необходимых директорий
+os.makedirs(PROJECT_DIR, exist_ok=True)
+os.makedirs(MODEL_DIR, exist_ok=True)
 
 # Настройка логгирования
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(levelname)s - %(message)s',
     handlers=[
-        logging.FileHandler('sin_chatbot.log'),
-        logging.StreamHandler()
+        logging.FileHandler(LOG_FILE, encoding='utf-8'),
+        logging.StreamHandler(sys.stdout)
     ]
 )
 logger = logging.getLogger(__name__)
@@ -38,15 +49,13 @@ logger = logging.getLogger(__name__)
 class SinTokenizer:
     """Кастомный токенизатор для чат-бота Sin с поддержкой DeepSeek словаря"""
     
-    def __init__(self, vocab_size: int = 128000):  # Увеличен размер словаря
+    def __init__(self, vocab_size: int = 128000):
         self.vocab_size = vocab_size
         self.word_to_idx = {}
         self.idx_to_word = {}
         self.vocab = {}
-        self.pattern = r"""(?i:'s|'t|'re|'ve|'m|'ll|'d)|[^\r\n\p{L}\p{N}]?\p{L}+|\p{N}{1,3}| ?[^\s\p{L}\p{N}]+[\r\n]*|\s*[\r\n]+|\s+(?!\S)|\s+"""
-        self.compiled_pattern = re.compile(self.pattern, re.IGNORECASE)
         
-        # Специальные токены DeepSeek
+        # Инициализируем базовые специальные токены. Они могут быть перезаписаны при загрузке словаря.
         self.special_tokens = {
             '<｜begin▁of▁sentence｜>': 0,  # BOS
             '<｜end▁of▁sentence｜>': 1,    # EOS
@@ -58,27 +67,131 @@ class SinTokenizer:
     def _initialize_special_tokens(self):
         """Инициализация специальных токенов"""
         for token, idx in self.special_tokens.items():
-            self.word_to_idx[token] = idx
-            self.idx_to_word[idx] = token
+            # Добавляем только если токен еще не в словаре или имеет другой индекс
+            if token not in self.word_to_idx or self.word_to_idx[token] != idx:
+                self.word_to_idx[token] = idx
+                self.idx_to_word[idx] = token
             
-    def load_deepseek_vocab(self, vocab_data: Dict[str, int]) -> bool:
-        """Загрузка словаря из данных DeepSeek"""
+    def load_deepseek_vocab(self, vocab_data_or_path) -> bool:
+        """Загрузка словаря из данных DeepSeek или пути к файлу"""
         try:
-            # Сортировка по ID для сохранения порядка
-            sorted_items = sorted(vocab_data.items(), key=lambda x: x[1])
+            logger.info("Начало загрузки словаря DeepSeek...")
             
-            # Добавление токенов в наш словарь
+            # Если передан путь к файлу, попробуем прочитать его
+            if isinstance(vocab_data_or_path, str):
+                vocab_file_path = vocab_data_or_path
+                vocab_data = None
+                try:
+                    with open(vocab_file_path, 'r', encoding='utf-8') as f:
+                        vocab_data = json.load(f)
+                    logger.info("Файл успешно загружен как стандартный JSON")
+                except json.JSONDecodeError as je:
+                    logger.error(f"Не удалось загрузить как стандартный JSON: {je}")
+                    return False
+            else:
+                # Предполагаем, что это уже словарь
+                vocab_data = vocab_data_or_path
+
+            if not isinstance(vocab_data, dict):
+                logger.error("Загруженные данные не являются словарем")
+                return False
+
+            # Проверяем структуру файла. 
+            # Если есть ключ 'added_tokens', это формат токенизатора Hugging Face
+            if 'added_tokens' in vocab_data and isinstance(vocab_data['added_tokens'], list):
+                logger.info("Обнаружен формат токенизатора Hugging Face (added_tokens)")
+                # Извлекаем токены из массива added_tokens
+                added_tokens_list = vocab_data['added_tokens']
+                token_dict = {}
+                loaded_special_tokens = {}
+                
+                for token_info in added_tokens_list:
+                    if isinstance(token_info, dict):
+                        token_id = token_info.get('id')
+                        token_content = token_info.get('content')
+                        is_special = token_info.get('special', False)
+                        
+                        if isinstance(token_id, int) and isinstance(token_content, str):
+                            token_dict[token_content] = token_id
+                            if is_special or token_content in ['<｜begin▁of▁sentence｜>', '<｜end▁of▁sentence｜>', '<｜▁pad▁｜>', '<UNK>'] or token_content.startswith('<｜place▁holder'):
+                                loaded_special_tokens[token_content] = token_id
+                                
+                # Также проверяем основной словарь vocab, если он есть
+                if 'model' in vocab_data and 'vocab' in vocab_data['model'] and isinstance(vocab_data['model']['vocab'], dict):
+                    logger.info("Найден основной словарь vocab в model")
+                    # Добавляем обычные токены из vocab
+                    for token, idx in vocab_data['model']['vocab'].items():
+                        if isinstance(idx, int) and isinstance(token, str) and token not in token_dict:
+                            token_dict[token] = idx
+                            
+            # Если есть ключ 'model' с подключом 'vocab', это тоже формат токенизатора
+            elif 'model' in vocab_data and 'vocab' in vocab_data['model'] and isinstance(vocab_data['model']['vocab'], dict):
+                logger.info("Обнаружен формат токенизатора (model.vocab)")
+                token_dict = vocab_data['model']['vocab']
+                loaded_special_tokens = {}
+                # Определяем специальные токены по имени
+                for token, idx in token_dict.items():
+                    if isinstance(idx, int) and isinstance(token, str):
+                        if token in ['<｜begin▁of▁sentence｜>', '<｜end▁of▁sentence｜>', '<｜▁pad▁｜>', '<UNK>'] or token.startswith('<｜place▁holder'):
+                            loaded_special_tokens[token] = idx
+            # Иначе предполагаем, что это простой словарь
+            else:
+                logger.info("Обнаружен формат простого словаря")
+                token_dict = vocab_data
+                loaded_special_tokens = {}
+                # Определяем специальные токены по имени
+                for token, idx in token_dict.items():
+                    if isinstance(idx, int) and isinstance(token, str):
+                        if token in ['<｜begin▁of▁sentence｜>', '<｜end▁of▁sentence｜>', '<｜▁pad▁｜>', '<UNK>'] or token.startswith('<｜place▁holder'):
+                            loaded_special_tokens[token] = idx
+
+            # Фильтрация и проверка типов данных
+            filtered_items = []
+            for token, idx in token_dict.items():
+                if isinstance(idx, int) and isinstance(token, str):
+                    filtered_items.append((token, idx))
+                else:
+                    logger.debug(f"Пропущен некорректный элемент словаря: {token}: {idx}")
+            
+            # Если в загруженном словаре есть специальные токены, обновляем наш список
+            if loaded_special_tokens:
+                logger.info(f"Найдены специальные токены в загруженном словаре: {list(loaded_special_tokens.keys())}")
+                self.special_tokens.update(loaded_special_tokens)
+            
+            # Сортировка по ID для сохранения порядка
+            sorted_items = sorted(filtered_items, key=lambda x: x[1])
+            
+            # Очищаем существующие словари перед загрузкой
+            self.word_to_idx.clear()
+            self.idx_to_word.clear()
+            self.vocab.clear()
+            
+            # Первоначально добавляем специальные токены
+            self._initialize_special_tokens()
+            
+            # Добавление токенов в наши словари
+            added_count = 0
             for token, idx in sorted_items:
-                if idx < self.vocab_size and token not in self.word_to_idx:
+                # Проверяем, не выходит ли индекс за пределы vocab_size
+                if idx < self.vocab_size:
                     self.word_to_idx[token] = idx
                     self.idx_to_word[idx] = token
                     self.vocab[token] = idx
+                    added_count += 1
+                # else:
+                #     logger.debug(f"Токен {token} (ID: {idx}) превышает лимит vocab_size ({self.vocab_size}) и пропущен.")
                     
-            logger.info(f"Загружено {len(self.word_to_idx)} токенов из DeepSeek словаря")
+            logger.info(f"Загружено {added_count} токенов из DeepSeek словаря (всего в файле: {len(sorted_items)})")
+            logger.info(f"Финальные специальные токены: {self.special_tokens}")
+            logger.debug(f"BOS ID: {self.special_tokens.get('<｜begin▁of▁sentence｜>', 'Not found')}")
+            logger.debug(f"EOS ID: {self.special_tokens.get('<｜end▁of▁sentence｜>', 'Not found')}")
+            logger.debug(f"PAD ID: {self.special_tokens.get('<｜▁pad▁｜>', 'Not found')}")
+            logger.debug(f"UNK ID: {self.special_tokens.get('<UNK>', 'Not found')}")
             return True
             
         except Exception as e:
             logger.error(f"Ошибка при загрузке DeepSeek словаря: {e}")
+            logger.error(traceback.format_exc())
             return False
             
     def build_vocab(self, texts: List[str]):
@@ -97,7 +210,10 @@ class SinTokenizer:
         sorted_words = sorted(word_freq.items(), key=lambda x: x[1], reverse=True)
         
         # Добавление новых слов в словарь
-        idx = len(self.word_to_idx)
+        # Начинаем с индекса после максимального существующего
+        start_idx = max(self.word_to_idx.values()) + 1 if self.word_to_idx else len(self.special_tokens)
+        idx = start_idx
+        
         for word, freq in sorted_words:
             if idx >= self.vocab_size:
                 break
@@ -123,9 +239,10 @@ class SinTokenizer:
         
     def encode(self, text: str) -> List[int]:
         """Кодирование текста в последовательность токенов"""
-        # Используем regex паттерн для токенизации
-        words = self.compiled_pattern.findall(text)
-        tokens = [self.special_tokens['<｜begin▁of▁sentence｜>']]
+        words = self._preprocess_text(text).split()
+        # Используем ID из словаря special_tokens для BOS
+        bos_id = self.special_tokens.get('<｜begin▁of▁sentence｜>', 0)
+        tokens = [bos_id]
         
         for word in words:
             if word in self.word_to_idx:
@@ -135,7 +252,9 @@ class SinTokenizer:
                 subtokens = self._subword_tokenize(word)
                 tokens.extend(subtokens)
                 
-        tokens.append(self.special_tokens['<｜end▁of▁sentence｜>'])
+        # Добавляем EOS токен
+        eos_id = self.special_tokens.get('<｜end▁of▁sentence｜>', 1)
+        tokens.append(eos_id)
         return tokens
         
     def _subword_tokenize(self, word: str) -> List[int]:
@@ -147,19 +266,25 @@ class SinTokenizer:
             if char in self.word_to_idx:
                 subtokens.append(self.word_to_idx[char])
             else:
-                subtokens.append(self.special_tokens['<UNK>'])
+                # Используем ID из словаря special_tokens для UNK
+                unk_id = self.special_tokens.get('<UNK>', 3)
+                subtokens.append(unk_id)
                 
-        return subtokens if subtokens else [self.special_tokens['<UNK>']]
+        return subtokens if subtokens else [self.special_tokens.get('<UNK>', 3)]
         
     def decode(self, tokens: List[int]) -> str:
         """Декодирование последовательности токенов в текст"""
         words = []
+        special_token_ids = set(self.special_tokens.values())
+        
         for token in tokens:
-            if token in self.idx_to_word:
+            if token in self.idx_to_word and token not in special_token_ids:
                 word = self.idx_to_word[token]
                 # Пропуск специальных токенов
                 if word not in ['<｜begin▁of▁sentence｜>', '<｜end▁of▁sentence｜>', '<｜▁pad▁｜>', '<UNK>']:
-                    words.append(word)
+                    # Убираем специальные символы из вывода, если они есть
+                    if not word.startswith('<｜place▁holder'):
+                        words.append(word)
                     
         return ' '.join(words)
 
@@ -181,9 +306,10 @@ class SinDataset(Dataset):
                     target_seq = tokens[i]
                     
                     # Паддинг
+                    # Используем ID из словаря special_tokens для PAD
+                    pad_id = self.tokenizer.special_tokens.get('<｜▁pad▁｜>', 2)
                     if len(input_seq) < max_length:
-                        input_seq.extend([tokenizer.special_tokens['<｜▁pad▁｜>']] * 
-                                       (max_length - len(input_seq)))
+                        input_seq.extend([pad_id] * (max_length - len(input_seq)))
                     else:
                         input_seq = input_seq[:max_length]
                         
@@ -211,7 +337,11 @@ class SinModel(nn.Module):
         self.num_layers = num_layers
         
         # Эмбеддинги
-        self.embedding = nn.Embedding(vocab_size, embedding_dim, padding_idx=2)  # PAD token index
+        # Используем ID из словаря special_tokens для PAD
+        pad_id = 2 # Значение по умолчанию, если не найдено в special_tokens
+        # Лучше получить его из токенизатора, но при инициализации модели токенизатор может быть еще не загружен
+        # Поэтому используем значение по умолчанию, которое должно совпадать с ID в словаре
+        self.embedding = nn.Embedding(vocab_size, embedding_dim, padding_idx=pad_id)
         
         # LSTM слои
         self.lstm = nn.LSTM(
@@ -346,7 +476,7 @@ class TrainingMetrics:
 class SinChatBot:
     """Основной класс чат-бота Sin"""
     
-    def __init__(self, model_path: str = "sin_model", vocab_size: int = 128000):
+    def __init__(self, model_path: str = MODEL_DIR, vocab_size: int = 128000):
         self.model_path = model_path
         self.vocab_size = vocab_size
         self.tokenizer = None
@@ -354,8 +484,8 @@ class SinChatBot:
         self.metrics = TrainingMetrics()
         self.is_training = False
         
-        # Создание директории для модели
-        os.makedirs(model_path, exist_ok=True)
+        # Проверка наличия необходимых файлов и папок
+        self._check_files_and_dirs()
         
         # Автозагрузка модели и токенизатора
         self.load_model()
@@ -363,6 +493,28 @@ class SinChatBot:
         # Обработчик сигналов для автосохранения
         signal.signal(signal.SIGINT, self._signal_handler)
         signal.signal(signal.SIGTERM, self._signal_handler)
+        
+    def _check_files_and_dirs(self):
+        """Проверка наличия необходимых файлов и папок"""
+        logger.info("Проверка файлов и папок...")
+        
+        # Проверка основной директории
+        if not os.path.exists(PROJECT_DIR):
+            os.makedirs(PROJECT_DIR)
+            logger.info(f"Создана директория проекта: {PROJECT_DIR}")
+            
+        # Проверка директории модели
+        if not os.path.exists(MODEL_DIR):
+            os.makedirs(MODEL_DIR)
+            logger.info(f"Создана директория модели: {MODEL_DIR}")
+            
+        # Проверка лог-файла
+        if not os.path.exists(LOG_FILE):
+            with open(LOG_FILE, 'w') as f:
+                f.write("")
+            logger.info(f"Создан лог-файл: {LOG_FILE}")
+            
+        logger.info("Проверка файлов и папок завершена")
         
     def _signal_handler(self, signum, frame):
         """Обработчик сигналов для корректного завершения"""
@@ -379,18 +531,24 @@ class SinChatBot:
                 with open(tokenizer_path, 'rb') as f:
                     self.tokenizer = pickle.load(f)
                 logger.info("Токенизатор загружен")
+                logger.debug(f"Размер словаря токенизатора после загрузки: {len(self.tokenizer.word_to_idx)}")
+                logger.debug(f"Специальные токены после загрузки: {self.tokenizer.special_tokens}")
             else:
                 self.tokenizer = SinTokenizer(self.vocab_size)
                 # Попытка загрузить DeepSeek словарь
-                deepseek_vocab_path = os.path.join(self.model_path, "tokenizer.json")
-                if os.path.exists(deepseek_vocab_path):
+                if os.path.exists(DEEPSEEK_VOCAB_FILE):
                     try:
-                        with open(deepseek_vocab_path, 'r', encoding='utf-8') as f:
-                            vocab_data = json.load(f)
-                        self.tokenizer.load_deepseek_vocab(vocab_data)
-                        logger.info("DeepSeek словарь загружен")
+                        # Передаем путь к файлу в функцию
+                        if self.tokenizer.load_deepseek_vocab(DEEPSEEK_VOCAB_FILE):
+                            logger.info("DeepSeek словарь успешно загружен")
+                            logger.debug(f"Размер словаря токенизатора после загрузки DeepSeek: {len(self.tokenizer.word_to_idx)}")
+                        else:
+                            logger.warning("Не удалось загрузить DeepSeek словарь")
                     except Exception as e:
                         logger.error(f"Ошибка при загрузке DeepSeek словаря: {e}")
+                        logger.error(traceback.format_exc())
+                else:
+                    logger.info("Файл DeepSeek словаря не найден")
                 logger.info("Создан новый токенизатор")
                 
             # Загрузка модели
@@ -405,9 +563,12 @@ class SinChatBot:
                 )
                 self.model.load_state_dict(checkpoint['model_state_dict'])
                 logger.info("Модель загружена")
+                logger.debug(f"Vocab size модели из файла: {checkpoint.get('vocab_size', 'N/A')}")
+                logger.debug(f"Фактический vocab size модели: {len(self.tokenizer.word_to_idx)}")
             else:
                 self.model = SinModel(vocab_size=len(self.tokenizer.word_to_idx))
                 logger.info("Создана новая модель")
+                logger.debug(f"Vocab size новой модели: {len(self.tokenizer.word_to_idx)}")
                 
         except Exception as e:
             logger.error(f"Ошибка при загрузке модели: {e}")
@@ -598,7 +759,9 @@ class SinChatBot:
         """Обучение на данных"""
         try:
             self.is_training = True
+            logger.info("=" * 60)
             logger.info("Начало подготовки данных для обучения...")
+            logger.info("=" * 60)
             
             # Подготовка данных
             texts = self.prepare_training_data(sources)
@@ -613,15 +776,20 @@ class SinChatBot:
             # Создание или обновление модели
             vocab_size = len(self.tokenizer.word_to_idx)
             if self.model is None or self.model.vocab_size != vocab_size:
+                logger.info(f"Создание новой модели с vocab_size={vocab_size}")
                 self.model = SinModel(vocab_size=vocab_size)
                 logger.info("Создана новая модель с обновленным словарем")
+            else:
+                logger.info("Используется существующая модель")
                 
             # Создание датасета
             dataset = SinDataset(texts, self.tokenizer)
             dataloader = DataLoader(dataset, batch_size=batch_size, shuffle=True)
             
             # Настройка оптимизатора и функции потерь
-            criterion = nn.CrossEntropyLoss(ignore_index=self.tokenizer.special_tokens['<｜▁pad▁｜>'])
+            # Используем ID из словаря special_tokens для PAD
+            pad_id = self.tokenizer.special_tokens.get('<｜▁pad▁｜>', 2)
+            criterion = nn.CrossEntropyLoss(ignore_index=pad_id)
             optimizer = optim.Adam(self.model.parameters(), lr=learning_rate)
             
             # Обучение
@@ -629,13 +797,22 @@ class SinChatBot:
             self.model.to(device)
             self.model.train()
             
-            logger.info(f"Начало обучения. Эпохи: {epochs}, Батчей: {len(dataloader)}")
+            logger.info(f"Начало обучения.")
+            logger.info(f"  Эпохи: {epochs}")
+            logger.info(f"  Батчей: {len(dataloader)}")
+            logger.info(f"  Размер батча: {batch_size}")
+            logger.info(f"  Learning rate: {learning_rate}")
+            logger.info(f"  Устройство: {device}")
+            logger.info("=" * 60)
             
             for epoch in range(epochs):
                 self.metrics.start_epoch()
                 total_loss = 0.0
                 total_accuracy = 0.0
                 total_perplexity = 0.0
+                
+                logger.info(f"ЭПОХА {epoch+1}/{epochs} НАЧАЛАСЬ")
+                logger.info("-" * 40)
                 
                 for batch_idx, (inputs, targets) in enumerate(dataloader):
                     self.metrics.start_batch()
@@ -671,23 +848,23 @@ class SinChatBot:
                         weights_info = self.model.get_weights_info()
                         self.metrics.update_weights_info(weights_info)
                         
-                        # Логгирование
+                        # Логгирование каждые 10 батчей
                         if batch_idx % 10 == 0:
                             avg_loss = total_loss / (batch_idx + 1)
                             avg_accuracy = total_accuracy / (batch_idx + 1)
                             avg_perplexity = total_perplexity / (batch_idx + 1)
                             eta = self.metrics.get_eta(len(dataloader))
                             
-                            logger.info(f"Эпоха {epoch+1}/{epochs}, "
-                                      f"Батч {batch_idx+1}/{len(dataloader)}, "
-                                      f"Потери: {avg_loss:.4f}, "
-                                      f"Точность: {avg_accuracy:.4f}, "
-                                      f"Перплексия: {avg_perplexity:.4f}, "
+                            logger.info(f"  Батч {batch_idx+1}/{len(dataloader)} | "
+                                      f"Потери: {loss.item():.4f} (средние: {avg_loss:.4f}) | "
+                                      f"Точность: {accuracy:.4f} (средние: {avg_accuracy:.4f}) | "
+                                      f"Перплексия: {perplexity:.4f} (средние: {avg_perplexity:.4f}) | "
                                       f"ETA: {eta}")
                             
-                            # Логгирование информации о весах
-                            if weights_info:
-                                logger.info(f"Норма градиентов: {weights_info.get('total_gradient_norm', 0):.6f}")
+                            # Логгирование информации о весах (только для первых батчей, чтобы не засорять лог)
+                            if weights_info and batch_idx < 50:
+                                grad_norm = weights_info.get('total_gradient_norm', 0)
+                                logger.debug(f"    Норма градиентов: {grad_norm:.6f}")
                                 
                     except Exception as e:
                         logger.error(f"Ошибка в батче {batch_idx}: {e}")
@@ -696,21 +873,24 @@ class SinChatBot:
                         
                     finally:
                         self.metrics.end_batch()
-                        
+                
                 # Конец эпохи
                 avg_epoch_loss = total_loss / len(dataloader)
                 avg_epoch_accuracy = total_accuracy / len(dataloader)
                 avg_epoch_perplexity = total_perplexity / len(dataloader)
                 
-                logger.info(f"Эпоха {epoch+1} завершена. "
-                          f"Средние потери: {avg_epoch_loss:.4f}, "
-                          f"Точность: {avg_epoch_accuracy:.4f}, "
-                          f"Перплексия: {avg_epoch_perplexity:.4f}")
+                logger.info("-" * 40)
+                logger.info(f"ЭПОХА {epoch+1}/{epochs} ЗАВЕРШЕНА")
+                logger.info(f"  Средние потери: {avg_epoch_loss:.4f}")
+                logger.info(f"  Средняя точность: {avg_epoch_accuracy:.4f}")
+                logger.info(f"  Средняя перплексия: {avg_epoch_perplexity:.4f}")
+                logger.info("=" * 60)
                           
                 # Сохранение промежуточной модели
                 self.save_model()
                 
             logger.info("Обучение завершено")
+            logger.info("=" * 60)
             
         except Exception as e:
             logger.error(f"Ошибка во время обучения: {e}")
@@ -739,7 +919,9 @@ class SinChatBot:
             dataloader = DataLoader(dataset, batch_size=1, shuffle=True)
             
             # Настройка обучения
-            criterion = nn.CrossEntropyLoss(ignore_index=self.tokenizer.special_tokens['<｜▁pad▁｜>'])
+            # Используем ID из словаря special_tokens для PAD
+            pad_id = self.tokenizer.special_tokens.get('<｜▁pad▁｜>', 2)
+            criterion = nn.CrossEntropyLoss(ignore_index=pad_id)
             optimizer = optim.Adam(self.model.parameters(), lr=0.001)
             
             device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
@@ -747,6 +929,7 @@ class SinChatBot:
             self.model.train()
             
             # Обучение на одном примере
+            logger.info("Начало обучения на диалоге...")
             for inputs, targets in dataloader:
                 inputs, targets = inputs.to(device), targets.to(device)
                 
@@ -756,7 +939,13 @@ class SinChatBot:
                 loss.backward()
                 optimizer.step()
                 
-                logger.info(f"Модель обучена на диалоге. Потери: {loss.item():.4f}")
+                accuracy = self.calculate_accuracy(outputs[:, -1, :], targets)
+                perplexity = self.calculate_perplexity(loss.item())
+                
+                logger.info(f"Модель обучена на диалоге. "
+                          f"Потери: {loss.item():.4f}, "
+                          f"Точность: {accuracy:.4f}, "
+                          f"Перплексия: {perplexity:.4f}")
                 break
                 
         except Exception as e:
@@ -799,8 +988,11 @@ class SinChatBot:
                     next_token = torch.multinomial(probabilities, 1).item()
                     
                     # Проверка на специальные токены
-                    if next_token in [self.tokenizer.special_tokens['<｜end▁of▁sentence｜>'], 
-                                    self.tokenizer.special_tokens['<｜▁pad▁｜>']]:
+                    # Используем ID из словаря special_tokens для EOS и PAD
+                    eos_id = self.tokenizer.special_tokens.get('<｜end▁of▁sentence｜>', 1)
+                    pad_id = self.tokenizer.special_tokens.get('<｜▁pad▁｜>', 2)
+                    
+                    if next_token in [eos_id, pad_id]:
                         break
                         
                     generated_tokens.append(next_token)
@@ -816,18 +1008,131 @@ class SinChatBot:
             logger.error(f"Ошибка при генерации ответа: {e}")
             logger.error(traceback.format_exc())
             return "Извините, произошла ошибка при генерации ответа."
+            
+    def get_model_report(self) -> str:
+        """Генерация подробного отчета о модели"""
+        try:
+            if self.model is None:
+                return "Модель не загружена"
+                
+            report = []
+            report.append("=" * 50)
+            report.append("ОТЧЕТ О СОСТОЯНИИ МОДЕЛИ")
+            report.append("=" * 50)
+            report.append(f"Дата и время: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+            report.append("")
+            
+            # Общая информация о модели
+            report.append("1. ОБЩАЯ ИНФОРМАЦИЯ О МОДЕЛИ")
+            report.append("-" * 30)
+            report.append(f"Размер словаря: {self.model.vocab_size}")
+            report.append(f"Размерность эмбеддингов: {self.model.embedding_dim}")
+            report.append(f"Размерность скрытого слоя: {self.model.hidden_dim}")
+            report.append(f"Количество LSTM слоев: {self.model.num_layers}")
+            
+            # Подсчет параметров
+            total_params = sum(p.numel() for p in self.model.parameters())
+            trainable_params = sum(p.numel() for p in self.model.parameters() if p.requires_grad)
+            report.append(f"Общее количество параметров: {total_params:,}")
+            report.append(f"Обучаемые параметры: {trainable_params:,}")
+            report.append("")
+            
+            # Информация о токенизаторе
+            report.append("2. ИНФОРМАЦИЯ О ТОКЕНИЗАТОРЕ")
+            report.append("-" * 30)
+            report.append(f"Размер словаря токенов: {len(self.tokenizer.word_to_idx)}")
+            report.append(f"Специальные токены: {self.tokenizer.special_tokens}")
+            report.append("")
+            
+            # Метрики обучения
+            report.append("3. МЕТРИКИ ОБУЧЕНИЯ")
+            report.append("-" * 30)
+            if self.metrics.loss_history:
+                report.append(f"Средние потери: {self.metrics.get_average_loss():.4f}")
+                report.append(f"Средняя точность: {self.metrics.get_average_accuracy():.4f}")
+                report.append(f"Средняя перплексия: {self.metrics.get_average_perplexity():.4f}")
+            else:
+                report.append("Нет данных для отображения метрик")
+            report.append("")
+            
+            # Информация о весах
+            report.append("4. ИНФОРМАЦИЯ О ВЕСАХ")
+            report.append("-" * 30)
+            weights_info = self.model.get_weights_info()
+            if weights_info:
+                report.append(f"Общая норма градиентов: {weights_info.get('total_gradient_norm', 0):.6f}")
+                report.append(f"Общее количество параметров: {weights_info.get('total_parameters', 0):,}")
+                
+                # Подробная информация о слоях
+                report.append("\nПодробная информация о слоях:")
+                for key, value in weights_info.items():
+                    if key not in ['total_parameters', 'total_gradient_norm']:
+                        if 'grad_norm' in key:
+                            report.append(f"  {key}: {value:.6f}")
+                        elif 'norm' in key:
+                            report.append(f"  {key}: {value:.6f}")
+            else:
+                report.append("Нет данных о весах")
+            report.append("")
+            
+            # История обучения
+            report.append("5. ИСТОРИЯ ОБУЧЕНИЯ")
+            report.append("-" * 30)
+            if self.metrics.loss_history:
+                # Экранируем фигурные скобки внутри f-строки для списков
+                last_5_losses = [f'{x:.4f}' for x in list(self.metrics.loss_history)[-5:]]
+                last_5_accuracies = [f'{x:.4f}' for x in list(self.metrics.accuracy_history)[-5:]]
+                last_5_perplexities = [f'{x:.4f}' for x in list(self.metrics.perplexity_history)[-5:]]
+                
+                report.append(f"Последние 5 значений потерь: {last_5_losses}")
+                report.append(f"Последние 5 значений точности: {last_5_accuracies}")
+                report.append(f"Последние 5 значений перплексии: {last_5_perplexities}")
+            else:
+                report.append("Нет истории обучения")
+            report.append("")
+            
+            # Рекомендации
+            report.append("6. РЕКОМЕНДАЦИИ")
+            report.append("-" * 30)
+            if self.metrics.loss_history:
+                avg_loss = self.metrics.get_average_loss()
+                if avg_loss > 2.0:
+                    report.append("• Рекомендуется продолжить обучение - потери высоки")
+                elif avg_loss > 1.0:
+                    report.append("• Модель показывает удовлетворительные результаты")
+                else:
+                    report.append("• Модель показывает хорошие результаты")
+                    
+                # Анализ градиентов
+                grad_norm = weights_info.get('total_gradient_norm', 0) if weights_info else 0
+                if grad_norm < 0.01:
+                    report.append("• Градиенты очень малы - возможно, модель застряла в локальном минимуме")
+                elif grad_norm > 10.0:
+                    report.append("• Градиенты велики - возможно, нужна регуляризация или уменьшение learning rate")
+            else:
+                report.append("• Нет данных для анализа - требуется обучение")
+                
+            report.append("=" * 50)
+            
+            return "\n".join(report)
+            
+        except Exception as e:
+            logger.error(f"Ошибка при генерации отчета: {e}")
+            logger.error(traceback.format_exc())
+            return f"Ошибка при генерации отчета: {e}"
 
 def main():
     """Основная функция для демонстрации работы"""
     # Создание чат-бота
-    bot = SinChatBot(model_path="sin_model")
+    bot = SinChatBot(model_path=MODEL_DIR)
     
     print("Добро пожаловать в чат-бот Sin!")
     print("Доступные команды:")
     print("1. /train - обучение на данных")
     print("2. /dialogue - обучение на диалоге")
     print("3. /chat - режим чата")
-    print("4. /exit - выход")
+    print("4. /report - отчет о состоянии модели")
+    print("5. /exit - выход")
     
     while True:
         try:
@@ -877,6 +1182,15 @@ def main():
                         break
                     response = bot.generate_response(user_input)
                     print(f"Бот: {response}")
+                    
+            elif command == '/report':
+                report = bot.get_model_report()
+                print(report)
+                # Также сохраняем отчет в файл
+                report_file = os.path.join(PROJECT_DIR, f"model_report_{datetime.now().strftime('%Y%m%d_%H%M%S')}.txt")
+                with open(report_file, 'w', encoding='utf-8') as f:
+                    f.write(report)
+                print(f"Отчет также сохранен в файл: {report_file}")
                     
             else:
                 print("Неизвестная команда")
