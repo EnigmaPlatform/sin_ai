@@ -25,6 +25,18 @@ import traceback
 import regex as re
 import ast
 
+# Попытка импортировать transformers
+try:
+    from transformers import AutoTokenizer
+    TRANSFORMERS_AVAILABLE = True
+    logger.info("Библиотека transformers доступна.")
+except ImportError:
+    TRANSFORMERS_AVAILABLE = False
+    logger.warning("Библиотека transformers не найдена. Будет использован кастомный токенизатор.")
+    # Заглушка для AutoTokenizer, если transformers не установлены
+    class AutoTokenizer:
+        pass
+
 # Установка рабочей директории
 PROJECT_DIR = r"C:\Users\User\Downloads\SinChatBot"
 MODEL_DIR = os.path.join(PROJECT_DIR, "sin_model")
@@ -46,6 +58,7 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
+# --- Кастомный токенизатор (резервный вариант) ---
 class SinTokenizer:
     """Кастомный токенизатор для чат-бота Sin с поддержкой DeepSeek словаря"""
     
@@ -288,32 +301,44 @@ class SinTokenizer:
                     
         return ' '.join(words)
 
+# --- Классы модели и датасета ---
 class SinDataset(Dataset):
     """Датасет для обучения чат-бота"""
     
-    def __init__(self, texts: List[str], tokenizer: SinTokenizer, max_length: int = 512):
+    def __init__(self, texts: List[str], tokenizer, max_length: int = 512):
         self.tokenizer = tokenizer
         self.max_length = max_length
         self.data = []
         
         logger.info("Подготовка датасета...")
         for text in texts:
-            tokens = tokenizer.encode(text)
-            if len(tokens) > 1:
-                # Создание пар (вход, цель) для обучения
-                for i in range(1, len(tokens)):
-                    input_seq = tokens[:i]
-                    target_seq = tokens[i]
+            # Используем универсальный метод encode
+            encoding = self.tokenizer(
+                text,
+                add_special_tokens=True,
+                max_length=self.max_length,
+                padding='max_length',
+                truncation=True,
+                return_tensors='pt'
+            )
+            
+            input_ids = encoding['input_ids'].squeeze(0) # [seq_len]
+            
+            # Создание пар (вход, цель) для обучения
+            # Для каждого токена i, вход - это токены от 0 до i-1, цель - токен i
+            for i in range(1, len(input_ids)):
+                input_seq = input_ids[:i]
+                target_seq = input_ids[i]
+                
+                # Паддинг входной последовательности до max_length
+                if len(input_seq) < max_length:
+                    # Определяем pad_token_id
+                    pad_token_id = self.tokenizer.pad_token_id if hasattr(self.tokenizer, 'pad_token_id') and self.tokenizer.pad_token_id is not None else 0
+                    input_seq = torch.cat([input_seq, torch.full((max_length - len(input_seq),), pad_token_id, dtype=torch.long)])
+                else:
+                    input_seq = input_seq[:max_length]
                     
-                    # Паддинг
-                    # Используем ID из словаря special_tokens для PAD
-                    pad_id = self.tokenizer.special_tokens.get('<｜▁pad▁｜>', 2)
-                    if len(input_seq) < max_length:
-                        input_seq.extend([pad_id] * (max_length - len(input_seq)))
-                    else:
-                        input_seq = input_seq[:max_length]
-                        
-                    self.data.append((input_seq, target_seq))
+                self.data.append((input_seq, target_seq))
                     
         logger.info(f"Датасет подготовлен. Размер: {len(self.data)}")
         
@@ -322,7 +347,7 @@ class SinDataset(Dataset):
         
     def __getitem__(self, idx):
         input_seq, target_seq = self.data[idx]
-        return torch.tensor(input_seq, dtype=torch.long), torch.tensor(target_seq, dtype=torch.long)
+        return input_seq, target_seq
 
 class SinModel(nn.Module):
     """Кастомная нейросеть для чат-бота Sin"""
@@ -337,11 +362,8 @@ class SinModel(nn.Module):
         self.num_layers = num_layers
         
         # Эмбеддинги
-        # Используем ID из словаря special_tokens для PAD
-        pad_id = 2 # Значение по умолчанию, если не найдено в special_tokens
-        # Лучше получить его из токенизатора, но при инициализации модели токенизатор может быть еще не загружен
-        # Поэтому используем значение по умолчанию, которое должно совпадать с ID в словаре
-        self.embedding = nn.Embedding(vocab_size, embedding_dim, padding_idx=pad_id)
+        # pad_token_id будет определен позже, при создании модели
+        self.embedding = nn.Embedding(vocab_size, embedding_dim, padding_idx=0)
         
         # LSTM слои
         self.lstm = nn.LSTM(
@@ -527,69 +549,92 @@ class SinChatBot:
         try:
             # Загрузка токенизатора
             tokenizer_path = os.path.join(self.model_path, "tokenizer.pkl")
-            if os.path.exists(tokenizer_path):
+            
+            # Попробуем загрузить сохраненный токенизатор
+            if os.path.exists(tokenizer_path) and not TRANSFORMERS_AVAILABLE:
                 with open(tokenizer_path, 'rb') as f:
                     self.tokenizer = pickle.load(f)
-                logger.info("Токенизатор загружен")
-                logger.debug(f"Размер словаря токенизатора после загрузки: {len(self.tokenizer.word_to_idx)}")
-                logger.debug(f"Специальные токены после загрузки: {self.tokenizer.special_tokens}")
+                logger.info("Кастомный токенизатор загружен")
+            elif TRANSFORMERS_AVAILABLE and os.path.exists(DEEPSEEK_VOCAB_FILE):
+                # Используем AutoTokenizer
+                try:
+                    self.tokenizer = AutoTokenizer.from_pretrained(self.model_path, trust_remote_code=True)
+                    logger.info("Оригинальный токенизатор DeepSeek загружен через transformers")
+                except Exception as e:
+                    logger.warning(f"Не удалось загрузить токенизатор через transformers: {e}")
+                    logger.warning("Используется кастомный токенизатор как резервный вариант")
+                    self.tokenizer = SinTokenizer(self.vocab_size)
+                    if self.tokenizer.load_deepseek_vocab(DEEPSEEK_VOCAB_FILE):
+                        logger.info("DeepSeek словарь успешно загружен в кастомный токенизатор")
+                    else:
+                        logger.warning("Не удалось загрузить DeepSeek словарь")
             else:
+                # Создаем кастомный токенизатор
                 self.tokenizer = SinTokenizer(self.vocab_size)
-                # Попытка загрузить DeepSeek словарь
                 if os.path.exists(DEEPSEEK_VOCAB_FILE):
-                    try:
-                        # Передаем путь к файлу в функцию
-                        if self.tokenizer.load_deepseek_vocab(DEEPSEEK_VOCAB_FILE):
-                            logger.info("DeepSeek словарь успешно загружен")
-                            logger.debug(f"Размер словаря токенизатора после загрузки DeepSeek: {len(self.tokenizer.word_to_idx)}")
-                        else:
-                            logger.warning("Не удалось загрузить DeepSeek словарь")
-                    except Exception as e:
-                        logger.error(f"Ошибка при загрузке DeepSeek словаря: {e}")
-                        logger.error(traceback.format_exc())
-                else:
-                    logger.info("Файл DeepSeek словаря не найден")
+                    if self.tokenizer.load_deepseek_vocab(DEEPSEEK_VOCAB_FILE):
+                        logger.info("DeepSeek словарь успешно загружен")
+                    else:
+                        logger.warning("Не удалось загрузить DeepSeek словарь")
                 logger.info("Создан новый токенизатор")
                 
+            # Определяем размер словаря
+            if hasattr(self.tokenizer, 'vocab_size'):
+                vocab_size = self.tokenizer.vocab_size
+            elif hasattr(self.tokenizer, 'get_vocab'):
+                vocab_size = len(self.tokenizer.get_vocab())
+            else:
+                vocab_size = len(getattr(self.tokenizer, 'word_to_idx', {}))
+                
+            logger.info(f"Размер словаря токенизатора: {vocab_size}")
+
             # Загрузка модели
             model_path = os.path.join(self.model_path, "model.pth")
             if os.path.exists(model_path):
                 checkpoint = torch.load(model_path)
                 self.model = SinModel(
-                    vocab_size=len(self.tokenizer.word_to_idx),
+                    vocab_size=vocab_size,
                     embedding_dim=checkpoint.get('embedding_dim', 512),
                     hidden_dim=checkpoint.get('hidden_dim', 1024),
                     num_layers=checkpoint.get('num_layers', 4)
                 )
                 self.model.load_state_dict(checkpoint['model_state_dict'])
                 logger.info("Модель загружена")
-                logger.debug(f"Vocab size модели из файла: {checkpoint.get('vocab_size', 'N/A')}")
-                logger.debug(f"Фактический vocab size модели: {len(self.tokenizer.word_to_idx)}")
             else:
-                self.model = SinModel(vocab_size=len(self.tokenizer.word_to_idx))
+                self.model = SinModel(vocab_size=vocab_size)
                 logger.info("Создана новая модель")
-                logger.debug(f"Vocab size новой модели: {len(self.tokenizer.word_to_idx)}")
                 
         except Exception as e:
             logger.error(f"Ошибка при загрузке модели: {e}")
             logger.error(traceback.format_exc())
             # Создание новых объектов в случае ошибки
-            self.tokenizer = SinTokenizer(self.vocab_size)
-            self.model = SinModel(vocab_size=len(self.tokenizer.word_to_idx))
+            if TRANSFORMERS_AVAILABLE and os.path.exists(DEEPSEEK_VOCAB_FILE):
+                try:
+                    self.tokenizer = AutoTokenizer.from_pretrained(self.model_path, trust_remote_code=True)
+                except:
+                    self.tokenizer = SinTokenizer(self.vocab_size)
+            else:
+                self.tokenizer = SinTokenizer(self.vocab_size)
+            
+            vocab_size = len(getattr(self.tokenizer, 'word_to_idx', {})) if not TRANSFORMERS_AVAILABLE else 128000
+            self.model = SinModel(vocab_size=vocab_size)
             
     def save_model(self):
         """Сохранение модели и токенизатора"""
         try:
-            # Сохранение токенизатора
-            tokenizer_path = os.path.join(self.model_path, "tokenizer.pkl")
-            with open(tokenizer_path, 'wb') as f:
-                pickle.dump(self.tokenizer, f)
+            # Сохранение токенизатора (только если это кастомный токенизатор)
+            if not TRANSFORMERS_AVAILABLE or not isinstance(self.tokenizer, AutoTokenizer):
+                tokenizer_path = os.path.join(self.model_path, "tokenizer.pkl")
+                with open(tokenizer_path, 'wb') as f:
+                    pickle.dump(self.tokenizer, f)
                 
             # Сохранение модели
             model_path = os.path.join(self.model_path, "model.pth")
             torch.save({
                 'model_state_dict': self.model.state_dict(),
-                'vocab_size': len(self.tokenizer.word_to_idx),
+                'vocab_size': len(getattr(self.tokenizer, 'word_to_idx', {})) if not TRANSFORMERS_AVAILABLE else (
+                    self.tokenizer.vocab_size if hasattr(self.tokenizer, 'vocab_size') else len(self.tokenizer.get_vocab())
+                ),
                 'embedding_dim': self.model.embedding_dim,
                 'hidden_dim': self.model.hidden_dim,
                 'num_layers': self.model.num_layers
@@ -769,12 +814,20 @@ class SinChatBot:
                 logger.warning("Нет данных для обучения")
                 return
                 
-            # Обновление словаря токенизатора
-            logger.info("Обновление словаря токенизатора...")
-            self.tokenizer.build_vocab(texts)
+            # Для кастомного токенизатора обновляем словарь
+            if not TRANSFORMERS_AVAILABLE or not isinstance(self.tokenizer, AutoTokenizer):
+                logger.info("Обновление словаря кастомного токенизатора...")
+                self.tokenizer.build_vocab(texts)
             
+            # Определяем размер словаря
+            if hasattr(self.tokenizer, 'vocab_size'):
+                vocab_size = self.tokenizer.vocab_size
+            elif hasattr(self.tokenizer, 'get_vocab'):
+                vocab_size = len(self.tokenizer.get_vocab())
+            else:
+                vocab_size = len(getattr(self.tokenizer, 'word_to_idx', {}))
+                
             # Создание или обновление модели
-            vocab_size = len(self.tokenizer.word_to_idx)
             if self.model is None or self.model.vocab_size != vocab_size:
                 logger.info(f"Создание новой модели с vocab_size={vocab_size}")
                 self.model = SinModel(vocab_size=vocab_size)
@@ -786,10 +839,15 @@ class SinChatBot:
             dataset = SinDataset(texts, self.tokenizer)
             dataloader = DataLoader(dataset, batch_size=batch_size, shuffle=True)
             
+            # Определяем pad_token_id для функции потерь
+            if hasattr(self.tokenizer, 'pad_token_id') and self.tokenizer.pad_token_id is not None:
+                pad_token_id = self.tokenizer.pad_token_id
+            else:
+                # Для кастомного токенизатора
+                pad_token_id = getattr(self.tokenizer, 'special_tokens', {}).get('<｜▁pad▁｜>', 2)
+                
             # Настройка оптимизатора и функции потерь
-            # Используем ID из словаря special_tokens для PAD
-            pad_id = self.tokenizer.special_tokens.get('<｜▁pad▁｜>', 2)
-            criterion = nn.CrossEntropyLoss(ignore_index=pad_id)
+            criterion = nn.CrossEntropyLoss(ignore_index=pad_token_id)
             optimizer = optim.Adam(self.model.parameters(), lr=learning_rate)
             
             # Обучение
@@ -906,11 +964,19 @@ class SinChatBot:
             # Создание текста диалога
             dialogue_text = f"Пользователь: {user_input}\nБот: {bot_response}"
             
-            # Обновление токенизатора
-            self.tokenizer.build_vocab([dialogue_text])
+            # Для кастомного токенизатора обновляем словарь
+            if not TRANSFORMERS_AVAILABLE or not isinstance(self.tokenizer, AutoTokenizer):
+                self.tokenizer.build_vocab([dialogue_text])
             
+            # Определяем размер словаря
+            if hasattr(self.tokenizer, 'vocab_size'):
+                vocab_size = self.tokenizer.vocab_size
+            elif hasattr(self.tokenizer, 'get_vocab'):
+                vocab_size = len(self.tokenizer.get_vocab())
+            else:
+                vocab_size = len(getattr(self.tokenizer, 'word_to_idx', {}))
+                
             # Обновление модели
-            vocab_size = len(self.tokenizer.word_to_idx)
             if self.model is None or self.model.vocab_size != vocab_size:
                 self.model = SinModel(vocab_size=vocab_size)
                 
@@ -918,10 +984,15 @@ class SinChatBot:
             dataset = SinDataset([dialogue_text], self.tokenizer)
             dataloader = DataLoader(dataset, batch_size=1, shuffle=True)
             
+            # Определяем pad_token_id для функции потерь
+            if hasattr(self.tokenizer, 'pad_token_id') and self.tokenizer.pad_token_id is not None:
+                pad_token_id = self.tokenizer.pad_token_id
+            else:
+                # Для кастомного токенизатора
+                pad_token_id = getattr(self.tokenizer, 'special_tokens', {}).get('<｜▁pad▁｜>', 2)
+                
             # Настройка обучения
-            # Используем ID из словаря special_tokens для PAD
-            pad_id = self.tokenizer.special_tokens.get('<｜▁pad▁｜>', 2)
-            criterion = nn.CrossEntropyLoss(ignore_index=pad_id)
+            criterion = nn.CrossEntropyLoss(ignore_index=pad_token_id)
             optimizer = optim.Adam(self.model.parameters(), lr=0.001)
             
             device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
@@ -964,17 +1035,27 @@ class SinChatBot:
             self.model.to(device)
             
             # Кодирование входного текста
-            input_tokens = self.tokenizer.encode(prompt)
-            input_tensor = torch.tensor([input_tokens], dtype=torch.long).to(device)
+            if hasattr(self.tokenizer, 'encode') and callable(getattr(self.tokenizer, 'encode')):
+                # Для transformers токенизатора
+                encoding = self.tokenizer(
+                    prompt,
+                    add_special_tokens=True,
+                    return_tensors='pt'
+                )
+                input_ids = encoding['input_ids'].to(device)
+            else:
+                # Для кастомного токенизатора
+                input_tokens = self.tokenizer.encode(prompt)
+                input_ids = torch.tensor([input_tokens], dtype=torch.long).to(device)
             
             # Генерация
-            generated_tokens = input_tokens.copy()
+            generated_ids = input_ids.clone()
             
             with torch.no_grad():
                 hidden = None
                 for _ in range(max_length):
                     # Получение последнего токена
-                    current_input = input_tensor[:, -1].unsqueeze(0)
+                    current_input = generated_ids[:, -1].unsqueeze(0)
                     
                     # Прогноз
                     output, hidden = self.model(current_input, hidden)
@@ -988,20 +1069,33 @@ class SinChatBot:
                     next_token = torch.multinomial(probabilities, 1).item()
                     
                     # Проверка на специальные токены
-                    # Используем ID из словаря special_tokens для EOS и PAD
-                    eos_id = self.tokenizer.special_tokens.get('<｜end▁of▁sentence｜>', 1)
-                    pad_id = self.tokenizer.special_tokens.get('<｜▁pad▁｜>', 2)
+                    # Определяем eos_token_id
+                    if hasattr(self.tokenizer, 'eos_token_id') and self.tokenizer.eos_token_id is not None:
+                        eos_token_id = self.tokenizer.eos_token_id
+                    else:
+                        # Для кастомного токенизатора
+                        eos_token_id = getattr(self.tokenizer, 'special_tokens', {}).get('<｜end▁of▁sentence｜>', 1)
+                        
+                    if hasattr(self.tokenizer, 'pad_token_id') and self.tokenizer.pad_token_id is not None:
+                        pad_token_id = self.tokenizer.pad_token_id
+                    else:
+                        # Для кастомного токенизатора
+                        pad_token_id = getattr(self.tokenizer, 'special_tokens', {}).get('<｜▁pad▁｜>', 2)
                     
-                    if next_token in [eos_id, pad_id]:
+                    if next_token in [eos_token_id, pad_token_id]:
                         break
                         
-                    generated_tokens.append(next_token)
-                    input_tensor = torch.cat([input_tensor, 
-                                            torch.tensor([[next_token]], 
-                                                       dtype=torch.long).to(device)], dim=1)
+                    # Добавляем новый токен к сгенерированной последовательности
+                    generated_ids = torch.cat([generated_ids, torch.tensor([[next_token]], device=device)], dim=1)
                     
             # Декодирование
-            response = self.tokenizer.decode(generated_tokens[len(input_tokens):])
+            if hasattr(self.tokenizer, 'decode') and callable(getattr(self.tokenizer, 'decode')):
+                # Для transformers токенизатора
+                response = self.tokenizer.decode(generated_ids[0], skip_special_tokens=True)
+            else:
+                # Для кастомного токенизатора
+                response = self.tokenizer.decode(generated_ids[0].tolist())
+                
             return response.strip()
             
         except Exception as e:
@@ -1040,8 +1134,17 @@ class SinChatBot:
             # Информация о токенизаторе
             report.append("2. ИНФОРМАЦИЯ О ТОКЕНИЗАТОРЕ")
             report.append("-" * 30)
-            report.append(f"Размер словаря токенов: {len(self.tokenizer.word_to_idx)}")
-            report.append(f"Специальные токены: {self.tokenizer.special_tokens}")
+            if TRANSFORMERS_AVAILABLE and isinstance(self.tokenizer, AutoTokenizer):
+                report.append("Тип токенизатора: Оригинальный DeepSeek (AutoTokenizer)")
+                try:
+                    vocab_size = len(self.tokenizer.get_vocab())
+                    report.append(f"Размер словаря токенов: {vocab_size}")
+                except:
+                    report.append("Размер словаря токенов: Не удалось определить")
+            else:
+                report.append("Тип токенизатора: Кастомный (SinTokenizer)")
+                report.append(f"Размер словаря токенов: {len(getattr(self.tokenizer, 'word_to_idx', {}))}")
+                report.append(f"Специальные токены: {getattr(self.tokenizer, 'special_tokens', {})}")
             report.append("")
             
             # Метрики обучения
@@ -1133,6 +1236,10 @@ def main():
     print("3. /chat - режим чата")
     print("4. /report - отчет о состоянии модели")
     print("5. /exit - выход")
+    
+    if not TRANSFORMERS_AVAILABLE:
+        print("\nВНИМАНИЕ: Библиотека 'transformers' не найдена. Будет использован кастомный токенизатор.")
+        print("Для лучшего качества рекомендуется установить её: pip install transformers")
     
     while True:
         try:
