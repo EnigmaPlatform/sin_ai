@@ -29,14 +29,13 @@ import ast
 try:
     from transformers import AutoTokenizer
     TRANSFORMERS_AVAILABLE = True
-    logger.info("Библиотека transformers доступна.")
 except ImportError:
     TRANSFORMERS_AVAILABLE = False
-    logger.warning("Библиотека transformers не найдена. Будет использован кастомный токенизатор.")
     # Заглушка для AutoTokenizer, если transformers не установлены
     class AutoTokenizer:
         pass
 
+# Настройка логгирования
 # Установка рабочей директории
 PROJECT_DIR = r"C:\Users\User\Downloads\SinChatBot"
 MODEL_DIR = os.path.join(PROJECT_DIR, "sin_model")
@@ -47,7 +46,6 @@ DEEPSEEK_VOCAB_FILE = os.path.join(MODEL_DIR, "tokenizer.json")
 os.makedirs(PROJECT_DIR, exist_ok=True)
 os.makedirs(MODEL_DIR, exist_ok=True)
 
-# Настройка логгирования
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(levelname)s - %(message)s',
@@ -57,6 +55,11 @@ logging.basicConfig(
     ]
 )
 logger = logging.getLogger(__name__)
+
+if TRANSFORMERS_AVAILABLE:
+    logger.info("Библиотека transformers доступна.")
+else:
+    logger.warning("Библиотека transformers не найдена. Будет использован кастомный токенизатор.")
 
 # --- Кастомный токенизатор (резервный вариант) ---
 class SinTokenizer:
@@ -312,17 +315,30 @@ class SinDataset(Dataset):
         
         logger.info("Подготовка датасета...")
         for text in texts:
-            # Используем универсальный метод encode
-            encoding = self.tokenizer(
-                text,
-                add_special_tokens=True,
-                max_length=self.max_length,
-                padding='max_length',
-                truncation=True,
-                return_tensors='pt'
-            )
-            
-            input_ids = encoding['input_ids'].squeeze(0) # [seq_len]
+            # Проверяем, является ли токенизатор токенизатором из transformers
+            if TRANSFORMERS_AVAILABLE and isinstance(self.tokenizer, AutoTokenizer):
+                # Используем универсальный метод encode для transformers
+                encoding = self.tokenizer(
+                    text,
+                    add_special_tokens=True,
+                    max_length=self.max_length,
+                    padding='max_length',
+                    truncation=True,
+                    return_tensors='pt'
+                )
+                
+                input_ids = encoding['input_ids'].squeeze(0) # [seq_len]
+            else:
+                # Для кастомного токенизатора
+                tokens = self.tokenizer.encode(text)
+                # Паддинг/обрезка вручную
+                if len(tokens) < self.max_length:
+                    # Определяем pad_token_id
+                    pad_token_id = self.tokenizer.special_tokens.get('<｜▁pad▁｜>', 2) if hasattr(self.tokenizer, 'special_tokens') else 0
+                    tokens.extend([pad_token_id] * (self.max_length - len(tokens)))
+                else:
+                    tokens = tokens[:self.max_length]
+                input_ids = torch.tensor(tokens, dtype=torch.long)
             
             # Создание пар (вход, цель) для обучения
             # Для каждого токена i, вход - это токены от 0 до i-1, цель - токен i
@@ -333,7 +349,11 @@ class SinDataset(Dataset):
                 # Паддинг входной последовательности до max_length
                 if len(input_seq) < max_length:
                     # Определяем pad_token_id
-                    pad_token_id = self.tokenizer.pad_token_id if hasattr(self.tokenizer, 'pad_token_id') and self.tokenizer.pad_token_id is not None else 0
+                    if TRANSFORMERS_AVAILABLE and isinstance(self.tokenizer, AutoTokenizer):
+                        pad_token_id = self.tokenizer.pad_token_id if hasattr(self.tokenizer, 'pad_token_id') and self.tokenizer.pad_token_id is not None else 0
+                    else:
+                        # Для кастомного токенизатора
+                        pad_token_id = getattr(self.tokenizer, 'special_tokens', {}).get('<｜▁pad▁｜>', 2)
                     input_seq = torch.cat([input_seq, torch.full((max_length - len(input_seq),), pad_token_id, dtype=torch.long)])
                 else:
                     input_seq = input_seq[:max_length]
@@ -1035,7 +1055,8 @@ class SinChatBot:
             self.model.to(device)
             
             # Кодирование входного текста
-            if hasattr(self.tokenizer, 'encode') and callable(getattr(self.tokenizer, 'encode')):
+            # Проверяем, является ли токенизатор токенизатором из transformers (который callable)
+            if TRANSFORMERS_AVAILABLE and isinstance(self.tokenizer, AutoTokenizer):
                 # Для transformers токенизатора
                 encoding = self.tokenizer(
                     prompt,
@@ -1044,7 +1065,7 @@ class SinChatBot:
                 )
                 input_ids = encoding['input_ids'].to(device)
             else:
-                # Для кастомного токенизатора
+                # Для кастомного токенизатора или других
                 input_tokens = self.tokenizer.encode(prompt)
                 input_ids = torch.tensor([input_tokens], dtype=torch.long).to(device)
             
@@ -1089,7 +1110,7 @@ class SinChatBot:
                     generated_ids = torch.cat([generated_ids, torch.tensor([[next_token]], device=device)], dim=1)
                     
             # Декодирование
-            if hasattr(self.tokenizer, 'decode') and callable(getattr(self.tokenizer, 'decode')):
+            if TRANSFORMERS_AVAILABLE and isinstance(self.tokenizer, AutoTokenizer):
                 # Для transformers токенизатора
                 response = self.tokenizer.decode(generated_ids[0], skip_special_tokens=True)
             else:
