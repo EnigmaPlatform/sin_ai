@@ -37,7 +37,7 @@ except ImportError:
 
 # Настройка логгирования
 # Установка рабочей директории
-PROJECT_DIR = r"C:\Users\User\Downloads\SinChatBot"
+PROJECT_DIR = r"C:\Users\alex\Downloads\SinChatBot"
 MODEL_DIR = os.path.join(PROJECT_DIR, "sin_model")
 LOG_FILE = os.path.join(PROJECT_DIR, "sin_chatbot.log")
 DEEPSEEK_VOCAB_FILE = os.path.join(MODEL_DIR, "tokenizer.json")
