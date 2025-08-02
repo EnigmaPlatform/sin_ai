@@ -840,8 +840,10 @@ class SinChatBot:
         return math.exp(loss) if loss < 100 else float('inf')
         
     def train_on_data(self, sources: List[Dict[str, str]], epochs: int = 5, 
-                     batch_size: int = 32, learning_rate: float = 0.001):
-        """Обучение на данных"""
+                     batch_size: int = 32, learning_rate: float = 0.001,
+                     embedding_dim: int = 512, hidden_dim: int = 1024, 
+                     num_layers: int = 4, dropout: float = 0.1, max_length: int = 512):
+        """Обучение на данных с возможностью настройки всех параметров"""
         try:
             self.is_training = True
             logger.info("=" * 60)
@@ -869,16 +871,28 @@ class SinChatBot:
             else:
                 vocab_size = len(getattr(self.tokenizer, 'word_to_idx', {}))
                 
-            # Создание или обновление модели
-            if self.model is None or self.model.vocab_size != vocab_size:
-                logger.info(f"Создание новой модели с vocab_size={vocab_size}")
-                self.model = SinModel(vocab_size=vocab_size)
-                logger.info("Создана новая модель с обновленным словарем")
+            # Создание или обновление модели с новыми параметрами
+            if (self.model is None or 
+                self.model.vocab_size != vocab_size or
+                self.model.embedding_dim != embedding_dim or
+                self.model.hidden_dim != hidden_dim or
+                self.model.num_layers != num_layers):
+                logger.info(f"Создание новой модели с параметрами: vocab_size={vocab_size}, "
+                           f"embedding_dim={embedding_dim}, hidden_dim={hidden_dim}, "
+                           f"num_layers={num_layers}")
+                self.model = SinModel(
+                    vocab_size=vocab_size,
+                    embedding_dim=embedding_dim,
+                    hidden_dim=hidden_dim,
+                    num_layers=num_layers,
+                    dropout=dropout
+                )
+                logger.info("Создана новая модель с обновленными параметрами")
             else:
                 logger.info("Используется существующая модель")
                 
             # Создание датасета
-            dataset = SinDataset(texts, self.tokenizer)
+            dataset = SinDataset(texts, self.tokenizer, max_length=max_length)
             dataloader = DataLoader(dataset, batch_size=batch_size, shuffle=True)
             
             # Определяем pad_token_id для функции потерь
@@ -902,6 +916,11 @@ class SinChatBot:
             logger.info(f"  Батчей: {len(dataloader)}")
             logger.info(f"  Размер батча: {batch_size}")
             logger.info(f"  Learning rate: {learning_rate}")
+            logger.info(f"  Embedding dim: {embedding_dim}")
+            logger.info(f"  Hidden dim: {hidden_dim}")
+            logger.info(f"  Num layers: {num_layers}")
+            logger.info(f"  Dropout: {dropout}")
+            logger.info(f"  Max length: {max_length}")
             logger.info(f"  Устройство: {device}")
             logger.info("=" * 60)
             
@@ -969,7 +988,7 @@ class SinChatBot:
                     except RuntimeError as re:
                         if "DefaultCPUAllocator: not enough memory" in str(re):
                             logger.error(f"Ошибка нехватки памяти в батче {batch_idx}: {re}")
-                            logger.error("Попробуйте уменьшить размер батча при следующем запуске обучения.")
+                            logger.error("Попробуйте уменьшить размер батча, embedding_dim, hidden_dim или max_length.")
                         else:
                             logger.error(f"RuntimeError в батче {batch_idx}: {re}")
                         logger.error(traceback.format_exc())
@@ -1325,10 +1344,49 @@ def main():
                     print("Неверный выбор")
                     continue
                     
-                epochs = int(input("Количество эпох (по умолчанию 5): ") or "5")
+                # Ввод всех гиперпараметров
+                print("\n--- Настройка гиперпараметров ---")
+                epochs_input = input("Количество эпох (по умолчанию 5): ").strip()
+                epochs = int(epochs_input) if epochs_input.isdigit() else 5
+                
                 batch_size_input = input("Размер батча (по умолчанию 32): ").strip()
                 batch_size = int(batch_size_input) if batch_size_input.isdigit() else 32
-                bot.train_on_data(sources, epochs=epochs, batch_size=batch_size)
+                
+                learning_rate_input = input("Learning rate (по умолчанию 0.001): ").strip()
+                try:
+                    learning_rate = float(learning_rate_input)
+                except ValueError:
+                    learning_rate = 0.001
+                    
+                embedding_dim_input = input("Embedding dimension (по умолчанию 512): ").strip()
+                embedding_dim = int(embedding_dim_input) if embedding_dim_input.isdigit() else 512
+                
+                hidden_dim_input = input("Hidden dimension (по умолчанию 1024): ").strip()
+                hidden_dim = int(hidden_dim_input) if hidden_dim_input.isdigit() else 1024
+                
+                num_layers_input = input("Количество LSTM слоев (по умолчанию 4): ").strip()
+                num_layers = int(num_layers_input) if num_layers_input.isdigit() else 4
+                
+                dropout_input = input("Dropout (по умолчанию 0.1): ").strip()
+                try:
+                    dropout = float(dropout_input)
+                except ValueError:
+                    dropout = 0.1
+                    
+                max_length_input = input("Максимальная длина последовательности (по умолчанию 512): ").strip()
+                max_length = int(max_length_input) if max_length_input.isdigit() else 512
+                
+                bot.train_on_data(
+                    sources, 
+                    epochs=epochs, 
+                    batch_size=batch_size, 
+                    learning_rate=learning_rate,
+                    embedding_dim=embedding_dim,
+                    hidden_dim=hidden_dim,
+                    num_layers=num_layers,
+                    dropout=dropout,
+                    max_length=max_length
+                )
                 
             elif command == '/dialogue':
                 user_input = input("Ваше сообщение: ").strip()
