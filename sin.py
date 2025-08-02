@@ -966,6 +966,15 @@ class SinChatBot:
                                 grad_norm = weights_info.get('total_gradient_norm', 0)
                                 logger.debug(f"    Норма градиентов: {grad_norm:.6f}")
                                 
+                    except RuntimeError as re:
+                        if "DefaultCPUAllocator: not enough memory" in str(re):
+                            logger.error(f"Ошибка нехватки памяти в батче {batch_idx}: {re}")
+                            logger.error("Попробуйте уменьшить размер батча при следующем запуске обучения.")
+                        else:
+                            logger.error(f"RuntimeError в батче {batch_idx}: {re}")
+                        logger.error(traceback.format_exc())
+                        # Продолжаем обучение, пропуская этот батч
+                        continue
                     except Exception as e:
                         logger.error(f"Ошибка в батче {batch_idx}: {e}")
                         logger.error(traceback.format_exc())
@@ -1317,7 +1326,9 @@ def main():
                     continue
                     
                 epochs = int(input("Количество эпох (по умолчанию 5): ") or "5")
-                bot.train_on_data(sources, epochs=epochs)
+                batch_size_input = input("Размер батча (по умолчанию 32): ").strip()
+                batch_size = int(batch_size_input) if batch_size_input.isdigit() else 32
+                bot.train_on_data(sources, epochs=epochs, batch_size=batch_size)
                 
             elif command == '/dialogue':
                 user_input = input("Ваше сообщение: ").strip()
