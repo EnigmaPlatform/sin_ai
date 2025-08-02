@@ -525,6 +525,7 @@ class SinChatBot:
         self.model = None
         self.metrics = TrainingMetrics()
         self.is_training = False
+        self.use_russian_tokenizer = True  # Флаг для использования русского токенизатора
         
         # Проверка наличия необходимых файлов и папок
         self._check_files_and_dirs()
@@ -570,8 +571,22 @@ class SinChatBot:
             # Загрузка токенизатора
             tokenizer_path = os.path.join(self.model_path, "tokenizer.pkl")
             
+            # Если хотим использовать русский токенизатор и transformers доступен
+            if self.use_russian_tokenizer and TRANSFORMERS_AVAILABLE:
+                try:
+                    self.tokenizer = AutoTokenizer.from_pretrained("DeepPavlov/rubert-base-cased")
+                    logger.info("Русский токенизатор DeepPavlov/rubert-base-cased загружен через transformers")
+                except Exception as e:
+                    logger.warning(f"Не удалось загрузить русский токенизатор: {e}")
+                    logger.warning("Используется кастомный токенизатор как резервный вариант")
+                    self.tokenizer = SinTokenizer(self.vocab_size)
+                    if os.path.exists(DEEPSEEK_VOCAB_FILE):
+                        if self.tokenizer.load_deepseek_vocab(DEEPSEEK_VOCAB_FILE):
+                            logger.info("DeepSeek словарь успешно загружен в кастомный токенизатор")
+                        else:
+                            logger.warning("Не удалось загрузить DeepSeek словарь")
             # Попробуем загрузить сохраненный токенизатор
-            if os.path.exists(tokenizer_path) and not TRANSFORMERS_AVAILABLE:
+            elif os.path.exists(tokenizer_path) and not TRANSFORMERS_AVAILABLE:
                 with open(tokenizer_path, 'rb') as f:
                     self.tokenizer = pickle.load(f)
                 logger.info("Кастомный токенизатор загружен")
@@ -628,7 +643,12 @@ class SinChatBot:
             logger.error(f"Ошибка при загрузке модели: {e}")
             logger.error(traceback.format_exc())
             # Создание новых объектов в случае ошибки
-            if TRANSFORMERS_AVAILABLE and os.path.exists(DEEPSEEK_VOCAB_FILE):
+            if self.use_russian_tokenizer and TRANSFORMERS_AVAILABLE:
+                try:
+                    self.tokenizer = AutoTokenizer.from_pretrained("DeepPavlov/rubert-base-cased")
+                except:
+                    self.tokenizer = SinTokenizer(self.vocab_size)
+            elif TRANSFORMERS_AVAILABLE and os.path.exists(DEEPSEEK_VOCAB_FILE):
                 try:
                     self.tokenizer = AutoTokenizer.from_pretrained(self.model_path, trust_remote_code=True)
                 except:
@@ -1156,7 +1176,7 @@ class SinChatBot:
             report.append("2. ИНФОРМАЦИЯ О ТОКЕНИЗАТОРЕ")
             report.append("-" * 30)
             if TRANSFORMERS_AVAILABLE and isinstance(self.tokenizer, AutoTokenizer):
-                report.append("Тип токенизатора: Оригинальный DeepSeek (AutoTokenizer)")
+                report.append("Тип токенизатора: Русский (DeepPavlov/rubert-base-cased)")
                 try:
                     vocab_size = len(self.tokenizer.get_vocab())
                     report.append(f"Размер словаря токенов: {vocab_size}")
