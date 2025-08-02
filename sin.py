@@ -855,9 +855,11 @@ class SinChatBot:
                 return
                 
             # Для кастомного токенизатора обновляем словарь
-            if not TRANSFORMERS_AVAILABLE or not isinstance(self.tokenizer, AutoTokenizer):
+            # Используем isinstance для проверки типа
+            if isinstance(self.tokenizer, SinTokenizer): 
                 logger.info("Обновление словаря кастомного токенизатора...")
                 self.tokenizer.build_vocab(texts)
+            # Для токенизаторов transformers ничего не делаем, их словарь фиксирован
             
             # Определяем размер словаря
             if hasattr(self.tokenizer, 'vocab_size'):
@@ -1005,7 +1007,8 @@ class SinChatBot:
             dialogue_text = f"Пользователь: {user_input}\nБот: {bot_response}"
             
             # Для кастомного токенизатора обновляем словарь
-            if not TRANSFORMERS_AVAILABLE or not isinstance(self.tokenizer, AutoTokenizer):
+            # Используем isinstance для проверки типа
+            if isinstance(self.tokenizer, SinTokenizer):
                 self.tokenizer.build_vocab([dialogue_text])
             
             # Определяем размер словаря
