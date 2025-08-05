@@ -1,60 +1,57 @@
+import numpy as np
+import matplotlib.pyplot as plt
+from sklearn.metrics.pairwise import cosine_similarity
+from sklearn.cluster import DBSCAN
+import random
+import time
+import threading
+import os
+import logging
+import pickle
+from collections import defaultdict, deque
+from gensim.models import KeyedVectors
+from fastapi import FastAPI, HTTPException, Depends
+from fastapi.responses import JSONResponse
+import uvicorn
+from telegram import Update
+from telegram.ext import Application, CommandHandler, MessageHandler, ContextTypes, filters
+from typing import List, Dict, Optional
+from datetime import datetime
+from dataclasses import dataclass, field
+import hashlib
 import asyncio
 import aiofiles
 import aiohttp
-import numpy as np
-import hashlib
-import logging
-import pickle
-import os
-import time
 import psutil
-from collections import defaultdict, deque
-from dataclasses import dataclass, field
-from datetime import datetime
-from fastapi import FastAPI, HTTPException, Depends
-from fastapi.responses import JSONResponse
-from pydantic import BaseModel, Field, field_validator, ValidationError
-from typing import List, Dict, Optional
-from gensim.models import KeyedVectors
-from telegram import Update
-from telegram.ext import Application, CommandHandler, MessageHandler, ContextTypes, filters
+from pydantic import BaseModel, Field, field_validator
 from contextlib import asynccontextmanager
-import threading
 import streamlit as st
-import matplotlib.pyplot as plt
-from sklearn.cluster import DBSCAN
-from sklearn.metrics.pairwise import cosine_similarity
+from vispy import app as vispy_app, scene, gloo
+from vispy.scene import visuals as scene_visuals
+from vispy.color import Color
 
-# === КОНФИГУРАЦИЯ ===
-class Config:
-    EMBEDDING_PATH = r"C:\Users\alex\Downloads\cc.ru.300.vec"
-    EMBEDDING_URL = "https://dl.fbaipublicfiles.com/fasttext/vectors-crawl/cc.ru.300.vec.gz"
-    PERSIST_FILE = "sin_state.pkl"
-    LOG_FILE = "sin.log"
-    TELEGRAM_TOKEN = "7990254673:AAE-7UGlXLWnQ-Dn5D2uyrz0RYDJnBZZKM8"
-    MAX_NODES = 5000
-    SLEEP_CYCLE = 15
-    FORGET_THRESHOLD = 0.1
-    ATTENTION_DECAY = 0.93
-    DISSONANCE_THRESHOLD = 0.4
-    SAVE_INTERVAL = 300
-    MAX_CONTEXT_LENGTH = 10
-    MAX_HISTORY_LENGTH = 100
-    MAX_TEXT_LENGTH = 500
-    MAX_CONCURRENT_REQUESTS = 10
-    MAX_MEMORY_PERCENT = 80
-    CACHE_SIZE = 1000
-    RL_REWARD_CORRECT = 2.0
-    RL_REWARD_QUESTION = 1.0
-    RL_PENALTY_WRONG = -1.0
-
+# === НАСТРОЙКИ ===
+EMBEDDING_FILE = "cc.ru.300.vec"
+MAX_NODES = 5000
+SLEEP_CYCLE = 15
+FORGET_THRESHOLD = 0.1
+ATTENTION_DECAY = 0.93
+GENERATION_TEMP = 0.7
+DISSONANCE_THRESHOLD = 0.4
+SAVE_INTERVAL = 300
+MEMORY_HISTORY_LIMIT = 1000
+MAX_CONTEXT_LENGTH = 10
+PERSIST_FILE = "sin_state.pkl"
+LOG_FILE = "sin.log"
+TELEGRAM_TOKEN = "7990254673:AAE-7UGlXLWnQ-Dn5D2uyrz0RYDJnBZZKM8"
+VISPY_SIZE = (1600, 900)
 
 # === ЛОГГИРОВАНИЕ ===
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(name)s - %(levelname)s - %(funcName)s:%(lineno)d - %(message)s',
     handlers=[
-        logging.FileHandler(Config.LOG_FILE, encoding='utf-8'),
+        logging.FileHandler(LOG_FILE, encoding='utf-8'),
         logging.StreamHandler()
     ]
 )
@@ -63,7 +60,7 @@ logger = logging.getLogger("SIN")
 
 # === Pydantic МОДЕЛИ (V2) ===
 class LearnRequest(BaseModel):
-    text: str = Field(..., max_length=Config.MAX_TEXT_LENGTH)
+    text: str = Field(..., max_length=500)
 
     @field_validator('text')
     def text_not_empty(cls, v):
@@ -73,72 +70,15 @@ class LearnRequest(BaseModel):
 
 
 class RespondRequest(BaseModel):
-    text: str = Field(..., max_length=Config.MAX_TEXT_LENGTH)
+    text: str = Field(..., max_length=500)
 
 
-# === АСИНХРОННЫЙ ХЭШ ===
-async def async_get_md5(filepath: str) -> Optional[str]:
-    hash_md5 = hashlib.md5()
-    try:
-        async with aiofiles.open(filepath, "rb") as f:
-            while chunk := await f.read(8192):
-                hash_md5.update(chunk)
-        return hash_md5.hexdigest()
-    except Exception as e:
-        logger.error(f"Ошибка при вычислении MD5: {e}")
-        return None
+class GenerateRequest(BaseModel):
+    seed: str
+    length: int = Field(5, ge=1, le=20)
 
 
-# === АСИНХРОННАЯ ЗАГРУЗКА ===
-async def async_download_embeddings(session: aiohttp.ClientSession, url: str, path: str) -> bool:
-    gz_path = path + ".gz"
-    logger.info(f"Начинаю загрузку: {url}")
-    try:
-        async with session.get(url) as response:
-            response.raise_for_status()
-            total_size = int(response.headers.get('content-length', 0))
-            downloaded = 0
-
-            async with aiofiles.open(gz_path, 'wb') as f:
-                async for chunk in response.content.iter_chunked(8192):
-                    await f.write(chunk)
-                    downloaded += len(chunk)
-                    if total_size > 0:
-                        percent = (downloaded / total_size) * 100
-                        if downloaded % max(total_size // 10, 1) == 0:
-                            logger.info(f"Загрузка: {percent:.1f}%")
-
-        import gzip
-        with gzip.open(gz_path, 'rb') as f_in:
-            with open(path, 'wb') as f_out:
-                f_out.write(f_in.read())
-        os.remove(gz_path)
-        logger.info(f"Файл сохранён: {path}")
-        return True
-    except Exception as e:
-        logger.error(f"Ошибка при загрузке: {str(e)}")
-        return False
-
-
-# === КЭШ ВЕКТОРОВ ===
-class VectorCache:
-    def __init__(self, maxsize=Config.CACHE_SIZE):
-        self.cache = {}
-        self.maxsize = maxsize
-        self.lock = asyncio.Lock()
-
-    async def get(self, word: str) -> Optional[np.ndarray]:
-        async with self.lock:
-            return self.cache.get(word)
-
-    async def set(self, word: str, vector: np.ndarray):
-        async with self.lock:
-            if len(self.cache) >= self.maxsize:
-                del self.cache[next(iter(self.cache))]
-            self.cache[word] = vector.copy()
-
-
-# === ЯДРО СИСТЕМЫ ===
+# === СТРУКТУРЫ ДАННЫХ ===
 @dataclass
 class MemoryItem:
     vector: np.ndarray
@@ -147,57 +87,61 @@ class MemoryItem:
     timestamp: float
     access_count: int = 0
     phase_cluster_id: Optional[int] = None
-    reward_score: float = 0.0  # Для RL
+    reward_score: float = 0.0
 
 
 @dataclass
 class DialogContext:
-    last_messages: deque = field(default_factory=lambda: deque(maxlen=Config.MAX_CONTEXT_LENGTH))
+    last_messages: deque = field(default_factory=lambda: deque(maxlen=MAX_CONTEXT_LENGTH))
     current_theme: Optional[str] = None
     thematic_attention: float = 0.0
 
 
+# === RuEmbedder (обновлённый) ===
 class RuEmbedder:
-    def __init__(self, filepath: str):
-        self.filepath = filepath
-        self.model = None
-        self.dim = 300
-        self.cache = VectorCache()
+    def __init__(self, filepath=EMBEDDING_FILE):
+        self.model = self._load_embeddings(filepath)
+        self.dim = self.model.vector_size
+        logger.info(f"Загружено {len(self.model.key_to_index)} слов (dim={self.dim})")
 
-    async def _load_embeddings(self) -> bool:
-        try:
-            logger.info("🌀 Загрузка эмбеддингов...")
-            self.model = KeyedVectors.load_word2vec_format(self.filepath, binary=False, limit=300000)
-            logger.info(f"✅ Загружено {len(self.model.key_to_index)} слов (dim={self.dim})")
-            return True
-        except Exception as e:
-            logger.critical(f"Не удалось загрузить эмбеддинги: {str(e)}")
-            return False
+    def _load_embeddings(self, filepath):
+        if not os.path.exists(filepath):
+            raise FileNotFoundError(f"Файл эмбеддингов не найден: {filepath}")
+        logger.info("🌀 Загрузка эмбеддингов...")
+        return KeyedVectors.load_word2vec_format(filepath, binary=False, limit=300000)
 
-    async def get_vector(self, word: str) -> np.ndarray:
-        cached = await self.cache.get(word)
-        if cached is not None:
-            return cached
-
+    def get_vector(self, word: str) -> np.ndarray:
         word_clean = word.lower().strip(".,!?\"'()[]{}:;—-")
         if not word_clean:
             return np.zeros(self.dim)
-
         if word_clean in self.model:
-            vec = self.model[word_clean].copy()
-        else:
+            return self.model[word_clean].copy()
+        try:
+            similar = self.model.most_similar(positive=[word_clean], topn=1)
+            logger.debug(f"Слово '{word}' заменено на '{similar[0][0]}'")
+            return self.model[similar[0][0]].copy()
+        except:
+            logger.debug(f"Неизвестное слово: '{word}'")
+            return np.random.normal(0, 0.1, self.dim)
+
+    def generate_sequence(self, seed_word: str, length=5, diversity=1.0) -> List[str]:
+        sequence = [seed_word]
+        current_word = seed_word
+        for _ in range(length - 1):
             try:
-                similar = self.model.most_similar(positive=[word_clean], topn=1)
-                logger.debug(f"Слово '{word}' заменено на '{similar[0][0]}'")
-                vec = self.model[similar[0][0]].copy()
+                similar = self.model.most_similar(positive=[current_word], topn=10)
+                words, scores = zip(*similar)
+                probs = np.array(scores) ** (1 / diversity)
+                probs /= probs.sum()
+                next_word = np.random.choice(words, p=probs)
+                sequence.append(next_word)
+                current_word = next_word
             except:
-                logger.debug(f"Неизвестное слово: '{word}'")
-                vec = np.random.normal(0, 0.1, self.dim)
-
-        await self.cache.set(word, vec)
-        return vec
+                break
+        return sequence
 
 
+# === Resonator с фазой и вниманием ===
 class Resonator:
     __slots__ = ['id', 'freq', 'phase', 'amplitude', 'damping', 'connections',
                  'pattern', 'level', 'last_activation', 'attention', 'phase_history']
@@ -226,14 +170,18 @@ class Resonator:
             self.phase += self.freq * dt
             self.phase %= (2 * np.pi)
             self.amplitude *= (1 - self.damping * dt)
-            self.attention *= Config.ATTENTION_DECAY
+            self.attention *= ATTENTION_DECAY
             self.phase_history.append(self.phase)
         else:
             self.amplitude = 0.0
 
+    def update_connection(self, target_id: int, delta: float):
+        self.connections[target_id] = np.clip(self.connections[target_id] + delta, 0.1, 1.0)
 
+
+# === SIN v10.0 — Финальная версия ===
 class Sin:
-    VERSION = "9.0"
+    VERSION = "10.0"
     _instance = None
     _lock = asyncio.Lock()
 
@@ -242,15 +190,15 @@ class Sin:
             cls._instance = super().__new__(cls)
         return cls._instance
 
-    def __init__(self, persist_file: str = Config.PERSIST_FILE):
+    def __init__(self, persist_file=PERSIST_FILE):
         if hasattr(self, 'initialized'):
             return
         self.persist_file = persist_file
-        self.embedder = None
+        self.embedder = RuEmbedder(EMBEDDING_FILE)
         self.nodes = {}
         self.node_counter = 0
         self.memory = []
-        self.activation_history = deque(maxlen=Config.MAX_HISTORY_LENGTH)
+        self.activation_history = deque(maxlen=100)
         self.t = 0
         self.sleeping = False
         self.hierarchy_levels = 3
@@ -266,105 +214,66 @@ class Sin:
         self.save_lock = asyncio.Lock()
         self.learn_lock = asyncio.Lock()
         self.cluster_labels = []
-        self.rl_policy = {"ask_question": 0.7, "generate": 0.5}  # Инициализация политики
-        self.initialized = False
+        self.rl_policy = {"ask_question": 0.7, "generate": 0.5}
+        self._init_system()
+        logger.info(f"Система SIN v{self.VERSION} инициализирована")
 
-    async def _init_system(self):
-        async with self._lock:
-            if self.initialized:
-                return
-            logger.info("Инициализация системы...")
-            await self._check_and_download_embeddings()
-            self.embedder = RuEmbedder(Config.EMBEDDING_PATH)
-            if not await self.embedder._load_embeddings():
-                raise RuntimeError("Не удалось загрузить эмбеддинги")
-            if os.path.exists(self.persist_file):
-                await self._load_state()
-            else:
-                logger.info("Создана новая модель")
-            asyncio.create_task(self._background_save())
-            asyncio.create_task(self._monitor_resources())
-            self.initialized = True
-            logger.info(f"SIN v{self.VERSION} инициализирован")
+    def _init_system(self):
+        if os.path.exists(self.persist_file):
+            self._load_state()
+        else:
+            logger.info("Создана новая модель")
 
-    async def _check_and_download_embeddings(self):
-        if not os.path.exists(Config.EMBEDDING_PATH):
-            logger.warning(f"Файл не найден: {Config.EMBEDDING_PATH}")
-            print("Файл эмбеддингов отсутствует. Начать загрузку? (y/n): ", end="")
-            if input().lower() == 'y':
-                async with aiohttp.ClientSession() as session:
-                    if await async_download_embeddings(session, Config.EMBEDDING_URL, Config.EMBEDDING_PATH):
-                        logger.info("Загрузка завершена.")
-                    else:
-                        raise RuntimeError("Не удалось загрузить эмбеддинги.")
-            else:
-                raise RuntimeError("Загрузка отменена.")
-
-    async def _load_state(self):
+    def _load_state(self):
         try:
-            async with aiofiles.open(self.persist_file, 'rb') as f:
-                data = await f.read()
-                state = pickle.loads(data)
-                for key, value in state.items():
-                    if hasattr(self, key):
-                        setattr(self, key, value)
+            with open(self.persist_file, 'rb') as f:
+                data = pickle.load(f)
+                self.__dict__.update(data)
             logger.info(f"Состояние загружено из {self.persist_file}")
         except Exception as e:
-            logger.error(f"Ошибка загрузки состояния: {str(e)}")
+            logger.error(f"Ошибка загрузки: {str(e)}")
 
-    async def _save_state(self):
+    def save_state(self):
         try:
-            async with self.save_lock:
-                async with aiofiles.open(self.persist_file, 'wb') as f:
-                    data = {
-                        'nodes': self.nodes,
-                        'node_counter': self.node_counter,
-                        'memory': self.memory,
-                        't': self.t,
-                        'word_frequency': self.word_frequency,
-                        'level_nodes': self.level_nodes,
-                        'phase_clusters': self.phase_clusters,
-                        'cluster_labels': self.cluster_labels,
-                        'rl_policy': self.rl_policy
-                    }
-                    await f.write(pickle.dumps(data))
+            with open(self.persist_file, 'wb') as f:
+                pickle.dump({
+                    'nodes': self.nodes,
+                    'node_counter': self.node_counter,
+                    'memory': self.memory,
+                    't': self.t,
+                    'word_frequency': self.word_frequency,
+                    'level_nodes': self.level_nodes,
+                    'phase_clusters': self.phase_clusters,
+                    'cluster_labels': self.cluster_labels,
+                    'rl_policy': self.rl_policy
+                }, f)
             logger.info(f"Состояние сохранено в {self.persist_file}")
         except Exception as e:
             logger.error(f"Ошибка сохранения: {str(e)}")
 
-    async def _background_save(self):
-        while True:
-            await asyncio.sleep(Config.SAVE_INTERVAL)
-            if self.initialized:
-                await self._save_state()
+    def _auto_save(self):
+        if time.time() - self.last_save_time > SAVE_INTERVAL:
+            self.save_state()
+            self.last_save_time = time.time()
 
-    async def _monitor_resources(self):
-        process = psutil.Process()
-        while True:
-            await asyncio.sleep(10)
-            cpu = psutil.cpu_percent()
-            memory = psutil.virtual_memory().percent
-            self.cognitive_load = memory / 100.0
-            logger.info(f"Мониторинг: CPU={cpu:.1f}%, RAM={memory:.1f}%")
-
-    async def _update_dialog_context(self, text: str):
-        self.dialog_context.last_messages.append(text)
-        if len(self.dialog_context.last_messages) >= 3:
-            recent_text = " ".join(self.dialog_context.last_messages)
-            theme_vector = np.mean([await self.embedder.get_vector(w) for w in await self.tokenize(recent_text)], axis=0)
-            if self.dialog_context.current_theme is None:
-                self.dialog_context.current_theme = hashlib.md5(theme_vector.tobytes()).hexdigest()
-                self.dialog_context.thematic_attention = 0.5
-            else:
-                old_theme_vec = await self.embedder.get_vector(self.dialog_context.current_theme[:10])
-                similarity = cosine_similarity([theme_vector], [old_theme_vec])[0][0]
-                self.dialog_context.thematic_attention = 0.3 * self.dialog_context.thematic_attention + 0.7 * similarity
-
-    async def tokenize(self, text: str) -> List[str]:
+    def tokenize(self, text: str) -> List[str]:
         words = [word.strip(".,!?\"'()[]{}:;—-") for word in text.lower().split() if word.isalpha()]
         for word in words:
             self.word_frequency[word] += 1
         return words
+
+    def _update_dialog_context(self, text: str):
+        self.dialog_context.last_messages.append(text)
+        if len(self.dialog_context.last_messages) >= 3:
+            recent_text = " ".join(self.dialog_context.last_messages)
+            theme_vector = np.mean([self.embedder.get_vector(w) for w in self.tokenize(recent_text)], axis=0)
+            if self.dialog_context.current_theme is None:
+                self.dialog_context.current_theme = hashlib.md5(theme_vector.tobytes()).hexdigest()
+                self.dialog_context.thematic_attention = 0.5
+            else:
+                old_theme_vec = self.embedder.get_vector(self.dialog_context.current_theme[:10])
+                similarity = cosine_similarity([theme_vector], [old_theme_vec])[0][0]
+                self.dialog_context.thematic_attention = 0.3 * self.dialog_context.thematic_attention + 0.7 * similarity
 
     def are_in_phase(self, node1: Resonator, node2: Resonator, tol=0.5) -> bool:
         return abs((node1.phase - node2.phase) % (2 * np.pi)) < tol
@@ -378,106 +287,99 @@ class Sin:
         self.phase_clusters.append(new_cluster)
         return len(self.phase_clusters) - 1
 
-    async def hierarchical_forget(self):
+    def hierarchical_forget(self):
+        if len(self.memory) < 1000:
+            return
         to_remove = []
         for i, mem in enumerate(self.memory):
             if isinstance(mem.text, str):
-                words = await self.tokenize(mem.text)
+                words = self.tokenize(mem.text)
                 freq_score = sum(self.word_frequency.get(w, 0) for w in words) / (len(words) + 1e-8)
                 forget_bias = 0.5 if mem.level == 0 else 0.1
-                if freq_score < Config.FORGET_THRESHOLD * forget_bias:
+                if freq_score < FORGET_THRESHOLD * forget_bias:
                     to_remove.append(i)
         for i in sorted(to_remove, reverse=True):
             self.memory.pop(i)
         if to_remove:
             logger.info(f"🧹 Иерархически забыто {len(to_remove)} элементов")
 
-    def _perform_clustering(self):
-        if len(self.memory) < 5:
-            return
-        vectors = np.array([m.vector for m in self.memory])
-        clustering = DBSCAN(eps=0.5, min_samples=2).fit(vectors)
-        self.cluster_labels = clustering.labels_
-        logger.info(f"Кластеризация: найдено {len(set(clustering.labels_)) - (1 if -1 in clustering.labels_ else 0)} кластеров")
+    def generate_question(self, word: str) -> str:
+        try:
+            similar = self.embedder.model.most_similar(positive=[word], topn=1)
+            return f"Я не до конца понимаю '{word}'. Это похоже на '{similar[0][0]}'? Или чем отличается?"
+        except:
+            return f"Что такое '{word}'? Можешь объяснить проще?"
 
-    async def learn(self, text: str, from_dialog: bool = False, user_feedback: str = "neutral") -> Dict:
-        async with self.learn_lock:
-            try:
-                if self.sleeping:
-                    return {"status": "sleeping", "response": "Zzz... Sin спит."}
-                await self._update_dialog_context(text)
-                words = await self.tokenize(text)
-                if not words:
-                    return {"status": "empty", "response": "Пустой ввод"}
+    def learn(self, text: str, from_dialog: bool = False, user_feedback: str = "neutral") -> Dict:
+        self._update_dialog_context(text)
+        words = self.tokenize(text)
+        if not words:
+            return {"status": "empty", "response": "Пустой ввод"}
 
-                total_vec = np.zeros(self.embedder.dim)
-                active_ids = []
-                for word in words:
-                    vec = await self.embedder.get_vector(word)
-                    total_vec += vec
-                    new_id = self.node_counter
-                    node = Resonator(new_id, level=0)
-                    node.pattern = vec.copy()
-                    self.nodes[new_id] = node
-                    node.excite(1.0)
-                    active_ids.append(new_id)
-                    self.node_counter += 1
+        total_vec = np.zeros(self.embedder.dim)
+        active_ids = []
+        for word in words:
+            vec = self.embedder.get_vector(word)
+            total_vec += vec
+            resonance = self.check_resonance(vec)
+            new_id = self.node_counter
+            node = Resonator(new_id, level=0)
+            node.pattern = vec.copy()
+            self.nodes[new_id] = node
+            node.excite(1.0)
+            active_ids.append(new_id)
+            self.node_counter += 1
 
-                    self.memory.append(MemoryItem(
-                        vector=vec.copy(),
-                        text=word,
-                        level=0,
-                        timestamp=time.time(),
-                        phase_cluster_id=self.assign_to_phase_cluster(node)
-                    ))
-
-                total_vec /= len(words)
+            if resonance < 0.6:
+                cluster_id = self.assign_to_phase_cluster(node)
                 self.memory.append(MemoryItem(
-                    vector=total_vec.copy(),
-                    text=' '.join(words),
-                    level=1,
-                    timestamp=time.time()
+                    vector=vec.copy(),
+                    text=word,
+                    level=0,
+                    timestamp=time.time(),
+                    phase_cluster_id=cluster_id
                 ))
+            if resonance < DISSONANCE_THRESHOLD and not from_dialog:
+                question = self.generate_question(word)
+                self.pending_questions.append(question)
 
-                await self.hierarchical_forget()
-                self._perform_clustering()
-                self.request_count += 1
+        total_vec /= len(words)
+        self.memory.append(MemoryItem(
+            vector=total_vec.copy(),
+            text=' '.join(words),
+            level=1,
+            timestamp=time.time()
+        ))
 
-                # === ОБУЧЕНИЕ С ПОДКРЕПЛЕНИЕМ ===
-                if user_feedback == "good":
-                    self.rl_policy["ask_question"] += 0.1
-                    self.rl_policy["generate"] += 0.1
-                    logger.info("RL: Награда за хороший ответ")
-                elif user_feedback == "bad":
-                    self.rl_policy["ask_question"] -= 0.1
-                    self.rl_policy["generate"] -= 0.1
-                    logger.info("RL: Штраф за плохой ответ")
+        self.hierarchical_forget()
+        self._auto_save()
 
-                return {"status": "learned", "response": f"Sin понял: '{text}'"}
-            except Exception as e:
-                self.error_count += 1
-                logger.error(f"Ошибка в learn: {str(e)}")
-                return {"status": "error", "response": "Ошибка при обучении."}
+        # === RL: обучение с подкреплением ===
+        if user_feedback == "good":
+            self.rl_policy["ask_question"] += 0.1
+            self.rl_policy["generate"] += 0.1
+        elif user_feedback == "bad":
+            self.rl_policy["ask_question"] -= 0.1
+            self.rl_policy["generate"] -= 0.1
 
-    async def respond(self, text: str) -> str:
+        return {"status": "learned", "response": f"Sin понял: '{text}'"}
+
+    def respond(self, text: str) -> str:
         if self.pending_questions and random.random() < self.rl_policy["ask_question"]:
             return f"❓ {self.pending_questions.pop(0)}"
         if self.sleeping:
             return "Zzz... Sin спит."
-        words = await self.tokenize(text)
+        words = self.tokenize(text)
         if not words:
             return "Я слушаю..."
-        query_vec = np.mean([await self.embedder.get_vector(w) for w in words], axis=0)
+        query_vec = np.mean([self.embedder.get_vector(w) for w in words], axis=0)
         best_sim = 0.0
         best_match = None
         for mem in self.memory:
-            try:
-                sim = cosine_similarity([query_vec], [mem.vector])[0][0]
-                if sim > best_sim:
-                    best_sim = sim
-                    best_match = mem.text
-            except:
-                continue
+            sim = cosine_similarity([query_vec], [mem.vector])[0][0]
+            if sim > best_sim:
+                best_sim = sim
+                best_match = mem.text
         if best_sim > 0.6:
             hints = ["Это напоминает мне о", "Я чувствую сходство с"]
             return f"{random.choice(hints)} '{best_match}' (схожесть: {best_sim:.2f})."
@@ -486,18 +388,129 @@ class Sin:
         else:
             return f"Новое. Ещё не резонирует. Расскажи больше."
 
+    def check_resonance(self, vec):
+        sims = []
+        for mem in self.memory:
+            sim = cosine_similarity([vec], [mem.vector])[0][0]
+            if sim > 0.2:
+                sims.append(sim)
+        return max(sims) if sims else 0.0
 
-# === ГЛОБАЛЬНЫЙ ЭКЗЕМПЛЯР ===
-sin = Sin()
+    def generate_response(self, seed: str, length=5) -> str:
+        base_sequence = self.embedder.generate_sequence(seed, length=length)
+        enhanced = []
+        for word in base_sequence:
+            try:
+                mem_sim = max(
+                    (cosine_similarity([self.embedder.get_vector(word)], [m.vector])[0][0], m.text)
+                    for m in self.memory
+                )
+                if mem_sim[0] > 0.6:
+                    enhanced.append(mem_sim[1])
+                else:
+                    enhanced.append(word)
+            except:
+                enhanced.append(word)
+        return " ".join(enhanced[:length])
+
+
+# === 3D ВИЗУАЛИЗАЦИЯ С ВОЛНАМИ РЕЗОНАНСА ===
+class Sin3DVisualizer:
+    def __init__(self, sin_instance):
+        self.sin = sin_instance
+        self.canvas = scene.SceneCanvas(size=VISPY_SIZE, title='Sin — 3D Когнитивный Ландшафт', show=True, bgcolor=Color('#111111'))
+        self.view = self.canvas.central_widget.add_view()
+        self.view.camera = 'turntable'
+        self.view.camera.fov = 60
+        self.view.camera.distance = 15
+
+        self.nodes = scene_visuals.Markers(parent=self.view.scene)
+        self.connections = scene_visuals.Line(parent=self.view.scene)
+        self.clusters = []
+
+        self.node_data = np.zeros(MAX_NODES, dtype=[('position', float, 3), ('color', float, 4), ('size', float, 1)])
+        self.connection_data = np.zeros(5000, dtype=[('start', float, 3), ('end', float, 3), ('color', float, 4)])
+
+        self._init_data()
+        self.timer = vispy_app.Timer('auto', connect=self.update, start=True)
+
+    def _init_data(self):
+        np.random.seed(42)
+        self.node_data['position'] = np.random.randn(MAX_NODES, 3) * 2.0
+        self.node_data['color'] = [0.3, 0.3, 0.3, 0.6]
+        self.node_data['size'] = 5
+
+    def update(self, event):
+        self._sync_with_sin()
+        self._update_nodes()
+        self._update_connections()
+        self._update_clusters()
+
+    def _sync_with_sin(self):
+        memory_items = self.sin.memory[:MAX_NODES]
+        for i, mem in enumerate(memory_items):
+            vec_3d = mem.vector[:3]
+            self.node_data['position'][i] = vec_3d * 2.0
+
+            level = mem.level
+            hue = 0.6 if level == 0 else 0.3 if level == 1 else 0.0
+            self.node_data['color'][i] = [hue, 0.7, 0.8, 0.9]
+
+            size = 5 + 15 * mem.access_count / 10
+            self.node_data['size'][i] = size
+
+    def _update_nodes(self):
+        self.nodes.set_data(pos=self.node_data['position'], face_color=self.node_data['color'], size=self.node_data['size'])
+
+    def _update_connections(self):
+        active_nodes = np.where(self.node_data['size'] > 8)[0][:100]
+        connections = []
+        for i in active_nodes:
+            for j in active_nodes:
+                if i >= j: continue
+                dist = np.linalg.norm(self.node_data['position'][i] - self.node_data['position'][j])
+                if dist < 3.0:
+                    phase_diff = abs((self.sin.nodes.get(i, Resonator(0)).phase - self.sin.nodes.get(j, Resonator(0)).phase) % (2*np.pi))
+                    hue = 0.6 if phase_diff < 0.5 else 0.1
+                    connections.append((self.node_data['position'][i], self.node_data['position'][j], [hue, 0.5, 1.0, 0.3]))
+                if len(connections) >= 5000: break
+            if len(connections) >= 5000: break
+
+        if connections:
+            data = np.array(connections, dtype=self.connection_data.dtype)
+            self.connection_data[:len(data)] = data
+            pos = np.vstack([(d[0], d[1]) for d in data])
+            color = np.vstack([d[2] for d in data])
+            self.connections.set_data(pos=pos, color=color, width=1.0)
+
+    def _update_clusters(self):
+        for cluster in self.clusters:
+            cluster.parent = None
+        self.clusters = []
+
+        active_positions = np.array([d['position'] for d in self.node_data if d['size'] > 10])
+        if len(active_positions) > 5:
+            clustering = DBSCAN(eps=2.5, min_samples=3).fit(active_positions)
+            labels = clustering.labels_
+            for label in set(labels) - {-1}:
+                cluster_points = active_positions[labels == label]
+                center = np.mean(cluster_points, axis=0)
+                radius = np.std(np.linalg.norm(cluster_points - center, axis=1)) + 0.5
+                sphere = scene_visuals.Sphere(radius=radius, method='ico', parent=self.view.scene, color=[0.2, 0.6, 0.8, 0.1])
+                sphere.transform = scene.transforms.STTransform(translate=center)
+                self.clusters.append(sphere)
+
+    def run(self):
+        vispy_app.run()
 
 
 # === ВЕБ-ИНТЕРФЕЙС (Streamlit) ===
-def run_web():
+def run_web(sin_instance):
     st.set_page_config(page_title="Sin — Когнитивный агент", layout="wide")
-    st.title("🧠 Sin v9.0 — Сеть Интуитивного Понимания")
+    st.title("🧠 Sin v10.0 — Сеть Интуитивного Понимания")
 
     if st.button("Перезагрузить Sin"):
-        asyncio.run(sin._init_system())
+        sin_instance._init_system()
 
     col1, col2 = st.columns(2)
 
@@ -506,8 +519,8 @@ def run_web():
         user_input = st.text_input("Ты:")
         if st.button("Отправить"):
             if user_input:
-                asyncio.run(sin.learn(user_input))
-                response = asyncio.run(sin.respond(user_input))
+                result = sin_instance.learn(user_input)
+                response = sin_instance.respond(user_input)
                 st.session_state.chat.append(("Ты", user_input))
                 st.session_state.chat.append(("Sin", response))
         for speaker, text in st.session_state.get('chat', []):
@@ -515,98 +528,90 @@ def run_web():
 
         feedback = st.radio("Оцените ответ:", ["neutral", "good", "bad"])
         if st.button("Отправить оценку"):
-            asyncio.run(sin.learn("feedback", user_feedback=feedback))
+            sin_instance.learn("feedback", user_feedback=feedback)
 
     with col2:
         st.subheader("📊 Визуализация")
-        if sin.activation_history:
-            data = np.array(sin.activation_history)
+        if sin_instance.activation_history:
+            data = np.array(sin_instance.activation_history)
             fig, ax = plt.subplots(figsize=(10, 4))
             ax.imshow(data.T, aspect='auto', cmap='plasma', interpolation='none')
             ax.set_title("Волны резонанса")
             st.pyplot(fig)
 
-        if len(sin.cluster_labels) > 0:
+        if len(sin_instance.cluster_labels) > 0:
             fig, ax = plt.subplots(figsize=(6, 4))
-            ax.scatter(range(len(sin.cluster_labels)), sin.cluster_labels, c=sin.cluster_labels, cmap='tab10')
+            ax.scatter(range(len(sin_instance.cluster_labels)), sin_instance.cluster_labels, c=sin_instance.cluster_labels, cmap='tab10')
             ax.set_title("Кластеризация памяти")
             st.pyplot(fig)
 
 
-# === API и Telegram — как в предыдущей версии ===
+# === API ===
 app = FastAPI(title=f"SIN API v{Sin.VERSION}")
-semaphore = asyncio.Semaphore(Config.MAX_CONCURRENT_REQUESTS)
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    await sin._init_system()
     yield
 
 app.router.lifespan_context = lifespan
 
-@app.post("/learn", dependencies=[Depends(lambda: semaphore.acquire())])
+sin = Sin()
+
+@app.post("/learn")
 async def api_learn(request: LearnRequest):
     try:
-        result = await sin.learn(request.text)
+        result = sin.learn(request.text)
         return JSONResponse(result)
-    except ValidationError as e:
-        raise HTTPException(status_code=422, detail=e.errors())
-    finally:
-        semaphore.release()
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
 
-@app.post("/respond", dependencies=[Depends(lambda: semaphore.acquire())])
+@app.post("/respond")
 async def api_respond(request: RespondRequest):
     try:
-        response = await sin.respond(request.text)
+        response = sin.respond(request.text)
         return {"response": response}
-    except ValidationError as e:
-        raise HTTPException(status_code=422, detail=e.errors())
-    finally:
-        semaphore.release()
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/generate")
+async def api_generate(request: GenerateRequest):
+    try:
+        text = sin.generate_response(request.seed, request.length)
+        return {"generated": text}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 # === TELEGRAM-БОТ ===
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text(f"Привет! Я SIN v{Sin.VERSION}")
+    await update.message.reply_text(f"Привет! Я SIN v{Sin.VERSION}. Давай пообщаемся!")
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_text = update.message.text
-    response = await sin.respond(user_text)
+    response = sin.respond(user_text)
     await update.message.reply_text(f"💬 Sin: {response}")
 
 def run_telegram():
-    try:
-        app_bot = Application.builder().token(Config.TELEGRAM_TOKEN).build()
-        app_bot.add_handler(CommandHandler("start", start))
-        app_bot.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
-        app_bot.run_polling()
-    except Exception as e:
-        logger.critical(f"Ошибка Telegram-бота: {str(e)}")
+    app_bot = Application.builder().token(TELEGRAM_TOKEN).build()
+    app_bot.add_handler(CommandHandler("start", start))
+    app_bot.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
+    app_bot.run_polling()
 
 
 # === ЗАПУСК ===
 if __name__ == "__main__":
     import argparse
     parser = argparse.ArgumentParser()
-    parser.add_argument("--mode", choices=["api", "telegram", "web", "cli"], default="web")
+    parser.add_argument("--mode", choices=["api", "telegram", "web", "3d"], default="web")
     args = parser.parse_args()
 
-    if args.mode == "web":
+    if args.mode == "3d":
+        visualizer = Sin3DVisualizer(sin)
+        visualizer.run()
+    elif args.mode == "web":
         st.session_state.chat = []
-        run_web()
+        run_web(sin)
     elif args.mode == "api":
-        import uvicorn
         uvicorn.run(app, host="127.0.0.1", port=8000)
     elif args.mode == "telegram":
         run_telegram()
-    else:
-        # CLI
-        print(f"🌀 SIN v{Sin.VERSION} — Консольный режим")
-        while True:
-            try:
-                user_input = input("> Sin, ").strip()
-                if user_input.lower() == "quit":
-                    break
-                print(f"💬 Sin: Это CLI, используйте --mode web для полного интерфейса")
-            except KeyboardInterrupt:
-                break
