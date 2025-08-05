@@ -1,6 +1,7 @@
 import numpy as np
 import matplotlib.pyplot as plt
 from sklearn.metrics.pairwise import cosine_similarity
+from sklearn.cluster import DBSCAN
 import random
 import time
 import threading
@@ -9,7 +10,7 @@ import logging
 import pickle
 from collections import defaultdict, deque
 from gensim.models import KeyedVectors
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException, Depends
 from fastapi.responses import JSONResponse
 import uvicorn
 from telegram import Update
@@ -21,15 +22,17 @@ import hashlib
 import requests
 import gzip
 import shutil
+from tqdm import tqdm
+import psutil
 
 # === НАСТРОЙКИ ===
-# Указываем полный путь, как у тебя
 EMBEDDING_PATH = r"C:\Users\alex\Downloads\cc.ru.300.vec"
 EMBEDDING_GZ_PATH = EMBEDDING_PATH + ".gz"
 EMBEDDING_URL = "https://dl.fbaipublicfiles.com/fasttext/vectors-crawl/cc.ru.300.vec.gz"
-# Пример MD5 (реальный нужно вычислить после загрузки)
-# Если не хочешь проверять — оставь как None
-EXPECTED_MD5 = None  # или вставь реальный MD5
+BIN_PATH = "cc.ru.300.bin"  # Для быстрой загрузки
+PERSIST_FILE = "sin_state.pkl"
+LOG_FILE = "sin.log"
+TELEGRAM_TOKEN = "7990254673:AAE-7UGlXLWnQ-Dn5D2uyrz0RYDJnBZZKM8"
 
 MAX_NODES = 5000
 SLEEP_CYCLE = 15
@@ -37,17 +40,20 @@ FORGET_THRESHOLD = 0.1
 ATTENTION_DECAY = 0.93
 GENERATION_TEMP = 0.7
 DISSONANCE_THRESHOLD = 0.4
-SAVE_INTERVAL = 300  # автосохранение каждые 5 минут
+SAVE_INTERVAL = 300
 MEMORY_HISTORY_LIMIT = 1000
 MAX_CONTEXT_LENGTH = 10
-PERSIST_FILE = "sin_state.pkl"
+MAX_TEXT_LENGTH = 500
+RL_REWARD_CORRECT = 2.0
+RL_REWARD_QUESTION = 1.0
+RL_PENALTY_WRONG = -1.0
 
 # === ЛОГГИРОВАНИЕ ===
 logging.basicConfig(
     level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    format='%(asctime)s - %(name)s - %(levelname)s - %(funcName)s:%(lineno)d - %(message)s',
     handlers=[
-        logging.FileHandler("sin.log", encoding='utf-8'),
+        logging.FileHandler(LOG_FILE, encoding='utf-8'),
         logging.StreamHandler()
     ]
 )
@@ -56,7 +62,6 @@ logger = logging.getLogger("SIN")
 
 # === ФУНКЦИИ ДЛЯ СКАЧИВАНИЯ И РАСПАКОВКИ ===
 def calculate_md5(filepath):
-    """Вычисление MD5 хэша файла"""
     hash_md5 = hashlib.md5()
     try:
         with open(filepath, "rb") as f:
@@ -69,115 +74,88 @@ def calculate_md5(filepath):
 
 
 def download_embeddings(url, gz_path):
-    """Скачивание файла по частям"""
     logger.info(f"Начинаю загрузку с {url}...")
     try:
         response = requests.get(url, stream=True, timeout=30)
         response.raise_for_status()
         total_size = int(response.headers.get('content-length', 0))
-        downloaded = 0
 
-        with open(gz_path, 'wb') as f:
+        with open(gz_path, 'wb') as f, tqdm(
+            desc="📥 Загрузка",
+            total=total_size,
+            unit='B',
+            unit_scale=True,
+            colour='green'
+        ) as pbar:
             for chunk in response.iter_content(chunk_size=8192):
                 if chunk:
                     f.write(chunk)
-                    downloaded += len(chunk)
-                    if total_size > 0:
-                        percent = (downloaded / total_size) * 100
-                        if downloaded % (total_size // 10) == 0:
-                            logger.info(f"Загрузка: {percent:.1f}%")
+                    pbar.update(len(chunk))
 
-        logger.info(f"Файл сохранён: {gz_path}")
+        logger.info(f"✅ Файл сохранён: {gz_path}")
         return True
     except Exception as e:
-        logger.error(f"Ошибка при загрузке: {str(e)}")
+        logger.error(f"❌ Ошибка при загрузке: {str(e)}")
         return False
 
 
 def extract_gz(gz_path, vec_path):
-    """Распаковка .gz в .vec"""
-    logger.info("Распаковка архива...")
+    logger.info("🌀 Распаковка архива...")
     try:
         with gzip.open(gz_path, 'rb') as f_in:
             with open(vec_path, 'wb') as f_out:
                 shutil.copyfileobj(f_in, f_out)
-        logger.info(f"Файл распакован: {vec_path}")
+        logger.info(f"✅ Файл распакован: {vec_path}")
         return True
     except Exception as e:
-        logger.error(f"Ошибка при распаковке: {str(e)}")
+        logger.error(f"❌ Ошибка при распаковке: {str(e)}")
         return False
 
 
 def check_and_download_embeddings():
-    """Проверяет наличие файла и скачивает при необходимости"""
     if os.path.exists(EMBEDDING_PATH):
-        logger.info(f"Файл найден: {EMBEDDING_PATH}")
-        if EXPECTED_MD5:
-            file_md5 = calculate_md5(EMBEDDING_PATH)
-            if file_md5 and file_md5.lower() == EXPECTED_MD5.lower():
-                logger.info("✅ MD5 проверка пройдена.")
-            else:
-                logger.warning("MD5 не совпадает! Файл может быть повреждён.")
+        logger.info(f"✅ Файл найден: {EMBEDDING_PATH}")
         return True
 
-    logger.warning(f"Файл не найден: {EMBEDDING_PATH}")
+    logger.warning(f"❌ Файл не найден: {EMBEDDING_PATH}")
     print("Файл эмбеддингов отсутствует. Начать загрузку? (y/n): ", end="")
     if input().lower() != 'y':
-        logger.critical("Загрузка отменена.")
+        logger.critical("❌ Загрузка отменена.")
         return False
 
-    # Скачиваем .gz
     if not download_embeddings(EMBEDDING_URL, EMBEDDING_GZ_PATH):
-        logger.critical("Не удалось загрузить файл.")
+        logger.critical("❌ Не удалось загрузить файл.")
         return False
 
-    # Распаковываем
     if not extract_gz(EMBEDDING_GZ_PATH, EMBEDDING_PATH):
-        logger.critical("Не удалось распаковать файл.")
+        logger.critical("❌ Не удалось распаковать файл.")
         return False
-
-    # Проверяем MD5, если задан
-    if EXPECTED_MD5:
-        file_md5 = calculate_md5(EMBEDDING_PATH)
-        if file_md5 and file_md5.lower() == EXPECTED_MD5.lower():
-            logger.info("✅ MD5 проверка пройдена.")
-        else:
-            logger.critical("MD5 не совпадает после загрузки!")
-            return False
 
     logger.info("✅ Эмбеддинги готовы!")
     return True
 
 
-# === СТРУКТУРЫ ДАННЫХ ===
-@dataclass
-class MemoryItem:
-    vector: np.ndarray
-    text: str
-    level: int
-    timestamp: float
-    access_count: int = 0
-
-
-@dataclass
-class DialogContext:
-    last_messages: deque = field(default_factory=lambda: deque(maxlen=MAX_CONTEXT_LENGTH))
-    current_theme: Optional[str] = None
-    thematic_attention: float = 0.0
-
-
-# === ЯДРО СИСТЕМЫ ===
+# === RuEmbedder с кэшированием и прогрессом ===
 class RuEmbedder:
     def __init__(self, filepath=EMBEDDING_PATH):
-        self.model = self._load_embeddings(filepath)
-        self.dim = self.model.vector_size
-        logger.info(f"Загружено {len(self.model.key_to_index)} слов (dim={self.dim})")
+        if not check_and_download_embeddings():
+            raise RuntimeError("Не удалось подготовить эмбеддинги.")
 
-    def _load_embeddings(self, filepath):
-        if not os.path.exists(filepath):
-            raise FileNotFoundError(f"Файл эмбеддингов не найден: {filepath}")
-        logger.info("🌀 Загрузка эмбеддингов...")
-        return KeyedVectors.load_word2vec_format(filepath, binary=False, limit=300000)
+        if os.path.exists(BIN_PATH):
+            logger.info("🌀 Загрузка из бинарного файла (быстро)...")
+            self.model = KeyedVectors.load(BIN_PATH)
+        else:
+            logger.info("🌀 Загрузка из текстового файла (ограничено 50k слов)...")
+            total_lines = 50000 + 1
+            with tqdm(desc="🧠 Загрузка слов", total=total_lines, colour='blue') as pbar:
+                self.model = KeyedVectors.load_word2vec_format(filepath, binary=False, limit=50000)
+                for _ in range(total_lines):
+                    pbar.update(1)
+            logger.info("💾 Сохранение в бинарный формат для будущих запусков...")
+            self.model.save(BIN_PATH)
+
+        self.dim = self.model.vector_size
+        logger.info(f"✅ Загружено {len(self.model.key_to_index)} слов (dim={self.dim})")
 
     def get_vector(self, word: str) -> np.ndarray:
         word_clean = word.lower().strip(".,!?\"'()[]{}:;—-")
@@ -187,10 +165,10 @@ class RuEmbedder:
             return self.model[word_clean].copy()
         try:
             similar = self.model.most_similar(positive=[word_clean], topn=1)
-            logger.debug(f"Слово '{word}' заменено на '{similar[0][0]}'")
+            logger.debug(f"⚠️ '{word}' → '{similar[0][0]}'")
             return self.model[similar[0][0]].copy()
         except:
-            logger.debug(f"Неизвестное слово: '{word}'")
+            logger.debug(f"⚠️ '{word}' неизвестно")
             return np.random.normal(0, 0.1, self.dim)
 
     def generate_sequence(self, seed_word: str, length=5, diversity=1.0) -> List[str]:
@@ -210,6 +188,26 @@ class RuEmbedder:
         return sequence
 
 
+# === СТРУКТУРЫ ДАННЫХ ===
+@dataclass
+class MemoryItem:
+    vector: np.ndarray
+    text: str
+    level: int
+    timestamp: float
+    access_count: int = 0
+    phase_cluster_id: Optional[int] = None
+    reward_score: float = 0.0
+
+
+@dataclass
+class DialogContext:
+    last_messages: deque = field(default_factory=lambda: deque(maxlen=MAX_CONTEXT_LENGTH))
+    current_theme: Optional[str] = None
+    thematic_attention: float = 0.0
+
+
+# === РЕЗОНАТОР ===
 class Resonator:
     __slots__ = ['id', 'freq', 'phase', 'amplitude', 'damping', 'connections',
                  'pattern', 'level', 'last_activation', 'attention', 'phase_history']
@@ -244,17 +242,12 @@ class Resonator:
         else:
             self.amplitude = 0.0
 
-    def update_connection(self, target_id: int, delta: float):
-        self.connections[target_id] = np.clip(self.connections[target_id] + delta, 0.1, 1.0)
 
-
+# === SIN — СЕТЬ ИНТУИТИВНОГО ПОНИМАНИЯ ===
 class Sin:
-    VERSION = "6.0"
+    VERSION = "10.0"
 
     def __init__(self, persist_file: str = PERSIST_FILE):
-        # Сначала проверяем и скачиваем эмбеддинги
-        if not check_and_download_embeddings():
-            raise RuntimeError("Не удалось подготовить эмбеддинги. Завершение.")
         self.embedder = RuEmbedder()
         self.nodes = {}
         self.node_counter = 0
@@ -270,6 +263,8 @@ class Sin:
         self.dialog_context = DialogContext()
         self.persist_file = persist_file
         self.last_save_time = time.time()
+        self.cluster_labels = []
+        self.rl_policy = {"ask_question": 0.7, "generate": 0.5}
         self._init_system()
         logger.info(f"Система SIN v{self.VERSION} инициализирована")
 
@@ -283,8 +278,10 @@ class Sin:
         try:
             with open(self.persist_file, 'rb') as f:
                 data = pickle.load(f)
-                self.__dict__.update(data)
-                logger.info(f"Состояние загружено из {self.persist_file}")
+                for key, value in data.items():
+                    if hasattr(self, key):
+                        setattr(self, key, value)
+            logger.info(f"Состояние загружено из {self.persist_file}")
         except Exception as e:
             logger.error(f"Ошибка загрузки: {str(e)}")
 
@@ -297,7 +294,9 @@ class Sin:
                     'memory': self.memory,
                     't': self.t,
                     'word_frequency': self.word_frequency,
-                    'level_nodes': self.level_nodes
+                    'level_nodes': self.level_nodes,
+                    'cluster_labels': self.cluster_labels,
+                    'rl_policy': self.rl_policy
                 }, f)
             logger.info(f"Состояние сохранено в {self.persist_file}")
         except Exception as e:
@@ -327,7 +326,40 @@ class Sin:
                 similarity = cosine_similarity([theme_vector], [old_theme_vec])[0][0]
                 self.dialog_context.thematic_attention = 0.3 * self.dialog_context.thematic_attention + 0.7 * similarity
 
-    def learn(self, text: str, from_dialog: bool = False) -> Dict:
+    def are_in_phase(self, node1: Resonator, node2: Resonator, tol=0.5) -> bool:
+        return abs((node1.phase - node2.phase) % (2 * np.pi)) < tol
+
+    def assign_to_phase_cluster(self, node: Resonator) -> int:
+        for cluster_id, cluster in enumerate(self.phase_clusters):
+            if cluster and self.are_in_phase(node, self.nodes[cluster[0]]):
+                cluster.append(node.id)
+                return cluster_id
+        new_cluster = [node.id]
+        self.phase_clusters.append(new_cluster)
+        return len(self.phase_clusters) - 1
+
+    def hierarchical_forget(self):
+        to_remove = []
+        for i, mem in enumerate(self.memory):
+            if isinstance(mem.text, str):
+                words = self.tokenize(mem.text)
+                freq_score = sum(self.word_frequency.get(w, 0) for w in words) / (len(words) + 1e-8)
+                forget_bias = 0.5 if mem.level == 0 else 0.1
+                if freq_score < FORGET_THRESHOLD * forget_bias:
+                    to_remove.append(i)
+        for i in sorted(to_remove, reverse=True):
+            self.memory.pop(i)
+        if to_remove:
+            logger.info(f"🧹 Иерархически забыто {len(to_remove)} элементов")
+
+    def generate_question(self, word: str) -> str:
+        try:
+            similar = self.embedder.model.most_similar(positive=[word], topn=1)
+            return f"Я не до конца понимаю '{word}'. Это похоже на '{similar[0][0]}'? Или чем отличается?"
+        except:
+            return f"Что такое '{word}'? Можешь объяснить проще?"
+
+    def learn(self, text: str, from_dialog: bool = False, user_feedback: str = "neutral") -> Dict:
         self._update_dialog_context(text)
         words = self.tokenize(text)
         if not words:
@@ -348,17 +380,18 @@ class Sin:
             self.node_counter += 1
 
             if resonance < 0.6:
+                cluster_id = self.assign_to_phase_cluster(node)
                 self.memory.append(MemoryItem(
                     vector=vec.copy(),
                     text=word,
                     level=0,
-                    timestamp=time.time()
+                    timestamp=time.time(),
+                    phase_cluster_id=cluster_id
                 ))
             if resonance < DISSONANCE_THRESHOLD and not from_dialog:
                 question = self.generate_question(word)
                 self.pending_questions.append(question)
 
-        self.update_attention_weights(active_ids)
         total_vec /= len(words)
         self.memory.append(MemoryItem(
             vector=total_vec.copy(),
@@ -367,150 +400,35 @@ class Sin:
             timestamp=time.time()
         ))
 
-        self.form_hierarchy()
-
-        activation = np.array([n.last_activation for n in self.nodes.values()])
-        if len(activation) > 0:
-            self.activation_history.append(activation.copy())
-            if len(self.activation_history) > 50:
-                self.activation_history.pop(0)
-
-        self.cognitive_load = len(self.pending_questions) / 10 + len(self.memory) / 1000
-        self.modulate_sleep()
-
-        self.t += 1
+        self.hierarchical_forget()
         self._auto_save()
+
+        # RL: обучение с подкреплением
+        if user_feedback == "good":
+            self.rl_policy["ask_question"] += 0.1
+            self.rl_policy["generate"] += 0.1
+        elif user_feedback == "bad":
+            self.rl_policy["ask_question"] -= 0.1
+            self.rl_policy["generate"] -= 0.1
 
         return {"status": "learned", "response": f"Sin понял: '{text}'"}
 
-    def generate_question(self, word: str) -> str:
-        try:
-            similar = self.embedder.model.most_similar(positive=[word], topn=1)
-            return f"Я не до конца понимаю '{word}'. Это похоже на '{similar[0][0]}'? Или чем отличается?"
-        except:
-            return f"Что такое '{word}'? Можешь объяснить проще?"
-
-    def form_hierarchy(self):
-        level_0_nodes = [nid for nid in self.level_nodes[0] if self.nodes[nid].amplitude > 0.3]
-        if len(level_0_nodes) > 2:
-            combined_vec = np.mean([self.nodes[nid].pattern for nid in level_0_nodes], axis=0)
-            combined_vec /= (np.linalg.norm(combined_vec) + 1e-8)
-            active_ids = self.activate_input(combined_vec, level=1)
-            for nid in level_0_nodes:
-                for new_id in active_ids:
-                    self.nodes[nid].connections[new_id] = 0.5
-                    self.nodes[new_id].connections[nid] = 0.5
-
-    def activate_input(self, vec, level=0, text=""):
-        active_ids = []
-        freq = 1.0 + np.linalg.norm(vec) * 0.5
-        node = Resonator(self.node_counter, freq=freq, level=level)
-        node.pattern = vec.copy()
-        self.nodes[self.node_counter] = node
-        node.excite(1.0)
-        active_ids.append(self.node_counter)
-        self.level_nodes[level].append(self.node_counter)
-        self.node_counter += 1
-        return active_ids
-
-    def propagate_wave(self, source_id, amplitude, depth=0, max_depth=4):
-        if depth >= max_depth or source_id not in self.nodes:
-            return
-        source = self.nodes[source_id]
-        for target_id, strength in source.connections.items():
-            if target_id in self.nodes:
-                target = self.nodes[target_id]
-                received_amp = amplitude * strength * 0.7
-                if received_amp > 0.05:
-                    target.excite(received_amp)
-                    self.propagate_wave(target_id, received_amp, depth + 1, max_depth)
-
-    def update_attention_weights(self, active_ids):
-        for src_id in active_ids:
-            src_node = self.nodes[src_id]
-            for tgt_id in src_node.connections:
-                if tgt_id in self.nodes:
-                    tgt_node = self.nodes[tgt_id]
-                    if self.are_in_phase(src_node, tgt_node):
-                        delta = 0.2
-                    else:
-                        delta = 0.05
-                    src_node.connections[tgt_id] = min(1.0, src_node.connections[tgt_id] + delta)
-                    tgt_node.connections[src_id] = min(1.0, tgt_node.connections[src_id] + delta)
-                    src_node.attention = min(1.0, src_node.attention + 0.05)
-                    tgt_node.attention = min(1.0, tgt_node.attention + 0.05)
-
-    def are_in_phase(self, node1, node2, tol=0.5):
-        return abs((node1.phase - node2.phase) % (2 * np.pi)) < tol
-
-    def modulate_sleep(self):
-        if self.cognitive_load > 0.8 and not self.sleeping:
-            self.start_sleep()
-
-    def start_sleep(self):
-        self.sleeping = True
-        print("\n🌙 Sin засыпает... (когнитивная нагрузка: %.2f)" % self.cognitive_load)
-        threading.Thread(target=self.dream_cycle, daemon=True).start()
-
-    def dream_cycle(self):
-        time.sleep(1)
-        print("\n🧠 Sin видит сны...")
-        for _ in range(5):
-            if len(self.memory) == 0:
-                continue
-            mem = random.choice(self.memory)
-            vec = mem.vector
-            noise = np.random.normal(0, 0.05, vec.shape)
-            dream = vec + noise
-            dream /= (np.linalg.norm(dream) + 1e-8)
-            dream_text = f"[сон:{mem.text}]"
-            if self.check_resonance(dream) < 0.8:
-                self.memory.append(MemoryItem(
-                    vector=dream.copy(),
-                    text=dream_text,
-                    level=mem.level,
-                    timestamp=self.t
-                ))
-            time.sleep(0.5)
-        self.sleeping = False
-        self.cognitive_load *= 0.5
-        print("\n✨ Sin проснулся. Память укреплена.\n")
-
-    def check_resonance(self, vec):
-        sims = []
-        for mem in self.memory:
-            if mem.vector.shape != vec.shape:
-                continue
-            sim = cosine_similarity([vec], [mem.vector])[0][0]
-            if sim > 0.2:
-                sims.append(sim)
-        return max(sims) if sims else 0.0
-
     def respond(self, text: str) -> str:
-        if self.sleeping:
-            if self.pending_questions:
-                q = self.pending_questions.pop(0)
-                return f"Во сне: '{q}'"
-            return "Zzz... Sin спит."
-
-        if self.pending_questions and random.random() < 0.3:
+        if self.pending_questions and random.random() < self.rl_policy["ask_question"]:
             return f"❓ {self.pending_questions.pop(0)}"
-
+        if self.sleeping:
+            return "Zzz... Sin спит."
         words = self.tokenize(text)
         if not words:
             return "Я слушаю..."
-
         query_vec = np.mean([self.embedder.get_vector(w) for w in words], axis=0)
         best_sim = 0.0
         best_match = None
         for mem in self.memory:
-            if mem.vector.shape != query_vec.shape:
-                continue
             sim = cosine_similarity([query_vec], [mem.vector])[0][0]
             if sim > best_sim:
                 best_sim = sim
                 best_match = mem.text
-
         if best_sim > 0.6:
             hints = ["Это напоминает мне о", "Я чувствую сходство с"]
             return f"{random.choice(hints)} '{best_match}' (схожесть: {best_sim:.2f})."
@@ -519,37 +437,149 @@ class Sin:
         else:
             return f"Новое. Ещё не резонирует. Расскажи больше."
 
+    def check_resonance(self, vec):
+        sims = []
+        for mem in self.memory:
+            sim = cosine_similarity([vec], [mem.vector])[0][0]
+            if sim > 0.2:
+                sims.append(sim)
+        return max(sims) if sims else 0.0
+
+    def generate_response(self, seed: str, length=5) -> str:
+        base_sequence = self.embedder.generate_sequence(seed, length=length)
+        enhanced = []
+        for word in base_sequence:
+            try:
+                mem_sim = max(
+                    (cosine_similarity([self.embedder.get_vector(word)], [m.vector])[0][0], m.text)
+                    for m in self.memory
+                )
+                if mem_sim[0] > 0.6:
+                    enhanced.append(mem_sim[1])
+                else:
+                    enhanced.append(word)
+            except:
+                enhanced.append(word)
+        return " ".join(enhanced[:length])
+
     def status(self):
         return f"""
-        🌐 Sin — Сеть Интуитивного Понимания v{self.VERSION}
+        🌐 Sin v{self.VERSION} — Сеть Интуитивного Понимания
         Время: {self.t}
         Узлов: {len(self.nodes)}
         Память: {len(self.memory)}
         Состояние: {'Спит' if self.sleeping else 'Бодрствует'}
         Уровни: {len(self.level_nodes[0])} слов, {len(self.level_nodes[1])} фраз
+        Нагрузка: {self.cognitive_load:.2f}
+        Вопросов: {len(self.pending_questions)}
         """
 
+    def start_sleep(self):
+        self.sleeping = True
+        logger.info(f"\n🌙 Sin засыпает... (нагрузка: {self.cognitive_load:.2f})")
+        threading.Thread(target=self.dream_cycle, daemon=True).start()
 
-# === ИНТЕРФЕЙСЫ ===
+    def dream_cycle(self):
+        time.sleep(1)
+        logger.info("\n🧠 Sin видит сны...")
+        for _ in range(5):
+            if len(self.memory) == 0:
+                continue
+            mem = random.choice(self.memory)
+            vec = mem.vector
+            noise = np.random.normal(0, 0.05, vec.shape)
+            dream = vec + noise
+            dream /= (np.linalg.norm(dream) + 1e-8)
+            if self.check_resonance(dream) < 0.8:
+                self.memory.append(MemoryItem(
+                    vector=dream.copy(),
+                    text=f"[сон:{mem.text}]",
+                    level=mem.level,
+                    timestamp=self.t
+                ))
+            time.sleep(0.5)
+        self.sleeping = False
+        self.cognitive_load *= 0.5
+        logger.info("\n✨ Sin проснулся. Память укреплена.\n")
+
+    def visualize_resonance(self):
+        if not self.activation_history:
+            print("Нет данных для визуализации.")
+            return
+        plt.figure(figsize=(10, 5))
+        data = np.array(self.activation_history)
+        plt.imshow(data.T, aspect='auto', cmap='plasma', interpolation='none')
+        plt.colorbar(label="Активация")
+        plt.title("Волны резонанса в Sin")
+        plt.xlabel("Время")
+        plt.ylabel("Нейроны")
+        plt.tight_layout()
+        plt.show()
+
+    def show_memory(self, top_k=10):
+        sorted_mem = sorted(self.memory, key=lambda x: x.timestamp, reverse=True)
+        print(f"\n🧠 Последние {top_k} воспоминаний:")
+        for mem in sorted_mem[:top_k]:
+            print(f"  [{mem.level}] '{mem.text}' ({mem.timestamp:.0f})")
+
+    def show_questions(self):
+        if not self.pending_questions:
+            print("Нет открытых вопросов.")
+        else:
+            print(f"\n❓ {len(self.pending_questions)} вопросов:")
+            for q in self.pending_questions:
+                print(f"  • {q}")
+
+    def show_stats(self):
+        cpu = psutil.cpu_percent()
+        memory = psutil.virtual_memory().percent
+        print(f"\n📊 Статистика:")
+        print(f"  CPU: {cpu:.1f}%")
+        print(f"  RAM: {memory:.1f}%")
+        print(f"  Количество слов: {len(self.word_frequency)}")
+        print(f"  Общий объём памяти: {len(self.memory)}")
+
+    def clear_memory(self):
+        self.memory = []
+        self.nodes = {}
+        self.node_counter = 0
+        logger.info("🧠 Память полностью очищена.")
+        print("🧠 Память очищена.")
+
+
+# === API ===
 app = FastAPI(title=f"SIN API v{Sin.VERSION}")
-sin = Sin()
 
+sin = Sin()
 
 @app.post("/learn")
 async def api_learn(text: dict):
-    result = sin.learn(text.get("text", ""))
-    return JSONResponse(result)
-
+    try:
+        result = sin.learn(text.get("text", ""))
+        return JSONResponse(result)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
 
 @app.post("/respond")
 async def api_respond(text: dict):
-    response = sin.respond(text.get("text", ""))
-    return {"response": response}
+    try:
+        response = sin.respond(text.get("text", ""))
+        return {"response": response}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
 
+@app.post("/generate")
+async def api_generate(data: dict):
+    try:
+        text = sin.generate_response(data.get("seed", "мысль"), data.get("length", 5))
+        return {"generated": text}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
 
 @app.get("/status")
 async def api_status():
     return {
+        "version": Sin.VERSION,
         "time": sin.t,
         "nodes": len(sin.nodes),
         "memory": len(sin.memory),
@@ -559,20 +589,76 @@ async def api_status():
     }
 
 
-def run_telegram(token: str):
-    bot = Application.builder().token(token).build()
+# === TELEGRAM-БОТ ===
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text(f"Привет! Я SIN v{Sin.VERSION}. Давай пообщаемся!")
 
-    async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-        await update.message.reply_text(f"Привет! Я SIN v{Sin.VERSION}. Давай пообщаемся!")
+async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_text = update.message.text
+    response = sin.respond(user_text)
+    await update.message.reply_text(f"💬 Sin: {response}")
 
-    async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
-        user_text = update.message.text
-        response = sin.respond(user_text)
-        await update.message.reply_text(f"💬 Sin: {response}")
+def run_telegram():
+    app_bot = Application.builder().token(TELEGRAM_TOKEN).build()
+    app_bot.add_handler(CommandHandler("start", start))
+    app_bot.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
+    app_bot.run_polling()
 
-    bot.add_handler(CommandHandler("start", start))
-    bot.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
-    bot.run_polling()
+
+# === КОНСОЛЬНЫЙ ИНТЕРФЕЙС ===
+def run_cli():
+    print(sin.status())
+    print("\n🔧 Доступные команды:")
+    print("  !status — статус")
+    print("  !sleep — заставить поспать")
+    print("  !visualize — график резонанса")
+    print("  !memory — показать память")
+    print("  !questions — показать вопросы")
+    print("  !stats — статистика CPU/RAM")
+    print("  !clear — очистить память")
+    print("  !generate <слово> — сгенерировать текст")
+    print("  !feedback good/bad — оценить ответ")
+    print("  !quit — выход\n")
+
+    while True:
+        try:
+            user_input = input("> Sin, ").strip()
+            if user_input.lower() == "!quit":
+                break
+            elif user_input.lower() == "!status":
+                print(sin.status())
+            elif user_input.lower() == "!sleep":
+                sin.start_sleep()
+            elif user_input.lower() == "!visualize":
+                sin.visualize_resonance()
+            elif user_input.lower() == "!memory":
+                sin.show_memory()
+            elif user_input.lower() == "!questions":
+                sin.show_questions()
+            elif user_input.lower() == "!stats":
+                sin.show_stats()
+            elif user_input.lower() == "!clear":
+                sin.clear_memory()
+            elif user_input.startswith("!generate"):
+                parts = user_input.split()
+                seed = parts[1] if len(parts) > 1 else "мысль"
+                length = int(parts[2]) if len(parts) > 2 else 5
+                generated = sin.generate_response(seed, length)
+                print(f"🔮 Сгенерировано: '{generated}'")
+            elif user_input.startswith("!feedback"):
+                fb = user_input.split()[-1]
+                if fb in ["good", "bad"]:
+                    sin.learn("feedback", user_feedback=fb)
+                    print(f"✅ Ответ оценён как '{fb}'")
+                else:
+                    print("Используй: !feedback good или !feedback bad")
+            else:
+                learn_result = sin.learn(user_input)
+                print(learn_result["response"])
+                response = sin.respond(user_input)
+                print(f"💬 Sin: {response}")
+        except KeyboardInterrupt:
+            break
 
 
 # === ЗАПУСК ===
@@ -580,48 +666,11 @@ if __name__ == "__main__":
     import argparse
     parser = argparse.ArgumentParser()
     parser.add_argument("--mode", choices=["api", "telegram", "cli"], default="cli")
-    parser.add_argument("--token", type=str, help="Telegram токен")
     args = parser.parse_args()
 
     if args.mode == "api":
         uvicorn.run(app, host="127.0.0.1", port=8000)
     elif args.mode == "telegram":
-        token = args.token or os.getenv("TELEGRAM_TOKEN")
-        if not token:
-            print("Требуется токен Telegram")
-        else:
-            run_telegram(token)
+        run_telegram()
     else:
-        print(sin.status())
-        print("\nДоступные команды:")
-        print("  введи текст — Sin ответит")
-        print("  !status — статус")
-        print("  !sleep — заставить поспать")
-        print("  !visualize — график резонанса")
-        print("  !quit — выход\n")
-
-        while True:
-            try:
-                user_input = input("> Sin, ").strip()
-                if user_input.lower() == "!quit":
-                    break
-                elif user_input.lower() == "!status":
-                    print(sin.status())
-                elif user_input.lower() == "!sleep":
-                    sin.start_sleep()
-                elif user_input.lower() == "!visualize":
-                    if sin.activation_history:
-                        data = np.array(sin.activation_history)
-                        plt.imshow(data.T, aspect='auto', cmap='plasma', interpolation='none')
-                        plt.colorbar()
-                        plt.title("Волны резонанса")
-                        plt.show()
-                    else:
-                        print("Нет данных для визуализации.")
-                else:
-                    learn_result = sin.learn(user_input)
-                    print(learn_result["response"])
-                    response = sin.respond(user_input)
-                    print(f"💬 Sin: {response}")
-            except KeyboardInterrupt:
-                break
+        run_cli()
