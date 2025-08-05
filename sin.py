@@ -25,7 +25,6 @@ import psutil
 import pymorphy3
 import networkx as nx
 from typing import List, Dict, Optional, Tuple, Any
-
 # === НАСТРОЙКИ ПУТЕЙ ===
 BASE_PATH = r"C:\Users\alex\Downloads"
 EMBEDDING_PATH = os.path.join(BASE_PATH, "cc.ru.300.vec")
@@ -36,7 +35,6 @@ PERSIST_FILE = os.path.join(BASE_PATH, "sin_state.pkl")
 GRAPH_FILE = os.path.join(BASE_PATH, "knowledge_graph.pkl")
 LOG_FILE = os.path.join(BASE_PATH, "sin.log")
 TELEGRAM_TOKEN = "7990254673:AAE-7UGlXLWnQ-Dn5D2uyrz0RYDJnBZZKM8"
-
 # === ГЛОБАЛЬНЫЕ ПАРАМЕТРЫ ===
 MAX_NODES = 10000
 SLEEP_CYCLE = 15
@@ -53,7 +51,6 @@ DISSONANCE_THRESHOLD = 0.4
 FORGET_THRESHOLD = 0.1
 RL_REWARD_CORRECT = 2.0
 RL_PENALTY_WRONG = -1.0
-
 # === ЛОГГИРОВАНИЕ ===
 logging.basicConfig(
     level=logging.INFO,
@@ -64,17 +61,14 @@ logging.basicConfig(
     ]
 )
 logger = logging.getLogger("SIN")
-
 # === МОРФОЛОГИЯ ===
 morph = pymorphy3.MorphAnalyzer()
-
 def normalize_word(word: str) -> str:
     word_clean = word.lower().strip(".,!?\"'()[]{}:;—-")
     if not word_clean:
         return ""
     parsed = morph.parse(word_clean)
     return parsed[0].normal_form if parsed else word_clean
-
 # === ФУНКЦИИ ДЛЯ СКАЧИВАНИЯ И РАСПАКОВКИ ===
 def calculate_md5(filepath):
     hash_md5 = hashlib.md5()
@@ -86,7 +80,6 @@ def calculate_md5(filepath):
     except Exception as e:
         logger.error(f"Ошибка при вычислении MD5: {e}")
         return None
-
 def download_embeddings(url, gz_path):
     logger.info(f"Начинаю загрузку с {url}...")
     try:
@@ -109,7 +102,6 @@ def download_embeddings(url, gz_path):
     except Exception as e:
         logger.error(f"❌ Ошибка при загрузке: {str(e)}")
         return False
-
 def extract_gz(gz_path, vec_path):
     logger.info("🌀 Распаковка архива...")
     try:
@@ -121,7 +113,6 @@ def extract_gz(gz_path, vec_path):
     except Exception as e:
         logger.error(f"❌ Ошибка при распаковке: {str(e)}")
         return False
-
 def check_and_download_embeddings():
     if os.path.exists(EMBEDDING_PATH):
         logger.info(f"✅ Файл найден: {EMBEDDING_PATH}")
@@ -139,7 +130,6 @@ def check_and_download_embeddings():
         return False
     logger.info("✅ Эмбеддинги готовы!")
     return True
-
 # === RuEmbedder с кэшированием, прогрессом и нормализацией ===
 class RuEmbedder:
     def __init__(self, filepath=EMBEDDING_PATH):
@@ -159,13 +149,11 @@ class RuEmbedder:
             self.model.save(BIN_PATH)
         self.dim = self.model.vector_size
         logger.info(f"✅ Загружено {len(self.model.key_to_index)} слов (dim={self.dim})")
-
     def get_vector(self, word: str) -> np.ndarray:
         norm = normalize_word(word)
         if not norm or norm not in self.model:
             return np.random.normal(0, 0.1, self.dim)
         return self.model[norm].copy()
-
     def generate_sequence(self, seed_word: str, length=5, diversity=1.0) -> List[str]:
         sequence = [seed_word]
         current_word = seed_word
@@ -181,7 +169,6 @@ class RuEmbedder:
             except:
                 break
         return sequence
-
 # === СТРУКТУРЫ ДАННЫХ ===
 @dataclass
 class MemoryItem:
@@ -193,7 +180,6 @@ class MemoryItem:
     phase_cluster_id: Optional[int] = None
     reward_score: float = 0.0
     coherence_score: float = 1.0
-
     @staticmethod
     def from_np(vector: np.ndarray, text: str, level: int, timestamp: float, **kwargs):
         return MemoryItem(
@@ -203,23 +189,19 @@ class MemoryItem:
             timestamp=timestamp,
             **kwargs
         )
-
     def to_np_vector(self) -> np.ndarray:
         return np.array(self.vector)
-
 @dataclass
 class DialogContext:
     last_messages: List[str] = None
     timestamps: List[float] = None
     current_theme: Optional[str] = None
     thematic_attention: float = 0.0
-
     def __post_init__(self):
         if self.last_messages is None:
             self.last_messages = []
         if self.timestamps is None:
             self.timestamps = []
-
 @dataclass
 class Goal:
     description: str
@@ -227,14 +209,12 @@ class Goal:
     steps: List[str]
     achieved: bool = False
     created_at: float = field(default_factory=time.time)
-
 @dataclass
 class Emotion:
     name: str
     intensity: float
     decay: float = 0.01
     trigger_threshold: float = 0.7
-
 # === Resonator (нейрон с фазой) ===
 class Resonator:
     __slots__ = ['id', 'freq', 'phase', 'amplitude', 'damping', 'connections',
@@ -251,12 +231,10 @@ class Resonator:
         self.last_activation = 0.0
         self.attention = 1.0
         self.phase_history = deque(maxlen=100)
-
     def excite(self, amp: float, phase_offset: float = 0.0):
         self.amplitude = amp * self.attention
         self.phase = phase_offset
         self.last_activation = amp
-
     def step(self, dt: float = 0.1):
         if self.amplitude > 0.01:
             self.phase += self.freq * dt
@@ -266,35 +244,29 @@ class Resonator:
             self.phase_history.append(self.phase)
         else:
             self.amplitude = 0.0
-
 # === Hippocampus — кратковременная память и консолидация ===
 class Hippocampus:
     def __init__(self, capacity: int = WORKING_MEMORY_SIZE):
         self.working_memory = deque(maxlen=capacity)
         self.consolidation_threshold = 0.7
-
     def add(self, item: MemoryItem):
         self.working_memory.append(item)
-
     def consolidate(self, long_term_memory: list, vector_index):
         for item in self.working_memory:
             if item.coherence_score > self.consolidation_threshold:
                 long_term_memory.append(item)
                 vector_index.add_vector(item.to_np_vector(), len(long_term_memory) - 1)
         self.working_memory.clear()
-
 # === VectorIndex — быстрый поиск (FAISS) ===
 class VectorIndex:
     def __init__(self, dim: int = INDEX_DIM):
         self.dim = dim
         self.index = faiss.IndexFlatL2(dim)
         self.vectors = []
-
     def add_vector(self, vector: np.ndarray, external_id: int):
         vec = np.array([vector], dtype=np.float32)
         self.index.add(vec)
         self.vectors.append(external_id)
-
     def search_similar(self, query: np.ndarray, k: int = 10) -> List[Tuple[float, int]]:
         if self.index.ntotal == 0:
             return []
@@ -306,7 +278,6 @@ class VectorIndex:
                 similarity = 1 / (1 + dist)
                 results.append((similarity, self.vectors[idx]))
         return results
-
 # === AdaptiveParams — адаптивные пороги и обучение ===
 class AdaptiveParams:
     def __init__(self):
@@ -314,33 +285,27 @@ class AdaptiveParams:
         self.dissonance_threshold = 0.4
         self.rl_learning_rate = 0.1
         self.reward_history = deque(maxlen=100)
-
     def update(self, reward: float):
         self.reward_history.append(reward)
         avg = np.mean(self.reward_history) if self.reward_history else 0.0
         self.forget_threshold = 0.1 + 0.1 * avg
         self.dissonance_threshold = 0.4 + 0.2 * avg
-
 # === KnowledgeGraph — граф знаний ===
 class KnowledgeGraph:
     def __init__(self):
         self.graph = nx.DiGraph()
         self.concepts = {}  # concept_name -> vector
-
     def add_concept(self, name: str, vector: np.ndarray, parents: List[str] = None, children: List[str] = None):
         if parents is None:
             parents = []
         if children is None:
             children = []
-            
         self.graph.add_node(name)
         self.concepts[name] = vector
-        
         for parent in parents:
             self.graph.add_edge(parent, name, relation="hypernym")
         for child in children:
             self.graph.add_edge(name, child, relation="hyponym")
-            
     def find_path(self, source: str, target: str) -> List[str]:
         try:
             return nx.shortest_path(self.graph, source, target)
@@ -348,7 +313,6 @@ class KnowledgeGraph:
             return []
         except nx.NodeNotFound:
             return []
-
     def get_neighbors(self, concept: str, depth=1) -> List[str]:
         if not self.graph.has_node(concept):
             return []
@@ -357,7 +321,6 @@ class KnowledgeGraph:
             for neighbor in list(neighbors):
                 neighbors.extend(self.get_neighbors(neighbor, depth-1))
         return list(set(neighbors))
-
     def save_graph(self):
         try:
             with open(GRAPH_FILE, 'wb') as f:
@@ -368,7 +331,6 @@ class KnowledgeGraph:
             logger.info(f"📊 Граф знаний сохранён: {GRAPH_FILE}")
         except Exception as e:
             logger.error(f"❌ Ошибка сохранения графа: {e}")
-
     def load_graph(self):
         if not os.path.exists(GRAPH_FILE):
             return
@@ -380,83 +342,64 @@ class KnowledgeGraph:
             logger.info(f"📊 Граф знаний загружен из {GRAPH_FILE}")
         except Exception as e:
             logger.error(f"❌ Ошибка загрузки графа: {e}")
-
 # === AutonomousLearner — автономное обучение во сне ===
 class AutonomousLearner:
     def __init__(self, sin_instance):
         self.sin = sin_instance
         self.is_learning = False
         self.learning_thread = None
-        
     def start_autonomous_learning(self, duration_minutes: int = 30):
         if self.is_learning:
             return "Обучение уже запущено"
-            
         self.is_learning = True
         logger.info(f"🤖 Запуск автономного обучения на {duration_minutes} минут")
-        
         def learning_loop():
             end_time = time.time() + duration_minutes * 60
             cycle = 0
-            
             while time.time() < end_time and self.is_learning:
                 cycle += 1
                 logger.info(f"🔄 Автономный цикл {cycle}")
-                
                 # 1. Генерация гипотез
                 self.generate_hypotheses()
-                
                 # 2. Укрепление связей
                 self.strengthen_connections()
-                
                 # 3. Обнаружение конфликтов
                 self.detect_conflicts()
-                
                 # 4. Автосохранение каждые 30 минут
                 if cycle % 6 == 0:  # каждые 30 минут при 5-минутных циклах
                     self.sin.save_state()
                     self.sin.knowledge_graph.save_graph()
-                    
                 time.sleep(300)  # 5 минут на цикл
-                
             self.is_learning = False
             logger.info("✅ Автономное обучение завершено")
-            
         self.learning_thread = threading.Thread(target=learning_loop, daemon=True)
         self.learning_thread.start()
         return f"Обучение запущено на {duration_minutes} минут"
-        
     def stop_learning(self):
         self.is_learning = False
         if self.learning_thread:
             self.learning_thread.join(timeout=1)
         logger.info("🛑 Автономное обучение остановлено")
-        
     def generate_hypotheses(self):
         if len(self.sin.memory) < 2:
             return
-            
         # Выбираем два случайных элемента памяти
         mem1, mem2 = random.sample(self.sin.memory, 2)
         vec1, vec2 = mem1.to_np_vector(), mem2.to_np_vector()
-        
         # Векторная арифметика: a - b + c = ?
         hypothesis_vec = vec1 - vec2 + np.random.normal(0, 0.05, vec1.shape)
         hypothesis_vec /= (np.linalg.norm(hypothesis_vec) + 1e-8)
-        
         # Поиск ближайшего слова
         results = self.sin.vector_index.search_similar(hypothesis_vec, k=1)
         if results and results[0][0] > 0.5:
             target_text = self.sin.memory[results[0][1]].text
             question = f"Я заметил связь между '{mem1.text}' и '{mem2.text}'. Возможно, '{target_text}' — это результат этой связи?"
             self.sin.pending_questions.append(question)
-            
     def strengthen_connections(self):
         # Увеличиваем коэренцию часто используемых связей
         for mem in self.sin.memory:
             if mem.access_count > 5:
                 mem.coherence_score = min(1.0, mem.coherence_score + 0.1)
-                
     def detect_conflicts(self):
         # Поиск противоречивых утверждений
         for i, mem1 in enumerate(self.sin.memory):
@@ -466,32 +409,25 @@ class AutonomousLearner:
                     conflict = f"Обнаружено противоречие: '{mem1.text}' vs '{mem2.text}' (схожесть: {sim:.2f})"
                     logger.warning(conflict)
                     self.sin.pending_questions.append(f"Я нашёл противоречие: {mem1.text} и {mem2.text}. Какое утверждение верно?")
-
 # === MultiAgentSystem — система мультиагентов ===
 class MultiAgentSystem:
     def __init__(self, base_sin):
         self.agents = {"main": base_sin}
         self.communication_history = deque(maxlen=100)
-        
     def create_agent(self, name: str):
         new_sin = Sin(persist_file=os.path.join(BASE_PATH, f"sin_state_{name}.pkl"))
         self.agents[name] = new_sin
         logger.info(f"🤖 Создан агент: {name}")
         return new_sin
-        
     def communicate(self, sender: str, receiver: str, message: str) -> str:
         if sender not in self.agents or receiver not in self.agents:
             return "Агент не найден"
-            
         sender_agent = self.agents[sender]
         receiver_agent = self.agents[receiver]
-        
         # Отправитель учится
         sender_agent.learn(message)
-        
         # Получатель отвечает
         response = receiver_agent.respond(message)
-        
         self.communication_history.append({
             "sender": sender,
             "receiver": receiver,
@@ -499,20 +435,15 @@ class MultiAgentSystem:
             "response": response,
             "timestamp": time.time()
         })
-        
         return response
-        
     def debate(self, topic: str, agents: List[str]) -> List[str]:
         if not all(a in self.agents for a in agents):
             return ["Один из агентов не найден"]
-            
         results = []
         for agent in agents:
             response = self.agents[agent].respond(topic)
             results.append(f"{agent}: {response}")
-            
         return results
-
 # === SIN — ОБЪЕДИНЁННАЯ СИСТЕМА ===
 class Sin:
     VERSION = "17.0"
@@ -548,14 +479,12 @@ class Sin:
         self.multi_agent_system = MultiAgentSystem(self)
         self._init_system()
         logger.info(f"🌐 SIN v{self.VERSION} запущен. Узлов: {len(self.nodes)}, Память: {len(self.memory)}")
-
     def _init_system(self):
         if os.path.exists(self.persist_file):
             self._load_state()
             logger.info("💾 Состояние загружено")
         else:
             logger.info("🆕 Создана новая модель")
-
     def _load_state(self):
         try:
             with open(self.persist_file, 'rb') as f:
@@ -576,7 +505,6 @@ class Sin:
             logger.info(f"💾 Состояние загружено из {self.persist_file}")
         except Exception as e:
             logger.error(f"❌ Ошибка загрузки: {e}")
-
     def save_state(self):
         try:
             serializable = {
@@ -602,12 +530,10 @@ class Sin:
             logger.info(f"💾 Сохранено в {self.persist_file}")
         except Exception as e:
             logger.error(f"❌ Ошибка сохранения: {e}")
-
     def _auto_save(self):
         if time.time() - self.last_save_time > SAVE_INTERVAL:
             self.save_state()
             self.last_save_time = time.time()
-
     def tokenize(self, text: str) -> List[str]:
         if len(text) > MAX_TEXT_LENGTH:
             text = text[:MAX_TEXT_LENGTH]
@@ -615,10 +541,8 @@ class Sin:
         for w in words:
             self.word_frequency[w] += 1
         return words
-
     def are_in_phase(self, n1: Resonator, n2: Resonator, tol=0.5) -> bool:
         return abs((n1.phase - n2.phase) % (2 * np.pi)) < tol
-
     def assign_to_phase_cluster(self, node: Resonator) -> int:
         for cid, cluster in enumerate(self.phase_clusters):
             if cluster and cluster[0] in self.nodes:
@@ -628,7 +552,6 @@ class Sin:
         new_cl = [node.id]
         self.phase_clusters.append(new_cl)
         return len(self.phase_clusters) - 1
-
     def conflict_detector(self, new_vec: np.ndarray, threshold=0.8) -> List[str]:
         conflicting = []
         results = self.vector_index.search_similar(new_vec, k=10)
@@ -636,7 +559,6 @@ class Sin:
             if sim > threshold and "не " in self.memory[idx].text:
                 conflicting.append(self.memory[idx].text)
         return conflicting
-
     def calculate_understanding_score(self, text: str) -> float:
         words = self.tokenize(text)
         if not words:
@@ -654,16 +576,13 @@ class Sin:
             context_relevance += sim * decay
         context_relevance /= max(len(self.dialog_context.last_messages), 1)
         return 0.6 * top_sim + 0.4 * context_relevance
-
     def learn(self, text: str, user_feedback: str = "neutral") -> Dict:
         understanding = self.calculate_understanding_score(text)
         words = self.tokenize(text)
         if not words:
             return {"status": "empty", "response": "Пусто", "understanding": understanding}
-
         total_vec = np.zeros(self.embedder.dim)
         reward = 0.0
-
         for word in words:
             vec = self.embedder.get_vector(word)
             total_vec += vec
@@ -687,11 +606,9 @@ class Sin:
                 coherence_score=1.0 - len(conflicts) * 0.3
             )
             self.hippocampus.add(mem_item)
-            
             # Добавляем в граф знаний
             if len(conflicts) == 0:
                 self.knowledge_graph.add_concept(word, vec)
-
         total_vec /= len(words)
         phrase_item = MemoryItem.from_np(
             vector=total_vec,
@@ -702,62 +619,56 @@ class Sin:
         )
         self.hippocampus.add(phrase_item)
         self.hippocampus.consolidate(self.memory, self.vector_index)
-
         if user_feedback == "good":
             reward = RL_REWARD_CORRECT
             self.emotions["certainty"].intensity = min(1.0, self.emotions["certainty"].intensity + 0.1)
         elif user_feedback == "bad":
             reward = RL_PENALTY_WRONG
             self.emotions["certainty"].intensity = max(0.0, self.emotions["certainty"].intensity - 0.2)
-            
         self.emotions["curiosity"].intensity = min(1.0, self.emotions["curiosity"].intensity + 0.05)
         self.params.update(reward)
         self.rl_policy["ask_question"] = 0.5 + 0.5 * (reward / 2.0) if reward != 0 else 0.7
-
         self._auto_save()
-
         status = "understood" if understanding > UNDERSTANDING_THRESHOLD else "partially"
         return {
             "status": status,
             "response": f"{'🧠' if understanding > 0.7 else '🤔'} Понял: '{text}' (понимание: {understanding:.2f})",
             "understanding": understanding
         }
-
     def respond(self, text: str) -> str:
         if self.sleeping:
             return "Zzz... Sin спит."
         understanding = self.calculate_understanding_score(text)
         if understanding < 0.3:
             return "❓ Совсем новое. Расскажи подробнее."
-
         words = self.tokenize(text)
         if not words:
             return "Я слушаю..."
         query_vec = np.mean([self.embedder.get_vector(w) for w in words], axis=0)
         results = self.vector_index.search_similar(query_vec, k=10)
-
         # Проверка эмоций для определения поведения
         curiosity = self.emotions["curiosity"].intensity
         if self.pending_questions and random.random() < self.rl_policy["ask_question"] * curiosity:
             return f"❓ {self.pending_questions.pop(0)}"
-
         if results and results[0][0] > 0.6:
             best_text = self.memory[results[0][1]].text
             return f"🧠 Это напоминает: '{best_text}' (схожесть: {results[0][0]:.2f})"
         return f"🤔 Частично понимаю. Ещё не до конца ясно."
-
     def generate_response(self, seed: str, length=5) -> str:
+        # Генерация последовательности слов на основе эмбеддингов
         base_sequence = self.embedder.generate_sequence(seed, length=length)
+        
+        # Улучшение сгенерированной последовательности, используя память
         enhanced = []
         for word in base_sequence:
             vec = self.embedder.get_vector(word)
             results = self.vector_index.search_similar(vec, k=5)
             if results and results[0][0] > 0.5:
+                # Берем наиболее похожий текст из памяти
                 enhanced.append(self.memory[results[0][1]].text)
             else:
                 enhanced.append(word)
         return " ".join(enhanced[:length])
-
     def dream_cycle(self):
         logger.info("💭 Sin видит сны...")
         for _ in range(5):
@@ -780,18 +691,14 @@ class Sin:
         self.sleeping = False
         self.cognitive_load *= 0.5
         logger.info("✨ Sin проснулся. Память укреплена.")
-
     def start_sleep(self):
         self.sleeping = True
         logger.info("🌙 Sin засыпает...")
         threading.Thread(target=self.dream_cycle, daemon=True).start()
-
     def start_autonomous_learning(self, duration: int = 30):
         return self.autonomous_learner.start_autonomous_learning(duration)
-
     def stop_autonomous_learning(self):
         self.autonomous_learner.stop_learning()
-
     def status(self):
         understanding_avg = np.mean([self.calculate_understanding_score(m.text) for m in self.memory[-10:]] or [0.0])
         return f"""
@@ -805,13 +712,11 @@ class Sin:
         Среднее понимание: {understanding_avg:.2f}
         CPU: {psutil.cpu_percent():.1f}%, RAM: {psutil.virtual_memory().percent:.1f}%
         """
-
     def show_memory(self, k=5):
         top = sorted(self.memory, key=lambda x: x.timestamp, reverse=True)[:k]
         print("\n🧠 Последние воспоминания:")
         for m in top:
             print(f"  [{m.level}] '{m.text}'")
-
     def visualize_resonance(self):
         if not self.activation_history:
             print("Нет данных для визуализации.")
@@ -825,7 +730,6 @@ class Sin:
         plt.ylabel("Нейроны")
         plt.tight_layout()
         plt.show()
-
     def clear_memory(self):
         self.memory = []
         self.nodes = {}
@@ -834,13 +738,11 @@ class Sin:
         self.vector_index = VectorIndex(dim=self.embedder.dim)
         logger.info("🧠 Память полностью очищена.")
         print("🧠 Память очищена.")
-
     def add_goal(self, description: str, priority: float = 0.5):
         goal = Goal(description=description, priority=priority, steps=[])
         self.goals.append(goal)
         logger.info(f"🎯 Добавлена цель: {description}")
         return f"Цель добавлена: {description}"
-
     def show_goals(self):
         if not self.goals:
             return "Нет активных целей"
@@ -849,42 +751,35 @@ class Sin:
             status = "✅" if goal.achieved else "⏳"
             result += f"  {status} {goal.description} (приоритет: {goal.priority:.2f})\n"
         return result
-
     def create_agent(self, name: str):
         return self.multi_agent_system.create_agent(name)
-
     def communicate_agents(self, sender: str, receiver: str, message: str):
         return self.multi_agent_system.communicate(sender, receiver, message)
-
     def show_knowledge_graph(self):
         nodes = list(self.knowledge_graph.graph.nodes())
         edges = list(self.knowledge_graph.graph.edges())
         return f"📊 Граф знаний: {len(nodes)} понятий, {len(edges)} связей"
-
 # === API ===
 app = FastAPI(title=f"SIN API v{Sin.VERSION}")
 sin = Sin()
-
 @app.post("/learn")
-async def api_learn( dict):
+async def api_learn(data: dict):
     try:
         text = data.get("text", "")
         result = sin.learn(text)
         return JSONResponse(result)
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
-
 @app.post("/respond")
-async def api_respond( dict):
+async def api_respond(data: dict):
     try:
         text = data.get("text", "")
         response = sin.respond(text)
         return {"response": response}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
-
 @app.post("/generate")
-async def api_generate( dict):
+async def api_generate(data: dict):
     try:
         seed = data.get("seed", "мысль")
         length = data.get("length", 5)
@@ -892,7 +787,6 @@ async def api_generate( dict):
         return {"generated": text}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
-
 @app.get("/status")
 async def api_status():
     return {
@@ -904,40 +798,33 @@ async def api_status():
         "cognitive_load": sin.cognitive_load,
         "questions": len(sin.pending_questions)
     }
-
 @app.post("/autonomous_learn")
 async def api_autonomous_learn(data: dict):
     duration = data.get("duration", 30)
     result = sin.start_autonomous_learning(duration)
     return {"result": result}
-
 @app.post("/stop_learning")
 async def api_stop_learning():
     sin.stop_autonomous_learning()
     return {"result": "Обучение остановлено"}
-
 @app.post("/add_goal")
 async def api_add_goal(data: dict):
     description = data.get("description", "")
     priority = data.get("priority", 0.5)
     result = sin.add_goal(description, priority)
     return {"result": result}
-
 # === TELEGRAM-БОТ ===
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(f"Привет! Я SIN v{Sin.VERSION}. Давай пообщаемся!")
-
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_text = update.message.text
     response = sin.respond(user_text)
     await update.message.reply_text(f"💬 Sin: {response}")
-
 def run_telegram():
     app_bot = Application.builder().token(TELEGRAM_TOKEN).build()
     app_bot.add_handler(CommandHandler("start", start))
     app_bot.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
     app_bot.run_polling()
-
 # === КОНСОЛЬНЫЙ ИНТЕРФЕЙС ===
 def run_cli():
     print(sin.status())
@@ -1021,7 +908,6 @@ def run_cli():
         except KeyboardInterrupt:
             break
     sin.save_state()
-
 # === ЗАПУСК ===
 if __name__ == "__main__":
     import argparse
