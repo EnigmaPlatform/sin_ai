@@ -24,7 +24,7 @@ from tqdm import tqdm
 import psutil
 import pymorphy3
 import networkx as nx
-from typing import List, Dict, Optional, Tuple, Any
+from typing import List, Dict, Optional, Tuple, Any, Set
 # === НАСТРОЙКИ ПУТЕЙ ===
 BASE_PATH = r"C:\Users\alex\Downloads"
 EMBEDDING_PATH = os.path.join(BASE_PATH, "cc.ru.300.vec")
@@ -69,6 +69,7 @@ def normalize_word(word: str) -> str:
         return ""
     parsed = morph.parse(word_clean)
     return parsed[0].normal_form if parsed else word_clean
+
 # === ФУНКЦИИ ДЛЯ СКАЧИВАНИЯ И РАСПАКОВКИ ===
 def calculate_md5(filepath):
     hash_md5 = hashlib.md5()
@@ -203,15 +204,11 @@ class SemanticEpisode:
     coherence_score: float = 1.0
     prediction_error: float = 0.0  # Ошибка предсказания
     def __post_init__(self):
-        if self.vector is None and self.slots:
-            # Простая агрегация векторов слотов для формирования вектора эпизода
-            # В реальной системе это может быть более сложная модель
-            embedder = RuEmbedder() # Предполагаем доступ к embedder
-            slot_vectors = [embedder.get_vector(v) for v in self.slots.values() if v]
-            if slot_vectors:
-                self.vector = np.mean(slot_vectors, axis=0)
-            else:
-                self.vector = np.zeros(300) # Default size
+        # Убедимся, что вектор всегда инициализирован
+        if isinstance(self.vector, list):
+            self.vector = np.array(self.vector)
+        elif self.vector is None:
+            self.vector = np.zeros(300) # Default size
 
 @dataclass
 class DialogContext:
@@ -224,6 +221,14 @@ class DialogContext:
             self.last_messages = []
         if self.timestamps is None:
             self.timestamps = []
+    def add_message(self, message: str):
+        """Добавляет сообщение в контекст."""
+        self.last_messages.append(message)
+        self.timestamps.append(time.time())
+        if len(self.last_messages) > MAX_CONTEXT_LENGTH:
+            self.last_messages.pop(0)
+            self.timestamps.pop(0)
+
 @dataclass
 class Goal:
     description: str
@@ -287,6 +292,7 @@ class Hippocampus:
         return 1.0 - sim # Ошибка = 1 - схожесть
     def consolidate(self, long_term_memory: list, vector_index, prediction_error: float = 0.0):
         """Консолидирует память, учитывая ошибку предсказания."""
+        consolidated_count = 0
         for item in self.working_memory:
             # Увеличиваем коэренцию, если предсказание было точным
             if prediction_error < 0.3: # Порог "точного" предсказания
@@ -295,6 +301,8 @@ class Hippocampus:
             if item.coherence_score > self.consolidation_threshold or prediction_error < 0.5:
                 long_term_memory.append(item)
                 vector_index.add_vector(item.to_np_vector(), len(long_term_memory) - 1)
+                consolidated_count += 1
+        logger.debug(f"🧠 Консолидировано {consolidated_count} элементов из {len(self.working_memory)} в рабочей памяти.")
         self.working_memory.clear()
         self.predicted_items.clear() # Очищаем после консолидации
 # === VectorIndex — быстрый поиск (FAISS) ===
@@ -330,6 +338,7 @@ class AdaptiveParams:
         avg = np.mean(self.reward_history) if self.reward_history else 0.0
         self.forget_threshold = 0.1 + 0.1 * avg
         self.dissonance_threshold = 0.4 + 0.2 * avg
+        logger.debug(f"⚙️ Параметры адаптированы. Forget: {self.forget_threshold:.3f}, Dissonance: {self.dissonance_threshold:.3f}, Avg Reward: {avg:.3f}")
 # === KnowledgeGraph — граф знаний ===
 class KnowledgeGraph:
     def __init__(self):
@@ -357,6 +366,7 @@ class KnowledgeGraph:
         for rel_type, targets in relations.items():
             for target in targets:
                 self.graph.add_edge(name, target, relation=rel_type)
+        logger.debug(f"📊 Добавлен концепт '{name}' в граф знаний.")
 
     def find_path(self, source: str, target: str) -> List[str]:
         try:
@@ -411,42 +421,66 @@ class AutonomousLearner:
         self.sin = sin_instance
         self.is_learning = False
         self.learning_thread = None
+        self.log = [] # Локальный лог для этого экземпляра
+    def log_event(self, message: str):
+        """Добавляет событие в лог автономного обучения."""
+        timestamp = time.strftime("%Y-%m-%d %H:%M:%S")
+        log_entry = f"[{timestamp}] {message}"
+        self.log.append(log_entry)
+        logger.info(f"🤖 АВТООБУЧЕНИЕ: {message}")
+
     def start_autonomous_learning(self, duration_minutes: int = 30):
         if self.is_learning:
             return "Обучение уже запущено"
         self.is_learning = True
-        logger.info(f"🤖 Запуск автономного обучения на {duration_minutes} минут")
+        self.log = [] # Очищаем лог при новом запуске
+        self.log_event(f"Запуск автономного обучения на {duration_minutes} минут")
         def learning_loop():
             end_time = time.time() + duration_minutes * 60
             cycle = 0
             while time.time() < end_time and self.is_learning:
                 cycle += 1
-                logger.info(f"🔄 Автономный цикл {cycle}")
+                self.log_event(f"🔄 Автономный цикл {cycle}")
                 # 1. Генерация гипотез
+                self.log_event("Шаг 1: Генерация гипотез...")
                 self.generate_hypotheses()
                 # 2. Укрепление связей
+                self.log_event("Шаг 2: Укрепление связей...")
                 self.strengthen_connections()
                 # 3. Обнаружение конфликтов
+                self.log_event("Шаг 3: Обнаружение конфликтов...")
                 self.detect_conflicts()
                 # 4. Формирование и тестирование гипотез
+                self.log_event("Шаг 4: Формирование и тестирование гипотез...")
                 self.form_and_test_hypotheses()
                 # 5. Автосохранение каждые 30 минут
                 if cycle % 6 == 0:  # каждые 30 минут при 5-минутных циклах
+                    self.log_event("Шаг 5: Автосохранение...")
                     self.sin.save_state()
                     self.sin.knowledge_graph.save_graph()
+                # Пауза между циклами
+                self.log_event(f"Завершён цикл {cycle}. Пауза на 5 минут.")
                 time.sleep(300)  # 5 минут на цикл
             self.is_learning = False
-            logger.info("✅ Автономное обучение завершено")
+            self.log_event("✅ Автономное обучение завершено")
+            logger.info("🤖 АВТООБУЧЕНИЕ: Все циклы завершены.")
         self.learning_thread = threading.Thread(target=learning_loop, daemon=True)
         self.learning_thread.start()
         return f"Обучение запущено на {duration_minutes} минут"
+    
     def stop_learning(self):
-        self.is_learning = False
-        if self.learning_thread:
-            self.learning_thread.join(timeout=1)
-        logger.info("🛑 Автономное обучение остановлено")
+        if self.is_learning:
+            self.log_event("🛑 Получен сигнал остановки.")
+            self.is_learning = False
+            if self.learning_thread:
+                self.learning_thread.join(timeout=1)
+            self.log_event("🛑 Автономное обучение остановлено")
+        else:
+            logger.info("🤖 АВТООБУЧЕНИЕ: Попытка остановки, но обучение не активно.")
+
     def generate_hypotheses(self):
         if len(self.sin.memory) < 2:
+            self.log_event("Недостаточно памяти для генерации гипотез.")
             return
         # Выбираем два случайных элемента памяти
         mem1, mem2 = random.sample(self.sin.memory, 2)
@@ -460,25 +494,39 @@ class AutonomousLearner:
             target_text = self.sin.memory[results[0][1]].text
             question = f"Я заметил связь между '{mem1.text}' и '{mem2.text}'. Возможно, '{target_text}' — это результат этой связи?"
             self.sin.pending_questions.append(question)
+            self.log_event(f"🧠 Сгенерирована гипотеза: {question}")
+        else:
+            self.log_event("🤔 Не удалось сгенерировать осмысленную гипотезу.")
+
     def strengthen_connections(self):
+        strengthened_count = 0
         # Увеличиваем коэренцию часто используемых связей
         for mem in self.sin.memory:
             if mem.access_count > 5:
+                old_score = mem.coherence_score
                 mem.coherence_score = min(1.0, mem.coherence_score + 0.1)
+                if mem.coherence_score > old_score:
+                    strengthened_count += 1
+        self.log_event(f"💪 Укреплено {strengthened_count} связей в памяти.")
+
     def detect_conflicts(self):
+        conflicts_found = 0
         # Поиск противоречивых утверждений
         for i, mem1 in enumerate(self.sin.memory):
             for j, mem2 in enumerate(self.sin.memory[i+1:], i+1):
                 sim = cosine_similarity([mem1.to_np_vector()], [mem2.to_np_vector()])[0][0]
                 if sim > 0.8 and ("не " in mem1.text) != ("не " in mem2.text):
                     conflict = f"Обнаружено противоречие: '{mem1.text}' vs '{mem2.text}' (схожесть: {sim:.2f})"
-                    logger.warning(conflict)
+                    logger.warning(f"🤖 АВТООБУЧЕНИЕ: {conflict}")
                     self.sin.pending_questions.append(f"Я нашёл противоречие: {mem1.text} и {mem2.text}. Какое утверждение верно?")
-    
+                    conflicts_found += 1
+        self.log_event(f"🔍 Обнаружено {conflicts_found} конфликтов.")
+
     def form_and_test_hypotheses(self):
         """Формирует и тестирует гипотезы на основе графа знаний."""
         concepts = list(self.sin.knowledge_graph.graph.nodes())
         if len(concepts) < 3:
+            self.log_event("Недостаточно концептов в графе для формирования гипотез.")
             return
         
         # Выбираем случайный концепт как "причину"
@@ -486,6 +534,7 @@ class AutonomousLearner:
         neighbors = list(self.sin.knowledge_graph.graph.neighbors(cause))
         
         if not neighbors:
+            self.log_event(f"Концепт '{cause}' не имеет соседей для формирования гипотезы.")
             return # Нет соседей для формирования гипотезы
         
         # Выбираем эффект
@@ -494,6 +543,7 @@ class AutonomousLearner:
         # Ищем третий концепт, связанный с "причиной", но не с "эффектом"
         other_concepts = [c for c in concepts if c != cause and c != effect and not self.sin.knowledge_graph.graph.has_edge(cause, c)]
         if not other_concepts:
+            self.log_event(f"Не найдено других концептов для сравнения с '{cause}' -> '{effect}'.")
             return
         
         test_concept = random.choice(other_concepts)
@@ -501,7 +551,11 @@ class AutonomousLearner:
         # Формируем гипотезу: "Если cause, то effect. Это похоже на test_concept?"
         hypothesis = f"Если '{cause}' приводит к '{effect}', то это похоже на '{test_concept}'?"
         self.sin.pending_questions.append(hypothesis)
-        logger.info(f"🧠 Сформирована гипотеза: {hypothesis}")
+        self.log_event(f"🧠 Сформирована гипотеза: {hypothesis}")
+
+    def get_log(self) -> List[str]:
+        """Возвращает лог автономного обучения."""
+        return self.log.copy()
 
 # === MultiAgentSystem — система мультиагентов ===
 class MultiAgentSystem:
@@ -540,7 +594,7 @@ class MultiAgentSystem:
         return results
 # === SIN — ОБЪЕДИНЁННАЯ СИСТЕМА ===
 class Sin:
-    VERSION = "17.0"
+    VERSION = "18.1" # Обновляем версию
     def __init__(self, persist_file: str = PERSIST_FILE):
         self.embedder = RuEmbedder()
         self.nodes = {}
@@ -689,6 +743,7 @@ class Sin:
         context_relevance /= max(len(self.dialog_context.last_messages), 1)
         return 0.6 * top_sim + 0.4 * context_relevance
     def learn(self, text: str, user_feedback: str = "neutral") -> Dict:
+        self.dialog_context.add_message(text) # Добавляем в контекст
         understanding = self.calculate_understanding_score(text)
         words = self.tokenize(text)
         if not words:
@@ -712,10 +767,12 @@ class Sin:
         actual_item = MemoryItem.from_np(actual_vec, actual_last_word, level=0, timestamp=time.time())
         
         prediction_error = self.hippocampus.get_prediction_error(actual_item)
+        logger.debug(f"📈 Ошибка предсказания для '{actual_last_word}': {prediction_error:.3f}")
         # --- Конец предсказательного кодирования ---
         
         total_vec = np.zeros(self.embedder.dim)
         reward = 0.0
+        items_to_add = []
         for word in words:
             vec = self.embedder.get_vector(word)
             total_vec += vec
@@ -738,7 +795,7 @@ class Sin:
                 reward_score=reward,
                 coherence_score=1.0 - len(conflicts) * 0.3
             )
-            self.hippocampus.add(mem_item)
+            items_to_add.append(mem_item)
             # Добавляем в граф знаний
             if len(conflicts) == 0:
                 # Простое добавление. В будущем можно добавлять отношения на основе контекста.
@@ -751,23 +808,33 @@ class Sin:
             timestamp=time.time(),
             reward_score=reward
         )
-        self.hippocampus.add(phrase_item)
+        items_to_add.append(phrase_item)
+        
+        # Добавляем все элементы в hippocampus
+        for item in items_to_add:
+            self.hippocampus.add(item)
+        
         # --- Консолидация с учетом ошибки предсказания ---
         self.hippocampus.consolidate(self.memory, self.vector_index, prediction_error)
         # --- RL и эмоции ---
         if user_feedback == "good":
             reward = RL_REWARD_CORRECT
             self.emotions["certainty"].intensity = min(1.0, self.emotions["certainty"].intensity + 0.1)
+            logger.info("👍 Получена положительная оценка.")
         elif user_feedback == "bad":
             reward = RL_PENALTY_WRONG
             self.emotions["certainty"].intensity = max(0.0, self.emotions["certainty"].intensity - 0.2)
+            logger.info("👎 Получена отрицательная оценка.")
         # Любопытство усиливается при новой информации или высокой ошибке предсказания
         curiosity_boost = 0.05 + 0.1 * prediction_error
         self.emotions["curiosity"].intensity = min(1.0, self.emotions["curiosity"].intensity + curiosity_boost)
+        logger.debug(f"🔥 Эмоция curiosity обновлена до {self.emotions['curiosity'].intensity:.3f} (boost: {curiosity_boost:.3f})")
         
         self.params.update(reward)
         # Политика RL теперь учитывает эмоции
+        old_ask_prob = self.rl_policy["ask_question"]
         self.rl_policy["ask_question"] = 0.3 + 0.4 * (reward / 2.0 if reward != 0 else 0.7) + 0.3 * self.emotions["curiosity"].intensity
+        logger.debug(f"⚖️ Политика RL обновлена. Вероятность вопроса: {old_ask_prob:.3f} -> {self.rl_policy['ask_question']:.3f}")
         self._auto_save()
         status = "understood" if understanding > UNDERSTANDING_THRESHOLD else "partially"
         return {
@@ -776,41 +843,115 @@ class Sin:
             "understanding": understanding,
             "prediction_error": prediction_error
         }
+    
+    def _extract_concepts_from_text(self, text: str) -> Set[str]:
+        """Извлекает потенциальные концепты из текста."""
+        words = self.tokenize(text)
+        concepts = set()
+        for word in words:
+            if word in self.knowledge_graph.concepts:
+                concepts.add(word)
+        logger.debug(f"🧩 Извлечены концепты из '{text}': {concepts}")
+        return concepts
+
+    def _generate_response_from_knowledge(self, concepts: Set[str], context_concepts: Set[str]) -> Optional[str]:
+        """Генерирует ответ на основе графа знаний."""
+        if not concepts:
+            return None
+            
+        response_parts = []
+        
+        # 1. Прямые связи
+        for concept in concepts:
+            relations = self.knowledge_graph.get_relations(concept)
+            for rel_type, targets in relations.items():
+                # Фильтруем по релевантности контекста
+                relevant_targets = [t for t in targets if t in context_concepts or not context_concepts]
+                if relevant_targets:
+                    target = random.choice(relevant_targets)
+                    response_parts.append(f"{concept} {rel_type.replace('_', ' ')} {target}.")
+        
+        # 2. Соседи
+        for concept in list(concepts)[:3]: # Ограничиваем для краткости
+            neighbors = self.knowledge_graph.get_neighbors(concept, depth=1)
+            relevant_neighbors = [n for n in neighbors if n in context_concepts or not context_concepts]
+            if relevant_neighbors:
+                neighbor = random.choice(relevant_neighbors)
+                response_parts.append(f"Я также знаю о {neighbor}, связанном с {concept}.")
+        
+        if response_parts:
+            # Случайно перемешиваем и объединяем
+            random.shuffle(response_parts)
+            final_response = " ".join(response_parts[:2]) # Возвращаем максимум 2 части
+            logger.debug(f"🗣️ Сгенерирован ответ на основе знаний: {final_response}")
+            return final_response
+        return None
+
     def respond(self, text: str) -> str:
         if self.sleeping:
             return "Zzz... Sin спит."
+        self.dialog_context.add_message(text) # Добавляем запрос в контекст
         understanding = self.calculate_understanding_score(text)
-        if understanding < 0.3:
+        logger.info(f"💬 Получен запрос: '{text}' (понимание: {understanding:.3f})")
+        if understanding < 0.2:
+            logger.warning("❓ Запрос не понят. Запрашиваю уточнение.")
             return "❓ Совсем новое. Расскажи подробнее."
         words = self.tokenize(text)
         if not words:
+            logger.info("🗣️ Пустой запрос.")
             return "Я слушаю..."
         query_vec = np.mean([self.embedder.get_vector(w) for w in words], axis=0)
+        
+        # --- Новая логика генерации ---
+        # 1. Извлекаем концепты из запроса
+        query_concepts = self._extract_concepts_from_text(text)
+        
+        # 2. Извлекаем концепты из контекста
+        context_concepts = set()
+        for ctx_msg in self.dialog_context.last_messages[-2:]: # последние 2 сообщения контекста
+             context_concepts.update(self._extract_concepts_from_text(ctx_msg))
+        
+        # 3. Пытаемся сгенерировать ответ на основе знаний
+        knowledge_response = self._generate_response_from_knowledge(query_concepts, context_concepts)
+        if knowledge_response and random.random() < 0.7: # 70% шанс использовать знание
+             logger.info("🧠 Ответ сгенерирован на основе графа знаний.")
+             return f"🧠 {knowledge_response}"
+        
+        # --- Старая логика (резерв) ---
         results = self.vector_index.search_similar(query_vec, k=10)
         # Проверка эмоций для определения поведения
         curiosity = self.emotions["curiosity"].intensity
         certainty = self.emotions["certainty"].intensity
+        logger.debug(f"🎭 Эмоции: curiosity={curiosity:.3f}, certainty={certainty:.3f}")
         
         # Генерируем вопрос, если есть нерешенные вопросы или высокое любопытство
         if self.pending_questions and (random.random() < self.rl_policy["ask_question"] * curiosity or curiosity > 0.8):
-            return f"❓ {self.pending_questions.pop(0)}"
+            question = self.pending_questions.pop(0)
+            logger.info(f"❓ Задаю вопрос: {question}")
+            return f"❓ {question}"
         
         # Отвечаем на основе памяти
         if results and results[0][0] > 0.6:
             best_text = self.memory[results[0][1]].text
+            similarity = results[0][0]
             # Если уверенность высока, даем прямой ответ
             if certainty > 0.7:
-                return f"🧠 Это напоминает: '{best_text}' (схожесть: {results[0][0]:.2f})"
+                logger.info(f"✅ Ответ найден в памяти (высокая уверенность): '{best_text}' (схожесть: {similarity:.3f})")
+                return f"🧠 Это напоминает: '{best_text}' (схожесть: {similarity:.2f})"
             else:
                 # Если неуверен, можем сформулировать сомнение
-                return f"🤔 Возможно, это связано с: '{best_text}' (схожесть: {results[0][0]:.2f})"
+                logger.info(f"🤔 Ответ найден в памяти (низкая уверенность): '{best_text}' (схожесть: {similarity:.3f})")
+                return f"🤔 Возможно, это связано с: '{best_text}' (схожесть: {similarity:.2f})"
         
         # Если ничего не найдено, но есть любопытство, предлагаем исследовать
         if curiosity > 0.6:
+            logger.info("🔍 Ничего не найдено, но высокое любопытство. Предлагаю исследовать.")
             return f"🤔 Интересно... Расскажи больше об этом."
             
+        logger.info("🤷‍♂️ Ответ не найден. Возвращаю общий ответ.")
         return f"🤔 Частично понимаю. Ещё не до конца ясно."
     def generate_response(self, seed: str, length=5) -> str:
+        logger.info(f"🔮 Генерация текста с затравкой '{seed}', длина {length}")
         # Генерация последовательности слов на основе эмбеддингов
         base_sequence = self.embedder.generate_sequence(seed, length=length)
         # Улучшение сгенерированной последовательности, используя память
@@ -823,9 +964,12 @@ class Sin:
                 enhanced.append(self.memory[results[0][1]].text)
             else:
                 enhanced.append(word)
-        return " ".join(enhanced[:length])
+        final_text = " ".join(enhanced[:length])
+        logger.info(f"🔮 Сгенерирован текст: '{final_text}'")
+        return final_text
     def dream_cycle(self):
         logger.info("💭 Sin видит сны...")
+        dreamed_count = 0
         for _ in range(5):
             if not self.memory:
                 continue
@@ -841,7 +985,9 @@ class Sin:
                 timestamp=time.time()
             )
             self.hippocampus.add(dream_item)
+            dreamed_count += 1
             time.sleep(0.3)
+        logger.info(f"💭 Сгенерировано {dreamed_count} сонных воспоминаний.")
         self.hippocampus.consolidate(self.memory, self.vector_index)
         self.sleeping = False
         self.cognitive_load *= 0.5
@@ -854,6 +1000,9 @@ class Sin:
         return self.autonomous_learner.start_autonomous_learning(duration)
     def stop_autonomous_learning(self):
         self.autonomous_learner.stop_learning()
+    def get_autonomous_learning_log(self) -> List[str]:
+        """Получает лог автономного обучения."""
+        return self.autonomous_learner.get_log()
     def status(self):
         understanding_avg = np.mean([self.calculate_understanding_score(m.text) for m in self.memory[-10:]] or [0.0])
         return f"""
@@ -970,6 +1119,10 @@ async def api_autonomous_learn(data: dict):
 async def api_stop_learning():
     sin.stop_autonomous_learning()
     return {"result": "Обучение остановлено"}
+@app.get("/autonomous_learn_log")
+async def api_autonomous_learn_log():
+    log = sin.get_autonomous_learning_log()
+    return {"log": log}
 @app.post("/add_goal")
 async def api_add_goal(data: dict):
     description = data.get("description", "")
@@ -1007,6 +1160,7 @@ def run_cli():
   !goals — показать цели
   !graph — показать граф знаний
   !agent <имя> — создать агента
+  !autolog — показать лог автономного обучения
   !quit — выход
 """)
     while True:
@@ -1063,6 +1217,14 @@ def run_cli():
                 if agent_name:
                     sin.create_agent(agent_name)
                     print(f"🤖 Агент '{agent_name}' создан")
+            elif user_input.lower() == "!autolog":
+                log = sin.get_autonomous_learning_log()
+                if log:
+                    print("\n📝 Лог автономного обучения:")
+                    for entry in log:
+                        print(f"  {entry}")
+                else:
+                    print("📝 Лог автономного обучения пуст.")
             else:
                 learn_result = sin.learn(user_input)
                 print(learn_result["response"])
