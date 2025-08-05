@@ -191,6 +191,28 @@ class MemoryItem:
         )
     def to_np_vector(self) -> np.ndarray:
         return np.array(self.vector)
+
+@dataclass
+class SemanticEpisode:
+    """Семантический эпизод, представляющий событие/ситуацию."""
+    slots: Dict[str, str]  # Роли объектов (AGENT, ACTION, OBJECT, etc.)
+    frame_type: Optional[str]  # Тип фрейма (EATING, TRAVELING, etc.)
+    text: str  # Исходный текст
+    vector: np.ndarray  # Векторное представление всего эпизода
+    timestamp: float
+    coherence_score: float = 1.0
+    prediction_error: float = 0.0  # Ошибка предсказания
+    def __post_init__(self):
+        if self.vector is None and self.slots:
+            # Простая агрегация векторов слотов для формирования вектора эпизода
+            # В реальной системе это может быть более сложная модель
+            embedder = RuEmbedder() # Предполагаем доступ к embedder
+            slot_vectors = [embedder.get_vector(v) for v in self.slots.values() if v]
+            if slot_vectors:
+                self.vector = np.mean(slot_vectors, axis=0)
+            else:
+                self.vector = np.zeros(300) # Default size
+
 @dataclass
 class DialogContext:
     last_messages: List[str] = None
@@ -249,14 +271,32 @@ class Hippocampus:
     def __init__(self, capacity: int = WORKING_MEMORY_SIZE):
         self.working_memory = deque(maxlen=capacity)
         self.consolidation_threshold = 0.7
+        self.predicted_items = [] # Для хранения предсказанных элементов
     def add(self, item: MemoryItem):
         self.working_memory.append(item)
-    def consolidate(self, long_term_memory: list, vector_index):
+    def add_prediction(self, item: MemoryItem):
+        """Добавляет предсказанный элемент."""
+        self.predicted_items.append(item)
+    def get_prediction_error(self, actual_item: MemoryItem) -> float:
+        """Вычисляет ошибку предсказания для последнего элемента."""
+        if not self.predicted_items:
+            return 1.0 # Максимальная ошибка, если ничего не предсказывалось
+        predicted = self.predicted_items[-1]
+        # Простая ошибка на основе косинусного расстояния
+        sim = cosine_similarity([actual_item.to_np_vector()], [predicted.to_np_vector()])[0][0]
+        return 1.0 - sim # Ошибка = 1 - схожесть
+    def consolidate(self, long_term_memory: list, vector_index, prediction_error: float = 0.0):
+        """Консолидирует память, учитывая ошибку предсказания."""
         for item in self.working_memory:
-            if item.coherence_score > self.consolidation_threshold:
+            # Увеличиваем коэренцию, если предсказание было точным
+            if prediction_error < 0.3: # Порог "точного" предсказания
+                item.coherence_score = min(1.0, item.coherence_score + 0.1)
+            # Консолидируем только если коэренция высока или ошибка предсказания мала
+            if item.coherence_score > self.consolidation_threshold or prediction_error < 0.5:
                 long_term_memory.append(item)
                 vector_index.add_vector(item.to_np_vector(), len(long_term_memory) - 1)
         self.working_memory.clear()
+        self.predicted_items.clear() # Очищаем после консолидации
 # === VectorIndex — быстрый поиск (FAISS) ===
 class VectorIndex:
     def __init__(self, dim: int = INDEX_DIM):
@@ -295,17 +335,29 @@ class KnowledgeGraph:
     def __init__(self):
         self.graph = nx.DiGraph()
         self.concepts = {}  # concept_name -> vector
-    def add_concept(self, name: str, vector: np.ndarray, parents: List[str] = None, children: List[str] = None):
+    def add_concept(self, name: str, vector: np.ndarray, parents: List[str] = None, children: List[str] = None, relations: Dict[str, List[str]] = None):
+        """Добавляет концепт с возможными отношениями."""
         if parents is None:
             parents = []
         if children is None:
             children = []
+        if relations is None:
+            relations = {}
+
         self.graph.add_node(name)
         self.concepts[name] = vector
+        
+        # Старые связи
         for parent in parents:
             self.graph.add_edge(parent, name, relation="hypernym")
         for child in children:
             self.graph.add_edge(name, child, relation="hyponym")
+        
+        # Новые типы связей
+        for rel_type, targets in relations.items():
+            for target in targets:
+                self.graph.add_edge(name, target, relation=rel_type)
+
     def find_path(self, source: str, target: str) -> List[str]:
         try:
             return nx.shortest_path(self.graph, source, target)
@@ -321,6 +373,17 @@ class KnowledgeGraph:
             for neighbor in list(neighbors):
                 neighbors.extend(self.get_neighbors(neighbor, depth-1))
         return list(set(neighbors))
+    
+    def get_relations(self, concept: str) -> Dict[str, List[str]]:
+        """Возвращает все отношения для концепта."""
+        if not self.graph.has_node(concept):
+            return {}
+        relations = defaultdict(list)
+        for _, target, data in self.graph.out_edges(concept, data=True):
+            rel_type = data.get('relation', 'unknown')
+            relations[rel_type].append(target)
+        return dict(relations)
+
     def save_graph(self):
         try:
             with open(GRAPH_FILE, 'wb') as f:
@@ -365,7 +428,9 @@ class AutonomousLearner:
                 self.strengthen_connections()
                 # 3. Обнаружение конфликтов
                 self.detect_conflicts()
-                # 4. Автосохранение каждые 30 минут
+                # 4. Формирование и тестирование гипотез
+                self.form_and_test_hypotheses()
+                # 5. Автосохранение каждые 30 минут
                 if cycle % 6 == 0:  # каждые 30 минут при 5-минутных циклах
                     self.sin.save_state()
                     self.sin.knowledge_graph.save_graph()
@@ -409,6 +474,35 @@ class AutonomousLearner:
                     conflict = f"Обнаружено противоречие: '{mem1.text}' vs '{mem2.text}' (схожесть: {sim:.2f})"
                     logger.warning(conflict)
                     self.sin.pending_questions.append(f"Я нашёл противоречие: {mem1.text} и {mem2.text}. Какое утверждение верно?")
+    
+    def form_and_test_hypotheses(self):
+        """Формирует и тестирует гипотезы на основе графа знаний."""
+        concepts = list(self.sin.knowledge_graph.graph.nodes())
+        if len(concepts) < 3:
+            return
+        
+        # Выбираем случайный концепт как "причину"
+        cause = random.choice(concepts)
+        neighbors = list(self.sin.knowledge_graph.graph.neighbors(cause))
+        
+        if not neighbors:
+            return # Нет соседей для формирования гипотезы
+        
+        # Выбираем эффект
+        effect = random.choice(neighbors)
+        
+        # Ищем третий концепт, связанный с "причиной", но не с "эффектом"
+        other_concepts = [c for c in concepts if c != cause and c != effect and not self.sin.knowledge_graph.graph.has_edge(cause, c)]
+        if not other_concepts:
+            return
+        
+        test_concept = random.choice(other_concepts)
+        
+        # Формируем гипотезу: "Если cause, то effect. Это похоже на test_concept?"
+        hypothesis = f"Если '{cause}' приводит к '{effect}', то это похоже на '{test_concept}'?"
+        self.sin.pending_questions.append(hypothesis)
+        logger.info(f"🧠 Сформирована гипотеза: {hypothesis}")
+
 # === MultiAgentSystem — система мультиагентов ===
 class MultiAgentSystem:
     def __init__(self, base_sin):
@@ -541,6 +635,20 @@ class Sin:
         for w in words:
             self.word_frequency[w] += 1
         return words
+    
+    def _predict_next(self, context_words: List[str]) -> np.ndarray:
+        """Предсказывает следующий вектор на основе контекста."""
+        if not context_words:
+            return np.random.normal(0, 0.1, self.embedder.dim)
+        
+        # Простое предсказание: среднее векторов последних слов + небольшой шум
+        context_vectors = [self.embedder.get_vector(w) for w in context_words[-3:]] # последние 3 слова
+        avg_context = np.mean(context_vectors, axis=0)
+        # Добавляем немного шума для вариативности
+        noise = np.random.normal(0, 0.05, avg_context.shape)
+        predicted_vec = avg_context + noise
+        return predicted_vec / (np.linalg.norm(predicted_vec) + 1e-8)
+
     def are_in_phase(self, n1: Resonator, n2: Resonator, tol=0.5) -> bool:
         return abs((n1.phase - n2.phase) % (2 * np.pi)) < tol
     def assign_to_phase_cluster(self, node: Resonator) -> int:
@@ -572,8 +680,12 @@ class Sin:
         context_relevance = 0.0
         for msg, ts in zip(self.dialog_context.last_messages, self.dialog_context.timestamps):
             decay = np.exp(-0.1 * (now - ts))
-            sim = cosine_similarity([query_vec], [self.embedder.get_vector(msg.split()[-1])])[0][0]
-            context_relevance += sim * decay
+            # Используем все слова из контекста для оценки релевантности
+            context_words = self.tokenize(msg)
+            if context_words:
+                context_vec = np.mean([self.embedder.get_vector(w) for w in context_words], axis=0)
+                sim = cosine_similarity([query_vec], [context_vec])[0][0]
+                context_relevance += sim * decay
         context_relevance /= max(len(self.dialog_context.last_messages), 1)
         return 0.6 * top_sim + 0.4 * context_relevance
     def learn(self, text: str, user_feedback: str = "neutral") -> Dict:
@@ -581,6 +693,27 @@ class Sin:
         words = self.tokenize(text)
         if not words:
             return {"status": "empty", "response": "Пусто", "understanding": understanding}
+        
+        # --- Предсказательное кодирование ---
+        # 1. Получаем контекст для предсказания
+        context_words = []
+        for msg in self.dialog_context.last_messages[-2:]: # последние 2 сообщения
+            context_words.extend(self.tokenize(msg))
+        context_words.extend(words[:-1]) # все слова текущего сообщения, кроме последнего
+        
+        # 2. Делаем предсказание
+        predicted_vec = self._predict_next(context_words)
+        predicted_item = MemoryItem.from_np(predicted_vec, "[предсказание]", level=0, timestamp=time.time())
+        self.hippocampus.add_prediction(predicted_item)
+        
+        # 3. Сравниваем с реальностью (ошибка предсказания)
+        actual_last_word = words[-1]
+        actual_vec = self.embedder.get_vector(actual_last_word)
+        actual_item = MemoryItem.from_np(actual_vec, actual_last_word, level=0, timestamp=time.time())
+        
+        prediction_error = self.hippocampus.get_prediction_error(actual_item)
+        # --- Конец предсказательного кодирования ---
+        
         total_vec = np.zeros(self.embedder.dim)
         reward = 0.0
         for word in words:
@@ -608,6 +741,7 @@ class Sin:
             self.hippocampus.add(mem_item)
             # Добавляем в граф знаний
             if len(conflicts) == 0:
+                # Простое добавление. В будущем можно добавлять отношения на основе контекста.
                 self.knowledge_graph.add_concept(word, vec)
         total_vec /= len(words)
         phrase_item = MemoryItem.from_np(
@@ -618,22 +752,29 @@ class Sin:
             reward_score=reward
         )
         self.hippocampus.add(phrase_item)
-        self.hippocampus.consolidate(self.memory, self.vector_index)
+        # --- Консолидация с учетом ошибки предсказания ---
+        self.hippocampus.consolidate(self.memory, self.vector_index, prediction_error)
+        # --- RL и эмоции ---
         if user_feedback == "good":
             reward = RL_REWARD_CORRECT
             self.emotions["certainty"].intensity = min(1.0, self.emotions["certainty"].intensity + 0.1)
         elif user_feedback == "bad":
             reward = RL_PENALTY_WRONG
             self.emotions["certainty"].intensity = max(0.0, self.emotions["certainty"].intensity - 0.2)
-        self.emotions["curiosity"].intensity = min(1.0, self.emotions["curiosity"].intensity + 0.05)
+        # Любопытство усиливается при новой информации или высокой ошибке предсказания
+        curiosity_boost = 0.05 + 0.1 * prediction_error
+        self.emotions["curiosity"].intensity = min(1.0, self.emotions["curiosity"].intensity + curiosity_boost)
+        
         self.params.update(reward)
-        self.rl_policy["ask_question"] = 0.5 + 0.5 * (reward / 2.0) if reward != 0 else 0.7
+        # Политика RL теперь учитывает эмоции
+        self.rl_policy["ask_question"] = 0.3 + 0.4 * (reward / 2.0 if reward != 0 else 0.7) + 0.3 * self.emotions["curiosity"].intensity
         self._auto_save()
         status = "understood" if understanding > UNDERSTANDING_THRESHOLD else "partially"
         return {
             "status": status,
-            "response": f"{'🧠' if understanding > 0.7 else '🤔'} Понял: '{text}' (понимание: {understanding:.2f})",
-            "understanding": understanding
+            "response": f"{'🧠' if understanding > 0.7 else '🤔'} Понял: '{text}' (понимание: {understanding:.2f}, ошибка предсказания: {prediction_error:.2f})",
+            "understanding": understanding,
+            "prediction_error": prediction_error
         }
     def respond(self, text: str) -> str:
         if self.sleeping:
@@ -648,16 +789,30 @@ class Sin:
         results = self.vector_index.search_similar(query_vec, k=10)
         # Проверка эмоций для определения поведения
         curiosity = self.emotions["curiosity"].intensity
-        if self.pending_questions and random.random() < self.rl_policy["ask_question"] * curiosity:
+        certainty = self.emotions["certainty"].intensity
+        
+        # Генерируем вопрос, если есть нерешенные вопросы или высокое любопытство
+        if self.pending_questions and (random.random() < self.rl_policy["ask_question"] * curiosity or curiosity > 0.8):
             return f"❓ {self.pending_questions.pop(0)}"
+        
+        # Отвечаем на основе памяти
         if results and results[0][0] > 0.6:
             best_text = self.memory[results[0][1]].text
-            return f"🧠 Это напоминает: '{best_text}' (схожесть: {results[0][0]:.2f})"
+            # Если уверенность высока, даем прямой ответ
+            if certainty > 0.7:
+                return f"🧠 Это напоминает: '{best_text}' (схожесть: {results[0][0]:.2f})"
+            else:
+                # Если неуверен, можем сформулировать сомнение
+                return f"🤔 Возможно, это связано с: '{best_text}' (схожесть: {results[0][0]:.2f})"
+        
+        # Если ничего не найдено, но есть любопытство, предлагаем исследовать
+        if curiosity > 0.6:
+            return f"🤔 Интересно... Расскажи больше об этом."
+            
         return f"🤔 Частично понимаю. Ещё не до конца ясно."
     def generate_response(self, seed: str, length=5) -> str:
         # Генерация последовательности слов на основе эмбеддингов
         base_sequence = self.embedder.generate_sequence(seed, length=length)
-        
         # Улучшение сгенерированной последовательности, используя память
         enhanced = []
         for word in base_sequence:
@@ -757,8 +912,16 @@ class Sin:
         return self.multi_agent_system.communicate(sender, receiver, message)
     def show_knowledge_graph(self):
         nodes = list(self.knowledge_graph.graph.nodes())
-        edges = list(self.knowledge_graph.graph.edges())
-        return f"📊 Граф знаний: {len(nodes)} понятий, {len(edges)} связей"
+        edges = list(self.knowledge_graph.graph.edges(data=True)) # data=True to get relation type
+        result = f"📊 Граф знаний: {len(nodes)} понятий, {len(edges)} связей\n"
+        # Show some sample relations
+        sample_edges = edges[:10] # Show first 10
+        for u, v, data in sample_edges:
+            rel = data.get('relation', 'unknown')
+            result += f"  {u} --({rel})--> {v}\n"
+        if len(edges) > 10:
+            result += f"  ... и ещё {len(edges) - 10} связей.\n"
+        return result
 # === API ===
 app = FastAPI(title=f"SIN API v{Sin.VERSION}")
 sin = Sin()
