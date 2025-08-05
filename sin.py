@@ -1,8 +1,7 @@
 import numpy as np
 import matplotlib.pyplot as plt
 from sklearn.metrics.pairwise import cosine_similarity
-from typing import List, Dict, Optional
-from dataclasses import dataclass, field
+from sklearn.cluster import DBSCAN
 import random
 import time
 import threading
@@ -11,12 +10,14 @@ import logging
 import pickle
 from collections import defaultdict, deque
 from gensim.models import KeyedVectors
-from fastapi import FastAPI, HTTPException, Depends
+from fastapi import FastAPI, HTTPException
 from fastapi.responses import JSONResponse
 import uvicorn
 from telegram import Update
 from telegram.ext import Application, CommandHandler, MessageHandler, ContextTypes, filters
+from typing import List, Dict, Optional
 from datetime import datetime
+from dataclasses import dataclass, field
 import hashlib
 import requests
 import gzip
@@ -180,7 +181,7 @@ class RuEmbedder:
 # === СТРУКТУРЫ ДАННЫХ ===
 @dataclass
 class MemoryItem:
-    vector: List[float]
+    vector: List[float]  # храним как list для pickle
     text: str
     level: int
     timestamp: float
@@ -283,7 +284,7 @@ class Sin:
         self.last_save_time = time.time()
         self.cluster_labels = []
         self.rl_policy = {"ask_question": 0.7, "generate": 0.5}
-        self.phase_clusters = []  # ✅ ИСПРАВЛЕНО: добавлено
+        self.phase_clusters = []  # ✅ ИСПРАВЛЕНО: теперь инициализирован
         self._init_system()
         logger.info(f"Система SIN v{self.VERSION} инициализирована")
 
@@ -297,11 +298,11 @@ class Sin:
         try:
             with open(self.persist_file, 'rb') as f:
                 data = pickle.load(f)
-            # Восстанавливаем поля
+            # Восстанавливаем все поля
             for key, value in data.items():
                 if hasattr(self, key):
                     setattr(self, key, value)
-            # Конвертируем вектора обратно в np.ndarray
+            # Конвертируем вектора в np.ndarray
             self.memory = [
                 MemoryItem(
                     vector=np.array(item['vector']),
@@ -313,6 +314,9 @@ class Sin:
                     reward_score=item.get('reward_score', 0.0)
                 ) for item in self.memory
             ]
+            # Восстанавливаем phase_clusters, если нет
+            if not hasattr(self, 'phase_clusters'):
+                self.phase_clusters = []
             logger.info(f"Состояние загружено из {self.persist_file}")
         except Exception as e:
             logger.error(f"Ошибка загрузки: {str(e)}")
@@ -421,13 +425,14 @@ class Sin:
             return f"Что такое '{word}'? Можешь объяснить проще?"
 
     def learn(self, text: str, from_dialog: bool = False, user_feedback: str = "neutral") -> Dict:
+        if len(text) > MAX_TEXT_LENGTH:
+            text = text[:MAX_TEXT_LENGTH]
         self._update_dialog_context(text)
         words = self.tokenize(text)
         if not words:
             return {"status": "empty", "response": "Пустой ввод"}
 
         total_vec = np.zeros(self.embedder.dim)
-        active_ids = []
 
         for word in words:
             vec = self.embedder.get_vector(word)
@@ -438,7 +443,6 @@ class Sin:
             node.pattern = vec.copy()
             self.nodes[new_id] = node
             node.excite(1.0)
-            active_ids.append(new_id)
             self.node_counter += 1
 
             resonance = self.check_resonance(vec)
@@ -448,11 +452,10 @@ class Sin:
                     vec, word, level=0, timestamp=time.time(), phase_cluster_id=cluster_id
                 ))
 
-            if resonance < DISSONANCE_THRESHOLD and not from_dialog:
+            if resonance < DISSONANCE_THRESHOLD and not from_dialog and random.random() < 0.7:
                 question = self.generate_question(word)
                 self.pending_questions.append(question)
 
-        # Сохраняем полный текст
         total_vec /= len(words)
         self.memory.append(MemoryItem.from_np_vector(
             total_vec, ' '.join(words), level=1, timestamp=time.time()
@@ -508,12 +511,16 @@ class Sin:
         enhanced = []
         for word in base_sequence:
             try:
-                mem_sim = max(
+                sims = [
                     (cosine_similarity([self.embedder.get_vector(word)], [m.vector])[0][0], m.text)
-                    for m in self.memory
-                )
-                if mem_sim[0] > 0.6:
-                    enhanced.append(mem_sim[1])
+                    for m in self.memory if isinstance(m.text, str)
+                ]
+                if sims:
+                    best_sim, best_text = max(sims)
+                    if best_sim > 0.6:
+                        enhanced.append(best_text)
+                    else:
+                        enhanced.append(word)
                 else:
                     enhanced.append(word)
             except:
@@ -522,15 +529,15 @@ class Sin:
 
     def status(self):
         return f"""
-🌐 Sin v{self.VERSION} — Сеть Интуитивного Понимания
-Время: {self.t}
-Узлов: {len(self.nodes)}
-Память: {len(self.memory)}
-Состояние: {'Спит' if self.sleeping else 'Бодрствует'}
-Уровни: {len(self.level_nodes[0])} слов, {len(self.level_nodes[1])} фраз
-Нагрузка: {self.cognitive_load:.2f}
-Вопросов: {len(self.pending_questions)}
-"""
+        🌐 Sin v{self.VERSION} — Сеть Интуитивного Понимания
+        Время: {self.t}
+        Узлов: {len(self.nodes)}
+        Память: {len(self.memory)}
+        Состояние: {'Спит' if self.sleeping else 'Бодрствует'}
+        Уровни: {len(self.level_nodes[0])} слов, {len(self.level_nodes[1])} фраз
+        Нагрузка: {self.cognitive_load:.2f}
+        Вопросов: {len(self.pending_questions)}
+        """
 
     def start_sleep(self):
         self.sleeping = True
