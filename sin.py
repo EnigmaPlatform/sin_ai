@@ -150,7 +150,7 @@ class RuEmbedder:
             self.model = KeyedVectors.load(BIN_PATH)
         else:
             logger.info("🌀 Загрузка из текстового файла (ограничено 50k слов)...")
-            total_lines = 50000 + 1
+            total_lines = 500000 + 1
             with tqdm(desc="🧠 Загрузка слов", total=total_lines, colour='blue') as pbar:
                 self.model = KeyedVectors.load_word2vec_format(filepath, binary=False, limit=50000)
                 for _ in range(total_lines):
