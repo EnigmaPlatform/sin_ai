@@ -1,7 +1,8 @@
 import numpy as np
 import matplotlib.pyplot as plt
 from sklearn.metrics.pairwise import cosine_similarity
-from sklearn.cluster import DBSCAN
+from typing import List, Dict, Optional
+from dataclasses import dataclass, field
 import random
 import time
 import threading
@@ -15,9 +16,7 @@ from fastapi.responses import JSONResponse
 import uvicorn
 from telegram import Update
 from telegram.ext import Application, CommandHandler, MessageHandler, ContextTypes, filters
-from typing import List, Dict, Optional
 from datetime import datetime
-from dataclasses import dataclass, field
 import hashlib
 import requests
 import gzip
@@ -29,11 +28,10 @@ import psutil
 EMBEDDING_PATH = r"C:\Users\alex\Downloads\cc.ru.300.vec"
 EMBEDDING_GZ_PATH = EMBEDDING_PATH + ".gz"
 EMBEDDING_URL = "https://dl.fbaipublicfiles.com/fasttext/vectors-crawl/cc.ru.300.vec.gz"
-BIN_PATH = "cc.ru.300.bin"  # Для быстрой загрузки
+BIN_PATH = "cc.ru.300.bin"
 PERSIST_FILE = "sin_state.pkl"
 LOG_FILE = "sin.log"
 TELEGRAM_TOKEN = "7990254673:AAE-7UGlXLWnQ-Dn5D2uyrz0RYDJnBZZKM8"
-
 MAX_NODES = 5000
 SLEEP_CYCLE = 15
 FORGET_THRESHOLD = 0.1
@@ -45,7 +43,6 @@ MEMORY_HISTORY_LIMIT = 1000
 MAX_CONTEXT_LENGTH = 10
 MAX_TEXT_LENGTH = 500
 RL_REWARD_CORRECT = 2.0
-RL_REWARD_QUESTION = 1.0
 RL_PENALTY_WRONG = -1.0
 
 # === ЛОГГИРОВАНИЕ ===
@@ -79,7 +76,6 @@ def download_embeddings(url, gz_path):
         response = requests.get(url, stream=True, timeout=30)
         response.raise_for_status()
         total_size = int(response.headers.get('content-length', 0))
-
         with open(gz_path, 'wb') as f, tqdm(
             desc="📥 Загрузка",
             total=total_size,
@@ -91,7 +87,6 @@ def download_embeddings(url, gz_path):
                 if chunk:
                     f.write(chunk)
                     pbar.update(len(chunk))
-
         logger.info(f"✅ Файл сохранён: {gz_path}")
         return True
     except Exception as e:
@@ -116,21 +111,17 @@ def check_and_download_embeddings():
     if os.path.exists(EMBEDDING_PATH):
         logger.info(f"✅ Файл найден: {EMBEDDING_PATH}")
         return True
-
     logger.warning(f"❌ Файл не найден: {EMBEDDING_PATH}")
     print("Файл эмбеддингов отсутствует. Начать загрузку? (y/n): ", end="")
     if input().lower() != 'y':
         logger.critical("❌ Загрузка отменена.")
         return False
-
     if not download_embeddings(EMBEDDING_URL, EMBEDDING_GZ_PATH):
         logger.critical("❌ Не удалось загрузить файл.")
         return False
-
     if not extract_gz(EMBEDDING_GZ_PATH, EMBEDDING_PATH):
         logger.critical("❌ Не удалось распаковать файл.")
         return False
-
     logger.info("✅ Эмбеддинги готовы!")
     return True
 
@@ -140,7 +131,6 @@ class RuEmbedder:
     def __init__(self, filepath=EMBEDDING_PATH):
         if not check_and_download_embeddings():
             raise RuntimeError("Не удалось подготовить эмбеддинги.")
-
         if os.path.exists(BIN_PATH):
             logger.info("🌀 Загрузка из бинарного файла (быстро)...")
             self.model = KeyedVectors.load(BIN_PATH)
@@ -153,7 +143,6 @@ class RuEmbedder:
                     pbar.update(1)
             logger.info("💾 Сохранение в бинарный формат для будущих запусков...")
             self.model.save(BIN_PATH)
-
         self.dim = self.model.vector_size
         logger.info(f"✅ Загружено {len(self.model.key_to_index)} слов (dim={self.dim})")
 
@@ -191,7 +180,7 @@ class RuEmbedder:
 # === СТРУКТУРЫ ДАННЫХ ===
 @dataclass
 class MemoryItem:
-    vector: np.ndarray
+    vector: List[float]
     text: str
     level: int
     timestamp: float
@@ -199,12 +188,41 @@ class MemoryItem:
     phase_cluster_id: Optional[int] = None
     reward_score: float = 0.0
 
+    @staticmethod
+    def from_dict(data):
+        return MemoryItem(**data)
+
+    def to_dict(self):
+        return {
+            'vector': self.vector.tolist() if isinstance(self.vector, np.ndarray) else self.vector,
+            'text': self.text,
+            'level': self.level,
+            'timestamp': self.timestamp,
+            'access_count': self.access_count,
+            'phase_cluster_id': self.phase_cluster_id,
+            'reward_score': self.reward_score
+        }
+
+    @staticmethod
+    def from_np_vector(vec: np.ndarray, text: str, level: int, timestamp: float, **kwargs):
+        return MemoryItem(
+            vector=vec.tolist(),
+            text=text,
+            level=level,
+            timestamp=timestamp,
+            **kwargs
+        )
+
 
 @dataclass
 class DialogContext:
-    last_messages: deque = field(default_factory=lambda: deque(maxlen=MAX_CONTEXT_LENGTH))
+    last_messages: List[str] = None
     current_theme: Optional[str] = None
     thematic_attention: float = 0.0
+
+    def __post_init__(self):
+        if self.last_messages is None:
+            self.last_messages = []
 
 
 # === РЕЗОНАТОР ===
@@ -265,6 +283,7 @@ class Sin:
         self.last_save_time = time.time()
         self.cluster_labels = []
         self.rl_policy = {"ask_question": 0.7, "generate": 0.5}
+        self.phase_clusters = []  # ✅ ИСПРАВЛЕНО: добавлено
         self._init_system()
         logger.info(f"Система SIN v{self.VERSION} инициализирована")
 
@@ -278,25 +297,61 @@ class Sin:
         try:
             with open(self.persist_file, 'rb') as f:
                 data = pickle.load(f)
-                for key, value in data.items():
-                    if hasattr(self, key):
-                        setattr(self, key, value)
+            # Восстанавливаем поля
+            for key, value in data.items():
+                if hasattr(self, key):
+                    setattr(self, key, value)
+            # Конвертируем вектора обратно в np.ndarray
+            self.memory = [
+                MemoryItem(
+                    vector=np.array(item['vector']),
+                    text=item['text'],
+                    level=item['level'],
+                    timestamp=item['timestamp'],
+                    access_count=item.get('access_count', 0),
+                    phase_cluster_id=item.get('phase_cluster_id'),
+                    reward_score=item.get('reward_score', 0.0)
+                ) for item in self.memory
+            ]
             logger.info(f"Состояние загружено из {self.persist_file}")
         except Exception as e:
             logger.error(f"Ошибка загрузки: {str(e)}")
 
     def save_state(self):
         try:
+            serializable_memory = [item.to_dict() for item in self.memory]
+            serializable_word_freq = dict(self.word_frequency)
+            serializable_nodes = {
+                k: {
+                    'id': v.id,
+                    'freq': v.freq,
+                    'phase': v.phase,
+                    'amplitude': v.amplitude,
+                    'damping': v.damping,
+                    'connections': dict(v.connections),
+                    'pattern': v.pattern.tolist() if isinstance(v.pattern, np.ndarray) else v.pattern,
+                    'level': v.level,
+                    'last_activation': v.last_activation,
+                    'attention': v.attention,
+                    'phase_history': list(v.phase_history)
+                } for k, v in self.nodes.items()
+            }
             with open(self.persist_file, 'wb') as f:
                 pickle.dump({
-                    'nodes': self.nodes,
+                    'nodes': serializable_nodes,
                     'node_counter': self.node_counter,
-                    'memory': self.memory,
+                    'memory': serializable_memory,
                     't': self.t,
-                    'word_frequency': self.word_frequency,
+                    'word_frequency': serializable_word_freq,
                     'level_nodes': self.level_nodes,
                     'cluster_labels': self.cluster_labels,
-                    'rl_policy': self.rl_policy
+                    'rl_policy': self.rl_policy,
+                    'phase_clusters': self.phase_clusters,
+                    'dialog_context': {
+                        'last_messages': self.dialog_context.last_messages,
+                        'current_theme': self.dialog_context.current_theme,
+                        'thematic_attention': self.dialog_context.thematic_attention
+                    }
                 }, f)
             logger.info(f"Состояние сохранено в {self.persist_file}")
         except Exception as e:
@@ -317,7 +372,10 @@ class Sin:
         self.dialog_context.last_messages.append(text)
         if len(self.dialog_context.last_messages) >= 3:
             recent_text = " ".join(self.dialog_context.last_messages)
-            theme_vector = np.mean([self.embedder.get_vector(w) for w in self.tokenize(recent_text)], axis=0)
+            words = self.tokenize(recent_text)
+            if not words:
+                return
+            theme_vector = np.mean([self.embedder.get_vector(w) for w in words], axis=0)
             if self.dialog_context.current_theme is None:
                 self.dialog_context.current_theme = hashlib.md5(theme_vector.tobytes()).hexdigest()
                 self.dialog_context.thematic_attention = 0.5
@@ -331,9 +389,12 @@ class Sin:
 
     def assign_to_phase_cluster(self, node: Resonator) -> int:
         for cluster_id, cluster in enumerate(self.phase_clusters):
-            if cluster and self.are_in_phase(node, self.nodes[cluster[0]]):
-                cluster.append(node.id)
-                return cluster_id
+            if cluster:
+                first_node_id = cluster[0]
+                if first_node_id in self.nodes:
+                    if self.are_in_phase(node, self.nodes[first_node_id]):
+                        cluster.append(node.id)
+                        return cluster_id
         new_cluster = [node.id]
         self.phase_clusters.append(new_cluster)
         return len(self.phase_clusters) - 1
@@ -367,10 +428,11 @@ class Sin:
 
         total_vec = np.zeros(self.embedder.dim)
         active_ids = []
+
         for word in words:
             vec = self.embedder.get_vector(word)
             total_vec += vec
-            resonance = self.check_resonance(vec)
+
             new_id = self.node_counter
             node = Resonator(new_id, level=0)
             node.pattern = vec.copy()
@@ -379,25 +441,21 @@ class Sin:
             active_ids.append(new_id)
             self.node_counter += 1
 
+            resonance = self.check_resonance(vec)
             if resonance < 0.6:
                 cluster_id = self.assign_to_phase_cluster(node)
-                self.memory.append(MemoryItem(
-                    vector=vec.copy(),
-                    text=word,
-                    level=0,
-                    timestamp=time.time(),
-                    phase_cluster_id=cluster_id
+                self.memory.append(MemoryItem.from_np_vector(
+                    vec, word, level=0, timestamp=time.time(), phase_cluster_id=cluster_id
                 ))
+
             if resonance < DISSONANCE_THRESHOLD and not from_dialog:
                 question = self.generate_question(word)
                 self.pending_questions.append(question)
 
+        # Сохраняем полный текст
         total_vec /= len(words)
-        self.memory.append(MemoryItem(
-            vector=total_vec.copy(),
-            text=' '.join(words),
-            level=1,
-            timestamp=time.time()
+        self.memory.append(MemoryItem.from_np_vector(
+            total_vec, ' '.join(words), level=1, timestamp=time.time()
         ))
 
         self.hierarchical_forget()
@@ -405,11 +463,11 @@ class Sin:
 
         # RL: обучение с подкреплением
         if user_feedback == "good":
-            self.rl_policy["ask_question"] += 0.1
-            self.rl_policy["generate"] += 0.1
+            self.rl_policy["ask_question"] = min(1.0, self.rl_policy["ask_question"] + 0.1)
+            self.rl_policy["generate"] = min(1.0, self.rl_policy["generate"] + 0.1)
         elif user_feedback == "bad":
-            self.rl_policy["ask_question"] -= 0.1
-            self.rl_policy["generate"] -= 0.1
+            self.rl_policy["ask_question"] = max(0.0, self.rl_policy["ask_question"] - 0.1)
+            self.rl_policy["generate"] = max(0.0, self.rl_policy["generate"] - 0.1)
 
         return {"status": "learned", "response": f"Sin понял: '{text}'"}
 
@@ -437,7 +495,7 @@ class Sin:
         else:
             return f"Новое. Ещё не резонирует. Расскажи больше."
 
-    def check_resonance(self, vec):
+    def check_resonance(self, vec) -> float:
         sims = []
         for mem in self.memory:
             sim = cosine_similarity([vec], [mem.vector])[0][0]
@@ -464,24 +522,24 @@ class Sin:
 
     def status(self):
         return f"""
-        🌐 Sin v{self.VERSION} — Сеть Интуитивного Понимания
-        Время: {self.t}
-        Узлов: {len(self.nodes)}
-        Память: {len(self.memory)}
-        Состояние: {'Спит' if self.sleeping else 'Бодрствует'}
-        Уровни: {len(self.level_nodes[0])} слов, {len(self.level_nodes[1])} фраз
-        Нагрузка: {self.cognitive_load:.2f}
-        Вопросов: {len(self.pending_questions)}
-        """
+🌐 Sin v{self.VERSION} — Сеть Интуитивного Понимания
+Время: {self.t}
+Узлов: {len(self.nodes)}
+Память: {len(self.memory)}
+Состояние: {'Спит' if self.sleeping else 'Бодрствует'}
+Уровни: {len(self.level_nodes[0])} слов, {len(self.level_nodes[1])} фраз
+Нагрузка: {self.cognitive_load:.2f}
+Вопросов: {len(self.pending_questions)}
+"""
 
     def start_sleep(self):
         self.sleeping = True
-        logger.info(f"\n🌙 Sin засыпает... (нагрузка: {self.cognitive_load:.2f})")
+        logger.info(f"🌙 Sin засыпает... (нагрузка: {self.cognitive_load:.2f})")
         threading.Thread(target=self.dream_cycle, daemon=True).start()
 
     def dream_cycle(self):
         time.sleep(1)
-        logger.info("\n🧠 Sin видит сны...")
+        logger.info("🧠 Sin видит сны...")
         for _ in range(5):
             if len(self.memory) == 0:
                 continue
@@ -491,16 +549,13 @@ class Sin:
             dream = vec + noise
             dream /= (np.linalg.norm(dream) + 1e-8)
             if self.check_resonance(dream) < 0.8:
-                self.memory.append(MemoryItem(
-                    vector=dream.copy(),
-                    text=f"[сон:{mem.text}]",
-                    level=mem.level,
-                    timestamp=self.t
+                self.memory.append(MemoryItem.from_np_vector(
+                    dream, f"[сон:{mem.text}]", level=mem.level, timestamp=self.t
                 ))
             time.sleep(0.5)
         self.sleeping = False
         self.cognitive_load *= 0.5
-        logger.info("\n✨ Sin проснулся. Память укреплена.\n")
+        logger.info("✨ Sin проснулся. Память укреплена.")
 
     def visualize_resonance(self):
         if not self.activation_history:
@@ -543,27 +598,29 @@ class Sin:
         self.memory = []
         self.nodes = {}
         self.node_counter = 0
+        self.phase_clusters = []
         logger.info("🧠 Память полностью очищена.")
         print("🧠 Память очищена.")
 
 
 # === API ===
 app = FastAPI(title=f"SIN API v{Sin.VERSION}")
-
 sin = Sin()
 
 @app.post("/learn")
-async def api_learn(text: dict):
+async def api_learn(data: dict):
     try:
-        result = sin.learn(text.get("text", ""))
+        text = data.get("text", "")
+        result = sin.learn(text)
         return JSONResponse(result)
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.post("/respond")
-async def api_respond(text: dict):
+async def api_respond(data: dict):
     try:
-        response = sin.respond(text.get("text", ""))
+        text = data.get("text", "")
+        response = sin.respond(text)
         return {"response": response}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
@@ -571,7 +628,9 @@ async def api_respond(text: dict):
 @app.post("/generate")
 async def api_generate(data: dict):
     try:
-        text = sin.generate_response(data.get("seed", "мысль"), data.get("length", 5))
+        seed = data.get("seed", "мысль")
+        length = data.get("length", 5)
+        text = sin.generate_response(seed, length)
         return {"generated": text}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
@@ -608,18 +667,19 @@ def run_telegram():
 # === КОНСОЛЬНЫЙ ИНТЕРФЕЙС ===
 def run_cli():
     print(sin.status())
-    print("\n🔧 Доступные команды:")
-    print("  !status — статус")
-    print("  !sleep — заставить поспать")
-    print("  !visualize — график резонанса")
-    print("  !memory — показать память")
-    print("  !questions — показать вопросы")
-    print("  !stats — статистика CPU/RAM")
-    print("  !clear — очистить память")
-    print("  !generate <слово> — сгенерировать текст")
-    print("  !feedback good/bad — оценить ответ")
-    print("  !quit — выход\n")
-
+    print("""
+🔧 Доступные команды:
+  !status — статус
+  !sleep — заставить поспать
+  !visualize — график резонанса
+  !memory — показать память
+  !questions — показать вопросы
+  !stats — статистика CPU/RAM
+  !clear — очистить память
+  !generate <слово> — сгенерировать текст
+  !feedback good/bad — оценить ответ
+  !quit — выход
+""")
     while True:
         try:
             user_input = input("> Sin, ").strip()
@@ -667,7 +727,6 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--mode", choices=["api", "telegram", "cli"], default="cli")
     args = parser.parse_args()
-
     if args.mode == "api":
         uvicorn.run(app, host="127.0.0.1", port=8000)
     elif args.mode == "telegram":
