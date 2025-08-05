@@ -22,7 +22,7 @@ import gzip
 import shutil
 from tqdm import tqdm
 import psutil
-import pymorphy2
+import pymorphy3
 import networkx as nx
 from typing import List, Dict, Optional, Tuple, Any
 
@@ -40,7 +40,7 @@ TELEGRAM_TOKEN = "7990254673:AAE-7UGlXLWnQ-Dn5D2uyrz0RYDJnBZZKM8"
 # === ГЛОБАЛЬНЫЕ ПАРАМЕТРЫ ===
 MAX_NODES = 10000
 SLEEP_CYCLE = 15
-SAVE_INTERVAL = 300
+SAVE_INTERVAL = 1800  # автосохранение каждые 30 минут
 MEMORY_HISTORY_LIMIT = 1000
 MAX_CONTEXT_LENGTH = 10
 MAX_TEXT_LENGTH = 500
@@ -66,7 +66,7 @@ logging.basicConfig(
 logger = logging.getLogger("SIN")
 
 # === МОРФОЛОГИЯ ===
-morph = pymorphy2.MorphAnalyzer()
+morph = pymorphy3.MorphAnalyzer()
 
 def normalize_word(word: str) -> str:
     word_clean = word.lower().strip(".,!?\"'()[]{}:;—-")
@@ -150,7 +150,7 @@ class RuEmbedder:
             self.model = KeyedVectors.load(BIN_PATH)
         else:
             logger.info("🌀 Загрузка из текстового файла (ограничено 50k слов)...")
-            total_lines = 500000 + 1
+            total_lines = 50000 + 1
             with tqdm(desc="🧠 Загрузка слов", total=total_lines, colour='blue') as pbar:
                 self.model = KeyedVectors.load_word2vec_format(filepath, binary=False, limit=50000)
                 for _ in range(total_lines):
@@ -358,6 +358,29 @@ class KnowledgeGraph:
                 neighbors.extend(self.get_neighbors(neighbor, depth-1))
         return list(set(neighbors))
 
+    def save_graph(self):
+        try:
+            with open(GRAPH_FILE, 'wb') as f:
+                pickle.dump({
+                    'graph': self.graph,
+                    'concepts': self.concepts
+                }, f)
+            logger.info(f"📊 Граф знаний сохранён: {GRAPH_FILE}")
+        except Exception as e:
+            logger.error(f"❌ Ошибка сохранения графа: {e}")
+
+    def load_graph(self):
+        if not os.path.exists(GRAPH_FILE):
+            return
+        try:
+            with open(GRAPH_FILE, 'rb') as f:
+                data = pickle.load(f)
+            self.graph = data['graph']
+            self.concepts = data['concepts']
+            logger.info(f"📊 Граф знаний загружен из {GRAPH_FILE}")
+        except Exception as e:
+            logger.error(f"❌ Ошибка загрузки графа: {e}")
+
 # === AutonomousLearner — автономное обучение во сне ===
 class AutonomousLearner:
     def __init__(self, sin_instance):
@@ -514,6 +537,7 @@ class Sin:
         self.cognitive_load = 0.0
         self.level_nodes = [[] for _ in range(3)]
         self.knowledge_graph = KnowledgeGraph()
+        self.knowledge_graph.load_graph()
         self.goals = []
         self.emotions = {
             "curiosity": Emotion("curiosity", 0.5),
@@ -842,7 +866,7 @@ app = FastAPI(title=f"SIN API v{Sin.VERSION}")
 sin = Sin()
 
 @app.post("/learn")
-async def api_learn(data: dict):
+async def api_learn( dict):
     try:
         text = data.get("text", "")
         result = sin.learn(text)
@@ -851,7 +875,7 @@ async def api_learn(data: dict):
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.post("/respond")
-async def api_respond(data: dict):
+async def api_respond( dict):
     try:
         text = data.get("text", "")
         response = sin.respond(text)
@@ -860,7 +884,7 @@ async def api_respond(data: dict):
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.post("/generate")
-async def api_generate(data: dict):
+async def api_generate( dict):
     try:
         seed = data.get("seed", "мысль")
         length = data.get("length", 5)
