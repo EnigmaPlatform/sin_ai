@@ -13,23 +13,25 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from fastapi import FastAPI, HTTPException, Depends
 from fastapi.responses import JSONResponse
-from pydantic import BaseModel, Field, validator
+from pydantic import BaseModel, Field, field_validator, ValidationError
 from typing import List, Dict, Optional
 from gensim.models import KeyedVectors
 from telegram import Update
 from telegram.ext import Application, CommandHandler, MessageHandler, ContextTypes, filters
 from contextlib import asynccontextmanager
 import threading
+import streamlit as st
+import matplotlib.pyplot as plt
+from sklearn.cluster import DBSCAN
+from sklearn.metrics.pairwise import cosine_similarity
 
 # === КОНФИГУРАЦИЯ ===
 class Config:
-    # Пути
     EMBEDDING_PATH = r"C:\Users\alex\Downloads\cc.ru.300.vec"
     EMBEDDING_URL = "https://dl.fbaipublicfiles.com/fasttext/vectors-crawl/cc.ru.300.vec.gz"
     PERSIST_FILE = "sin_state.pkl"
     LOG_FILE = "sin.log"
-
-    # Параметры
+    TELEGRAM_TOKEN = "7990254673:AAE-7UGlXLWnQ-Dn5D2uyrz0RYDJnBZZKM8"
     MAX_NODES = 5000
     SLEEP_CYCLE = 15
     FORGET_THRESHOLD = 0.1
@@ -40,11 +42,11 @@ class Config:
     MAX_HISTORY_LENGTH = 100
     MAX_TEXT_LENGTH = 500
     MAX_CONCURRENT_REQUESTS = 10
-    MAX_MEMORY_PERCENT = 80  # % RAM
+    MAX_MEMORY_PERCENT = 80
     CACHE_SIZE = 1000
-
-    # Telegram
-    TELEGRAM_TOKEN = "7990254673:AAE-7UGlXLWnQ-Dn5D2uyrz0RYDJnBZZKM8"
+    RL_REWARD_CORRECT = 2.0
+    RL_REWARD_QUESTION = 1.0
+    RL_PENALTY_WRONG = -1.0
 
 
 # === ЛОГГИРОВАНИЕ ===
@@ -59,12 +61,11 @@ logging.basicConfig(
 logger = logging.getLogger("SIN")
 
 
-# === Pydantic МОДЕЛИ ===
+# === Pydantic МОДЕЛИ (V2) ===
 class LearnRequest(BaseModel):
     text: str = Field(..., max_length=Config.MAX_TEXT_LENGTH)
-    priority: int = Field(1, ge=1, le=5)
 
-    @validator('text')
+    @field_validator('text')
     def text_not_empty(cls, v):
         if not v or not v.strip():
             raise ValueError('Text cannot be empty')
@@ -77,7 +78,6 @@ class RespondRequest(BaseModel):
 
 # === АСИНХРОННЫЙ ХЭШ ===
 async def async_get_md5(filepath: str) -> Optional[str]:
-    """Асинхронное вычисление MD5"""
     hash_md5 = hashlib.md5()
     try:
         async with aiofiles.open(filepath, "rb") as f:
@@ -91,7 +91,6 @@ async def async_get_md5(filepath: str) -> Optional[str]:
 
 # === АСИНХРОННАЯ ЗАГРУЗКА ===
 async def async_download_embeddings(session: aiohttp.ClientSession, url: str, path: str) -> bool:
-    """Асинхронная загрузка и распаковка"""
     gz_path = path + ".gz"
     logger.info(f"Начинаю загрузку: {url}")
     try:
@@ -109,8 +108,6 @@ async def async_download_embeddings(session: aiohttp.ClientSession, url: str, pa
                         if downloaded % max(total_size // 10, 1) == 0:
                             logger.info(f"Загрузка: {percent:.1f}%")
 
-        # Распаковка
-        logger.info("Распаковка .gz...")
         import gzip
         with gzip.open(gz_path, 'rb') as f_in:
             with open(path, 'wb') as f_out:
@@ -123,7 +120,7 @@ async def async_download_embeddings(session: aiohttp.ClientSession, url: str, pa
         return False
 
 
-# === КЭШ ДЛЯ ЧАСТО ИСПОЛЬЗУЕМЫХ ВЕКТОРОВ ===
+# === КЭШ ВЕКТОРОВ ===
 class VectorCache:
     def __init__(self, maxsize=Config.CACHE_SIZE):
         self.cache = {}
@@ -137,7 +134,6 @@ class VectorCache:
     async def set(self, word: str, vector: np.ndarray):
         async with self.lock:
             if len(self.cache) >= self.maxsize:
-                # Удаляем самый старый
                 del self.cache[next(iter(self.cache))]
             self.cache[word] = vector.copy()
 
@@ -151,6 +147,7 @@ class MemoryItem:
     timestamp: float
     access_count: int = 0
     phase_cluster_id: Optional[int] = None
+    reward_score: float = 0.0  # Для RL
 
 
 @dataclass
@@ -169,7 +166,7 @@ class RuEmbedder:
 
     async def _load_embeddings(self) -> bool:
         try:
-            logger.info("🌀 Асинхронная загрузка эмбеддингов...")
+            logger.info("🌀 Загрузка эмбеддингов...")
             self.model = KeyedVectors.load_word2vec_format(self.filepath, binary=False, limit=300000)
             logger.info(f"✅ Загружено {len(self.model.key_to_index)} слов (dim={self.dim})")
             return True
@@ -178,31 +175,27 @@ class RuEmbedder:
             return False
 
     async def get_vector(self, word: str) -> np.ndarray:
-        try:
-            cached = await self.cache.get(word)
-            if cached is not None:
-                return cached
+        cached = await self.cache.get(word)
+        if cached is not None:
+            return cached
 
-            word_clean = word.lower().strip(".,!?\"'()[]{}:;—-")
-            if not word_clean:
-                return np.zeros(self.dim)
-
-            if word_clean in self.model:
-                vec = self.model[word_clean].copy()
-            else:
-                try:
-                    similar = self.model.most_similar(positive=[word_clean], topn=1)
-                    logger.debug(f"Слово '{word}' заменено на '{similar[0][0]}'")
-                    vec = self.model[similar[0][0]].copy()
-                except:
-                    logger.debug(f"Неизвестное слово: '{word}'")
-                    vec = np.random.normal(0, 0.1, self.dim)
-
-            await self.cache.set(word, vec)
-            return vec
-        except Exception as e:
-            logger.error(f"Ошибка в get_vector: {e}")
+        word_clean = word.lower().strip(".,!?\"'()[]{}:;—-")
+        if not word_clean:
             return np.zeros(self.dim)
+
+        if word_clean in self.model:
+            vec = self.model[word_clean].copy()
+        else:
+            try:
+                similar = self.model.most_similar(positive=[word_clean], topn=1)
+                logger.debug(f"Слово '{word}' заменено на '{similar[0][0]}'")
+                vec = self.model[similar[0][0]].copy()
+            except:
+                logger.debug(f"Неизвестное слово: '{word}'")
+                vec = np.random.normal(0, 0.1, self.dim)
+
+        await self.cache.set(word, vec)
+        return vec
 
 
 class Resonator:
@@ -240,7 +233,7 @@ class Resonator:
 
 
 class Sin:
-    VERSION = "8.0"
+    VERSION = "9.0"
     _instance = None
     _lock = asyncio.Lock()
 
@@ -272,28 +265,25 @@ class Sin:
         self.error_count = 0
         self.save_lock = asyncio.Lock()
         self.learn_lock = asyncio.Lock()
+        self.cluster_labels = []
+        self.rl_policy = {"ask_question": 0.7, "generate": 0.5}  # Инициализация политики
         self.initialized = False
 
     async def _init_system(self):
         async with self._lock:
             if self.initialized:
                 return
-
             logger.info("Инициализация системы...")
             await self._check_and_download_embeddings()
             self.embedder = RuEmbedder(Config.EMBEDDING_PATH)
             if not await self.embedder._load_embeddings():
                 raise RuntimeError("Не удалось загрузить эмбеддинги")
-
             if os.path.exists(self.persist_file):
                 await self._load_state()
             else:
                 logger.info("Создана новая модель")
-
-            # Запуск фоновых задач
             asyncio.create_task(self._background_save())
             asyncio.create_task(self._monitor_resources())
-
             self.initialized = True
             logger.info(f"SIN v{self.VERSION} инициализирован")
 
@@ -309,13 +299,6 @@ class Sin:
                         raise RuntimeError("Не удалось загрузить эмбеддинги.")
             else:
                 raise RuntimeError("Загрузка отменена.")
-
-        # Проверка целостности
-        expected_md5 = "d3e37867b88e742d386025b4d524515c"  # Пример
-        file_md5 = await async_get_md5(Config.EMBEDDING_PATH)
-        if file_md5 and file_md5.lower() != expected_md5.lower():
-            logger.critical(f"MD5 не совпадает! Ожидалось: {expected_md5}, получено: {file_md5}")
-            raise RuntimeError("Файл эмбеддингов повреждён или не тот.")
 
     async def _load_state(self):
         try:
@@ -340,7 +323,9 @@ class Sin:
                         't': self.t,
                         'word_frequency': self.word_frequency,
                         'level_nodes': self.level_nodes,
-                        'phase_clusters': self.phase_clusters
+                        'phase_clusters': self.phase_clusters,
+                        'cluster_labels': self.cluster_labels,
+                        'rl_policy': self.rl_policy
                     }
                     await f.write(pickle.dumps(data))
             logger.info(f"Состояние сохранено в {self.persist_file}")
@@ -360,27 +345,7 @@ class Sin:
             cpu = psutil.cpu_percent()
             memory = psutil.virtual_memory().percent
             self.cognitive_load = memory / 100.0
-
             logger.info(f"Мониторинг: CPU={cpu:.1f}%, RAM={memory:.1f}%")
-            if memory > Config.MAX_MEMORY_PERCENT:
-                logger.warning("Высокое потребление памяти! Запуск очистки...")
-                await self._cleanup_memory()
-
-    async def _cleanup_memory(self):
-        # Простая очистка: удаляем самые старые элементы
-        if len(self.memory) > 500:
-            self.memory = self.memory[-300:]
-            logger.info("Память очищена")
-
-    async def tokenize(self, text: str) -> List[str]:
-        try:
-            words = [word.strip(".,!?\"'()[]{}:;—-") for word in text.lower().split() if word.isalpha()]
-            for word in words:
-                self.word_frequency[word] += 1
-            return words
-        except Exception as e:
-            logger.error(f"Ошибка в tokenize: {e}")
-            return []
 
     async def _update_dialog_context(self, text: str):
         self.dialog_context.last_messages.append(text)
@@ -394,6 +359,12 @@ class Sin:
                 old_theme_vec = await self.embedder.get_vector(self.dialog_context.current_theme[:10])
                 similarity = cosine_similarity([theme_vector], [old_theme_vec])[0][0]
                 self.dialog_context.thematic_attention = 0.3 * self.dialog_context.thematic_attention + 0.7 * similarity
+
+    async def tokenize(self, text: str) -> List[str]:
+        words = [word.strip(".,!?\"'()[]{}:;—-") for word in text.lower().split() if word.isalpha()]
+        for word in words:
+            self.word_frequency[word] += 1
+        return words
 
     def are_in_phase(self, node1: Resonator, node2: Resonator, tol=0.5) -> bool:
         return abs((node1.phase - node2.phase) % (2 * np.pi)) < tol
@@ -421,7 +392,15 @@ class Sin:
         if to_remove:
             logger.info(f"🧹 Иерархически забыто {len(to_remove)} элементов")
 
-    async def learn(self, text: str, from_dialog: bool = False) -> Dict:
+    def _perform_clustering(self):
+        if len(self.memory) < 5:
+            return
+        vectors = np.array([m.vector for m in self.memory])
+        clustering = DBSCAN(eps=0.5, min_samples=2).fit(vectors)
+        self.cluster_labels = clustering.labels_
+        logger.info(f"Кластеризация: найдено {len(set(clustering.labels_)) - (1 if -1 in clustering.labels_ else 0)} кластеров")
+
+    async def learn(self, text: str, from_dialog: bool = False, user_feedback: str = "neutral") -> Dict:
         async with self.learn_lock:
             try:
                 if self.sleeping:
@@ -436,8 +415,6 @@ class Sin:
                 for word in words:
                     vec = await self.embedder.get_vector(word)
                     total_vec += vec
-                    # resonance = await self.check_resonance(vec)  # Реализуй async
-                    resonance = 0.5  # временно
                     new_id = self.node_counter
                     node = Resonator(new_id, level=0)
                     node.pattern = vec.copy()
@@ -446,15 +423,13 @@ class Sin:
                     active_ids.append(new_id)
                     self.node_counter += 1
 
-                    if resonance < 0.6:
-                        cluster_id = self.assign_to_phase_cluster(node)
-                        self.memory.append(MemoryItem(
-                            vector=vec.copy(),
-                            text=word,
-                            level=0,
-                            timestamp=time.time(),
-                            phase_cluster_id=cluster_id
-                        ))
+                    self.memory.append(MemoryItem(
+                        vector=vec.copy(),
+                        text=word,
+                        level=0,
+                        timestamp=time.time(),
+                        phase_cluster_id=self.assign_to_phase_cluster(node)
+                    ))
 
                 total_vec /= len(words)
                 self.memory.append(MemoryItem(
@@ -465,33 +440,127 @@ class Sin:
                 ))
 
                 await self.hierarchical_forget()
+                self._perform_clustering()
                 self.request_count += 1
+
+                # === ОБУЧЕНИЕ С ПОДКРЕПЛЕНИЕМ ===
+                if user_feedback == "good":
+                    self.rl_policy["ask_question"] += 0.1
+                    self.rl_policy["generate"] += 0.1
+                    logger.info("RL: Награда за хороший ответ")
+                elif user_feedback == "bad":
+                    self.rl_policy["ask_question"] -= 0.1
+                    self.rl_policy["generate"] -= 0.1
+                    logger.info("RL: Штраф за плохой ответ")
+
                 return {"status": "learned", "response": f"Sin понял: '{text}'"}
             except Exception as e:
                 self.error_count += 1
                 logger.error(f"Ошибка в learn: {str(e)}")
                 return {"status": "error", "response": "Ошибка при обучении."}
 
+    async def respond(self, text: str) -> str:
+        if self.pending_questions and random.random() < self.rl_policy["ask_question"]:
+            return f"❓ {self.pending_questions.pop(0)}"
+        if self.sleeping:
+            return "Zzz... Sin спит."
+        words = await self.tokenize(text)
+        if not words:
+            return "Я слушаю..."
+        query_vec = np.mean([await self.embedder.get_vector(w) for w in words], axis=0)
+        best_sim = 0.0
+        best_match = None
+        for mem in self.memory:
+            try:
+                sim = cosine_similarity([query_vec], [mem.vector])[0][0]
+                if sim > best_sim:
+                    best_sim = sim
+                    best_match = mem.text
+            except:
+                continue
+        if best_sim > 0.6:
+            hints = ["Это напоминает мне о", "Я чувствую сходство с"]
+            return f"{random.choice(hints)} '{best_match}' (схожесть: {best_sim:.2f})."
+        elif best_sim > 0.4:
+            return f"Частично понимаю. Ещё не до конца ясно ({best_sim:.2f})."
+        else:
+            return f"Новое. Ещё не резонирует. Расскажи больше."
+
 
 # === ГЛОБАЛЬНЫЙ ЭКЗЕМПЛЯР ===
 sin = Sin()
 
 
-# === API ===
-semaphore = asyncio.Semaphore(Config.MAX_CONCURRENT_REQUESTS)
+# === ВЕБ-ИНТЕРФЕЙС (Streamlit) ===
+def run_web():
+    st.set_page_config(page_title="Sin — Когнитивный агент", layout="wide")
+    st.title("🧠 Sin v9.0 — Сеть Интуитивного Понимания")
+
+    if st.button("Перезагрузить Sin"):
+        asyncio.run(sin._init_system())
+
+    col1, col2 = st.columns(2)
+
+    with col1:
+        st.subheader("💬 Диалог")
+        user_input = st.text_input("Ты:")
+        if st.button("Отправить"):
+            if user_input:
+                asyncio.run(sin.learn(user_input))
+                response = asyncio.run(sin.respond(user_input))
+                st.session_state.chat.append(("Ты", user_input))
+                st.session_state.chat.append(("Sin", response))
+        for speaker, text in st.session_state.get('chat', []):
+            st.write(f"**{speaker}**: {text}")
+
+        feedback = st.radio("Оцените ответ:", ["neutral", "good", "bad"])
+        if st.button("Отправить оценку"):
+            asyncio.run(sin.learn("feedback", user_feedback=feedback))
+
+    with col2:
+        st.subheader("📊 Визуализация")
+        if sin.activation_history:
+            data = np.array(sin.activation_history)
+            fig, ax = plt.subplots(figsize=(10, 4))
+            ax.imshow(data.T, aspect='auto', cmap='plasma', interpolation='none')
+            ax.set_title("Волны резонанса")
+            st.pyplot(fig)
+
+        if len(sin.cluster_labels) > 0:
+            fig, ax = plt.subplots(figsize=(6, 4))
+            ax.scatter(range(len(sin.cluster_labels)), sin.cluster_labels, c=sin.cluster_labels, cmap='tab10')
+            ax.set_title("Кластеризация памяти")
+            st.pyplot(fig)
+
+
+# === API и Telegram — как в предыдущей версии ===
 app = FastAPI(title=f"SIN API v{Sin.VERSION}")
+semaphore = asyncio.Semaphore(Config.MAX_CONCURRENT_REQUESTS)
 
-async def rate_limit():
-    await semaphore.acquire()
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    await sin._init_system()
+    yield
 
-@app.post("/learn", dependencies=[Depends(rate_limit)])
+app.router.lifespan_context = lifespan
+
+@app.post("/learn", dependencies=[Depends(lambda: semaphore.acquire())])
 async def api_learn(request: LearnRequest):
     try:
         result = await sin.learn(request.text)
         return JSONResponse(result)
-    except Exception as e:
-        logger.error(f"API /learn ошибка: {str(e)}")
-        raise HTTPException(status_code=500, detail="Internal Server Error")
+    except ValidationError as e:
+        raise HTTPException(status_code=422, detail=e.errors())
+    finally:
+        semaphore.release()
+
+@app.post("/respond", dependencies=[Depends(lambda: semaphore.acquire())])
+async def api_respond(request: RespondRequest):
+    try:
+        response = await sin.respond(request.text)
+        return {"response": response}
+    except ValidationError as e:
+        raise HTTPException(status_code=422, detail=e.errors())
     finally:
         semaphore.release()
 
@@ -502,51 +571,42 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_text = update.message.text
-    response = "💬 Sin: Я ещё не умею отвечать в этом режиме, но учусь!"
-    await update.message.reply_text(response)
+    response = await sin.respond(user_text)
+    await update.message.reply_text(f"💬 Sin: {response}")
 
 def run_telegram():
     try:
         app_bot = Application.builder().token(Config.TELEGRAM_TOKEN).build()
         app_bot.add_handler(CommandHandler("start", start))
         app_bot.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
-        logger.info("Telegram-бот запущен")
         app_bot.run_polling()
     except Exception as e:
         logger.critical(f"Ошибка Telegram-бота: {str(e)}")
 
 
-# === CLI ===
-def run_cli():
-    print(f"🌀 SIN v{Sin.VERSION} — Консольный режим")
-    while True:
-        try:
-            user_input = input("> Sin, ").strip()
-            if user_input.lower() == "quit":
-                break
-            print(f"💬 Sin: Это CLI, ответ пока не реализован")
-        except KeyboardInterrupt:
-            break
-
-
 # === ЗАПУСК ===
-@asynccontextmanager
-async def lifespan(app: FastAPI):
-    await sin._init_system()
-    yield
-
-app.router.lifespan_context = lifespan
-
 if __name__ == "__main__":
     import argparse
     parser = argparse.ArgumentParser()
-    parser.add_argument("--mode", choices=["api", "telegram", "cli"], default="cli")
+    parser.add_argument("--mode", choices=["api", "telegram", "web", "cli"], default="web")
     args = parser.parse_args()
 
-    if args.mode == "api":
+    if args.mode == "web":
+        st.session_state.chat = []
+        run_web()
+    elif args.mode == "api":
         import uvicorn
         uvicorn.run(app, host="127.0.0.1", port=8000)
     elif args.mode == "telegram":
         run_telegram()
     else:
-        run_cli()
+        # CLI
+        print(f"🌀 SIN v{Sin.VERSION} — Консольный режим")
+        while True:
+            try:
+                user_input = input("> Sin, ").strip()
+                if user_input.lower() == "quit":
+                    break
+                print(f"💬 Sin: Это CLI, используйте --mode web для полного интерфейса")
+            except KeyboardInterrupt:
+                break
