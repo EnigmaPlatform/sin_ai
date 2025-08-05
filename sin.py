@@ -26,7 +26,7 @@ import pymorphy3
 import networkx as nx
 from typing import List, Dict, Optional, Tuple, Any, Set
 # === НАСТРОЙКИ ПУТЕЙ ===
-BASE_PATH = r"C:\Users\alex\Downloads"
+BASE_PATH = r"C:\Users\User\Downloads"
 EMBEDDING_PATH = os.path.join(BASE_PATH, "cc.ru.300.vec")
 EMBEDDING_GZ_PATH = EMBEDDING_PATH + ".gz"
 EMBEDDING_URL = "https://dl.fbaipublicfiles.com/fasttext/vectors-crawl/cc.ru.300.vec.gz"
