@@ -25,7 +25,7 @@ from rich.console import Console as RichConsole
 # ----------------------------------------
 # Настройки
 # ----------------------------------------
-PROJECT_DIR = Path(r"C:\Users\User\Downloads\Sin")
+PROJECT_DIR = Path(r"C:\Users\alex\Downloads\Sin")
 DATA_DIR = PROJECT_DIR / "data"
 MODEL_DIR = PROJECT_DIR / "model"
 CACHE_DIR = PROJECT_DIR / "cache"
