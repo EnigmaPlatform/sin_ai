@@ -33,6 +33,9 @@ from bs4 import BeautifulSoup
 import chromadb
 from chromadb.config import Settings
 
+# === Отключение предупреждения о symlinks в Hugging Face ===
+os.environ["HF_HUB_DISABLE_SYMLINKS_WARNING"] = "1"
+
 # === НАСТРОЙКИ ПУТЕЙ — ТОЛЬКО В C:\Users\User\Downloads\ ===
 BASE_PATH = r"C:\Users\User\Downloads"
 EMBEDDING_PATH = os.path.join(BASE_PATH, "cc.ru.300.vec")
@@ -45,6 +48,7 @@ CHROMA_DIR = os.path.join(BASE_PATH, "chroma_db")
 LOG_FILE = os.path.join(BASE_PATH, "sin.log")
 TELEGRAM_TOKEN = "7990254673:AAE-7UGlXLWnQ-Dn5D2uyrz0RYDJnBZZKM8"
 SUBCONSCIOUS_MODEL = "ai-forever/rugpt3small_based_on_gpt2"
+SUBCONSCIOUS_SAVE_DIR = os.path.join(BASE_PATH, "subconscious")  # <-- КРИТИЧЕСКИ ВАЖНО: ОБЪЯВЛЕНО
 
 # === ГЛОБАЛЬНЫЕ ПАРАМЕТРЫ ===
 MAX_NODES = 10000
@@ -746,6 +750,7 @@ class Sin:
     VERSION = "19.3"
 
     def __init__(self, persist_file: str = PERSIST_FILE):
+        os.makedirs(SUBCONSCIOUS_SAVE_DIR, exist_ok=True)
         self.embedder = RuEmbedder()
         self.subconscious = SubconsciousModule()
         if os.path.exists(SUBCONSCIOUS_SAVE_DIR):
@@ -873,6 +878,7 @@ class Sin:
             with open(self.persist_file, 'wb') as f:
                 pickle.dump(serializable, f)
             self.knowledge_graph.save_graph()
+            self.subconscious.save(SUBCONSCIOUS_SAVE_DIR)
             logger.info(f"💾 Сохранено в {self.persist_file}")
         except Exception as e:
             logger.error(f"❌ Ошибка сохранения: {e}")
@@ -965,7 +971,7 @@ class Sin:
         total_vec = np.zeros(self.embedder.dim)
         reward = 0.0
         items_to_add = []
-        for word in words:
+        for i, word in enumerate(words):
             vec = self.embedder.get_vector(word)
             total_vec += vec
             conflicts = self.conflict_detector(vec)
@@ -973,7 +979,7 @@ class Sin:
                 reward -= 0.5
             nid = self.node_counter
             node = Resonator(nid)
-            node.sin_instance = self  # Для визуализации
+            node.sin_instance = self
             node.pattern = vec.copy()
             self.nodes[nid] = node
             node.excite(1.0)
@@ -1264,7 +1270,7 @@ app = FastAPI(title=f"SIN API v{Sin.VERSION}")
 sin = Sin()
 
 @app.post("/learn")
-async def api_learn( dict):
+async def api_learn(data: dict):
     try:
         text = data.get("text", "")
         result = sin.learn(text)
@@ -1273,7 +1279,7 @@ async def api_learn( dict):
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.post("/respond")
-async def api_respond( dict):
+async def api_respond(data: dict):
     try:
         text = data.get("text", "")
         response = sin.respond(text)
@@ -1294,7 +1300,7 @@ async def api_status():
     }
 
 @app.post("/autonomous_learn")
-async def api_autonomous_learn( dict):
+async def api_autonomous_learn(data: dict):
     duration = data.get("duration", 30)
     result = sin.start_autonomous_learning(duration)
     return {"result": result}
@@ -1310,7 +1316,7 @@ async def api_autonomous_learn_log():
     return {"log": log}
 
 @app.post("/add_goal")
-async def api_add_goal( dict):
+async def api_add_goal(data: dict):
     description = data.get("description", "")
     priority = data.get("priority", 0.5)
     result = sin.add_goal(description, priority)
