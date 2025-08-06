@@ -4,21 +4,19 @@ import random
 import numpy as np
 from pathlib import Path
 from datetime import datetime
-from typing import List, Dict, Tuple
+from typing import List, Dict
 from collections import deque
 import torch
 from transformers import (
     AutoTokenizer,
     AutoModelForSeq2SeqLM,
-    pipeline,
     TrainingArguments,
-    Trainer,
-    BitsAndBytesConfig
+    Trainer
 )
 from sentence_transformers import SentenceTransformer
 from sklearn.metrics.pairwise import cosine_similarity
 from peft import LoraConfig, get_peft_model
-from huggingface_hub import snapshot_download
+from huggingface_hub import snapshot_download, HfApi
 from rich.console import Console
 from rich.panel import Panel
 from rich.table import Table
@@ -27,9 +25,9 @@ from rich.logging import RichHandler
 import logging
 
 # ----------------------------------------
-# Настройки путей
+# Настройки: папка Sin в директории запуска
 # ----------------------------------------
-PROJECT_DIR = Path(r"C:\Users\User\Downloads\Sin")
+PROJECT_DIR = Path.cwd() / "Sin"
 MODEL_DIR = PROJECT_DIR / "model"
 DATA_DIR = PROJECT_DIR / "data"
 MEMORY_DIR = PROJECT_DIR / "memory"
@@ -76,7 +74,6 @@ device = "cuda" if torch.cuda.is_available() else "cpu"
 # ----------------------------------------
 def is_online():
     try:
-        from huggingface_hub import HfApi
         HfApi().list_models(limit=1)
         return True
     except:
@@ -96,7 +93,8 @@ def download_model():
             snapshot_download(
                 repo_id="cointegrated/rut5-base",
                 local_dir=MODEL_DIR,
-                local_dir_use_symlinks=False
+                local_dir_use_symlinks=False,
+                max_workers=2
             )
             logger.info("[green]Модель успешно скачана.[/green]")
         except Exception as e:
@@ -107,11 +105,11 @@ def download_model():
     return True
 
 # ----------------------------------------
-# Загрузка модели с оптимизацией
+# Загрузка модели
 # ----------------------------------------
 def load_optimized_model():
+    local = (MODEL_DIR / "config.json").exists()
     try:
-        local = (MODEL_DIR / "config.json").exists()
         tokenizer = AutoTokenizer.from_pretrained(MODEL_DIR if local else "cointegrated/rut5-base", local_files_only=local)
         model = AutoModelForSeq2SeqLM.from_pretrained(MODEL_DIR if local else "cointegrated/rut5-base", local_files_only=local)
         logger.info("[green]Модель загружена.[/green]")
@@ -172,10 +170,8 @@ class EmotionalState:
 class LongTermMemory:
     def __init__(self):
         self.memory_file = MEMORY_DIR / "long_term_memory.json"
-        self.embeddings_file = MEMORY_DIR / "embeddings.npy"
         self.sentence_model = SentenceTransformer("cointegrated/rubert-tiny2", device=device)
         self.memories = []
-        self.embeddings = np.zeros((0, 312))
         if self.memory_file.exists():
             self.load_memory()
 
@@ -263,7 +259,14 @@ class EmotionalChatBot:
 
         try:
             inputs = self.tokenizer(prompt, return_tensors="pt", max_length=512, truncation=True).to(device)
-            outputs = self.model.generate(**inputs, max_new_tokens=150, temperature=0.7, top_p=0.9, do_sample=True)
+            outputs = self.model.generate(
+                **inputs,
+                max_new_tokens=150,
+                temperature=0.7 + emotion_state["intensity"] * 0.3,
+                top_p=0.9,
+                repetition_penalty=1.1,
+                do_sample=True
+            )
             response = self.tokenizer.decode(outputs[0], skip_special_tokens=True)
             return f"{emotion_state['emotion_icon']} {response}"
         except Exception as e:
