@@ -162,8 +162,8 @@ class RuEmbedder:
             logger.info("🌀 Загрузка из бинарного файла (быстро)...")
             self.model = KeyedVectors.load(BIN_PATH)
         else:
-            logger.info("🌀 Загрузка из текстового файла (ограничено 4500k слов)...")
-            total_lines = 4500000 + 1
+            logger.info("🌀 Загрузка из текстового файла (ограничено 50k слов)...")
+            total_lines = 500000 + 1
             with tqdm(desc="🧠 Загрузка слов", total=total_lines, colour='blue') as pbar:
                 self.model = KeyedVectors.load_word2vec_format(filepath, binary=False, limit=50000)
                 for _ in range(total_lines):
@@ -369,7 +369,9 @@ class Emotion:
 # === Resonator ===
 class Resonator:
     __slots__ = ['id', 'freq', 'phase', 'amplitude', 'damping', 'connections',
-                 'pattern', 'level', 'last_activation', 'attention', 'phase_history']
+                 'pattern', 'level', 'last_activation', 'attention', 'phase_history',
+                 'sin_instance']  # <-- ДОБАВЛЕНО: sin_instance
+
     def __init__(self, node_id: int, level: int = 0):
         self.id = node_id
         self.freq = 1.0
@@ -382,6 +384,7 @@ class Resonator:
         self.last_activation = 0.0
         self.attention = 1.0
         self.phase_history = deque(maxlen=100)
+        self.sin_instance = None  # Инициализируем
 
     def excite(self, amp: float, phase_offset: float = 0.0):
         self.amplitude = amp * self.attention
@@ -396,12 +399,11 @@ class Resonator:
             self.attention *= ATTENTION_DECAY
             self.phase_history.append(self.phase)
             # Записываем в историю активации SIN
-            sin_instance = getattr(self, 'sin_instance', None)
-            if sin_instance:
-                activation_row = [0.0] * len(sin_instance.nodes)
-                idx = list(sin_instance.nodes.keys()).index(self.id)
+            if self.sin_instance:
+                activation_row = [0.0] * len(self.sin_instance.nodes)
+                idx = list(self.sin_instance.nodes.keys()).index(self.id)
                 activation_row[idx] = self.amplitude
-                sin_instance.activation_history.append(activation_row)
+                self.sin_instance.activation_history.append(activation_row)
         else:
             self.amplitude = 0.0
 
@@ -790,19 +792,12 @@ class MultiAgentSystem:
 
 # === SIN — ОСНОВНАЯ СИСТЕМА ===
 class Sin:
-    VERSION = "19.4"
+    VERSION = "19.5"
 
     def __init__(self, persist_file: str = PERSIST_FILE):
-        # Создаём все папки
         os.makedirs(SUBCONSCIOUS_SAVE_DIR, exist_ok=True)
-
-        # Загружаем эмбеддинги
         self.embedder = RuEmbedder()
-
-        # Инициализируем подсознание (оно само решит, откуда грузить)
         self.subconscious = SubconsciousModule()
-
-        # Остальные компоненты
         self.nodes = {}
         self.node_counter = 0
         self.memory = []
@@ -1315,7 +1310,7 @@ app = FastAPI(title=f"SIN API v{Sin.VERSION}")
 sin = Sin()
 
 @app.post("/learn")
-async def api_learn(data: dict):
+async def api_learn( dict):
     try:
         text = data.get("text", "")
         result = sin.learn(text)
@@ -1324,7 +1319,7 @@ async def api_learn(data: dict):
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.post("/respond")
-async def api_respond(data: dict):
+async def api_respond( dict):
     try:
         text = data.get("text", "")
         response = sin.respond(text)
@@ -1345,7 +1340,7 @@ async def api_status():
     }
 
 @app.post("/autonomous_learn")
-async def api_autonomous_learn(data: dict):
+async def api_autonomous_learn( dict):
     duration = data.get("duration", 30)
     result = sin.start_autonomous_learning(duration)
     return {"result": result}
@@ -1361,7 +1356,7 @@ async def api_autonomous_learn_log():
     return {"log": log}
 
 @app.post("/add_goal")
-async def api_add_goal(data: dict):
+async def api_add_goal( dict):
     description = data.get("description", "")
     priority = data.get("priority", 0.5)
     result = sin.add_goal(description, priority)
