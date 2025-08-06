@@ -15,9 +15,10 @@ from transformers import (
     AutoTokenizer,
     AutoModelForSeq2SeqLM,
     TrainingArguments,
-    DataCollatorForSeq2Seq
+    DataCollatorForSeq2Seq,
+    Seq2SeqTrainingArguments,
+    Seq2SeqTrainer
 )
-from trl import SFTTrainer
 from peft import get_peft_model, LoraConfig, TaskType, PeftModel
 from sentence_transformers import SentenceTransformer
 from sklearn.metrics.pairwise import cosine_similarity
@@ -231,9 +232,9 @@ def load_qa_from_json(file_path: Path) -> List[Dict[str, str]]:
         for item in data:
             if isinstance(item, dict):
                 if "question" in item and "answer" in item:
-                    qa_pairs.append({"text": f"{item['question']} Ответ: {item['answer']}"})
+                    qa_pairs.append({"question": item['question'], "answer": item['answer']})
                 elif "input" in item and "output" in item:
-                    qa_pairs.append({"text": f"{item['input']} Ответ: {item['output']}"})
+                    qa_pairs.append({"question": item['input'], "answer": item['output']})
         return qa_pairs
     except Exception as e:
         console.print(f"[red]Ошибка при чтении {file_path}: {e}[/red]")
@@ -262,7 +263,7 @@ def load_dataset_from_files(data_dir: Path) -> List[Dict[str, str]]:
                         break
                     question = sentences[i] + "?"
                     answer = sentences[i+1]
-                    all_qa_pairs.append({"text": f"{question} Ответ: {answer}"})
+                    all_qa_pairs.append({"question": question, "answer": answer})
         elif file_path.suffix.lower() == '.pdf':
             text = load_text_from_pdf(file_path)
             if text:
@@ -273,7 +274,7 @@ def load_dataset_from_files(data_dir: Path) -> List[Dict[str, str]]:
                         break
                     question = sentences[i] + "?"
                     answer = sentences[i+1]
-                    all_qa_pairs.append({"text": f"{question} Ответ: {answer}"})
+                    all_qa_pairs.append({"question": question, "answer": answer})
         elif file_path.suffix.lower() == '.docx':
             text = load_text_from_docx(file_path)
             if text:
@@ -284,7 +285,7 @@ def load_dataset_from_files(data_dir: Path) -> List[Dict[str, str]]:
                         break
                     question = sentences[i] + "?"
                     answer = sentences[i+1]
-                    all_qa_pairs.append({"text": f"{question} Ответ: {answer}"})
+                    all_qa_pairs.append({"question": question, "answer": answer})
         elif file_path.suffix.lower() == '.json':
             qa_pairs = load_qa_from_json(file_path)
             all_qa_pairs.extend(qa_pairs)
@@ -346,8 +347,7 @@ def create_qa_pairs_from_text(text: str, max_pairs: int = 100) -> List[Dict[str,
         else:
             question = statement + '?'
         answer = next_statement
-        formatted_text = f"{question} Ответ: {answer}"
-        qa_pairs.append({"text": formatted_text})
+        qa_pairs.append({"question": question, "answer": answer})
     console.print(f"[green]Создано {len(qa_pairs)} пар вопрос-ответ.[/green]")
     return qa_pairs
 
@@ -520,27 +520,19 @@ class QADataset(Dataset):
 
     def __getitem__(self, idx):
         item = self.qa_pairs[idx]
-        text = item['text']
-        if "Ответ:" in text:
-            parts = text.split("Ответ:", 1)
-            input_text = parts[0].strip()
-            target_text = parts[1].strip()
-        else:
-            input_text = text
-            target_text = "Хорошо, я понял."
+        question = item['question']
+        answer = item['answer']
         
-        # Исправление для устранения предупреждения об устаревшем методе
         model_inputs = self.tokenizer(
-            input_text, 
+            question, 
             max_length=self.max_length, 
             truncation=True, 
             padding="max_length", 
             return_tensors="pt"
         )
         
-        # Исправление для устранения предупреждения об устаревшем методе
         labels = self.tokenizer(
-            text_target=target_text,
+            text_target=answer,
             max_length=self.max_length,
             truncation=True,
             padding="max_length",
@@ -551,13 +543,6 @@ class QADataset(Dataset):
         labels = labels.squeeze(0)
         labels[labels == self.tokenizer.pad_token_id] = -100
         model_inputs["labels"] = labels
-        
-        # Исправление для устранения предупреждения о медленном создании тензора
-        for key in model_inputs:
-            if isinstance(model_inputs[key], torch.Tensor):
-                model_inputs[key] = model_inputs[key].clone().detach()
-            else:
-                model_inputs[key] = torch.tensor(model_inputs[key], dtype=torch.long)
         
         return model_inputs
 
@@ -637,7 +622,7 @@ def train_pytorch(bot: EmotionalChatBot, train_dataset: Dataset, epochs: int = 3
             console.print("[red]Не удалось загрузить модель для обучения.[/red]")
             return
 
-    console.print("[blue]Запуск PyTorch SFT обучения...[/blue]")
+    console.print("[blue]Запуск PyTorch обучения...[/blue]")
     
     try:
         peft_config = LoraConfig(
@@ -656,7 +641,12 @@ def train_pytorch(bot: EmotionalChatBot, train_dataset: Dataset, epochs: int = 3
         return
 
     try:
-        data_collator = DataCollatorForSeq2Seq(bot.tokenizer, model=model, padding=True)
+        data_collator = DataCollatorForSeq2Seq(
+            bot.tokenizer, 
+            model=model, 
+            padding=True,
+            return_tensors="pt"
+        )
         train_dataloader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True, collate_fn=data_collator)
     except Exception as e:
         console.print(f"[red]Ошибка при подготовке данных: {e}[/red]")
@@ -714,7 +704,7 @@ def train_pytorch(bot: EmotionalChatBot, train_dataset: Dataset, epochs: int = 3
         bot.tokenizer.save_pretrained(MODEL_DIR)
         bot.config["last_trained"] = datetime.now().isoformat()
         bot.save_state()
-        console.print("[green]PyTorch SFT обучение завершено и модель сохранена.[/green]")
+        console.print("[green]PyTorch обучение завершено и модель сохранена.[/green]")
     except Exception as e:
         console.print(f"[red]Ошибка при сохранении модели: {e}[/red]")
 
@@ -722,7 +712,7 @@ def train_pytorch(bot: EmotionalChatBot, train_dataset: Dataset, epochs: int = 3
 # SFT: Обучение на парах вопрос-ответ (с улучшениями)
 # ----------------------------------------
 def train_sft(bot: EmotionalChatBot, custom_dataset: Optional[List[Dict[str, str]]] = None, dataset_source: str = None):
-    """Обучение с использованием SFTTrainer."""
+    """Обучение с использованием Seq2SeqTrainer."""
     if bot.model is None or bot.tokenizer is None:
         logger.warning("[yellow]Нет модели или токенизатора для обучения.[/yellow]")
         bot.tokenizer, bot.model = load_optimized_model(auto_load=True)
@@ -752,7 +742,7 @@ def train_sft(bot: EmotionalChatBot, custom_dataset: Optional[List[Dict[str, str
                         for line in f:
                             item = json.loads(line)
                             if 'question' in item and 'answer' in item:
-                                data.append({"text": f"{item['question']} Ответ: {item['answer']}"})
+                                data.append({"question": item['question'], "answer": item['answer']})
                 elif dataset_path.suffix == '.txt':
                     text = load_text_from_txt(dataset_path)
                     if text:
@@ -763,14 +753,14 @@ def train_sft(bot: EmotionalChatBot, custom_dataset: Optional[List[Dict[str, str
     else:
         console.print("[blue]Используется стандартный датасет для обучения.[/blue]")
         data = [
-            {"text": "Привет Ответ: Здравствуй! Как дела?"},
-            {"text": "Как дела? Ответ: У меня всё хорошо, спасибо!"},
-            {"text": "Расскажи анекдот Ответ: Почему программисты не ходят в лес? Боятся рекурсии!"},
-            {"text": "Что ты умеешь? Ответ: Я могу поддержать беседу, рассказать анекдот и помочь с различными вопросами."},
-            {"text": "Как тебя зовут? Ответ: Меня зовут Sin. Приятно познакомиться!"},
-            {"text": "Пока Ответ: До скорой встречи!"},
-            {"text": "Что такое ИИ? Ответ: Искусственный интеллект - это область компьютерных наук, которая создает интеллектуальные машины."},
-            {"text": "Расскажи о погоде Ответ: Я не могу получить информацию о погоде в реальном времени, но могу поговорить о климате."},
+            {"question": "Привет", "answer": "Здравствуй! Как дела?"},
+            {"question": "Как дела?", "answer": "У меня всё хорошо, спасибо!"},
+            {"question": "Расскажи анекдот", "answer": "Почему программисты не ходят в лес? Боятся рекурсии!"},
+            {"question": "Что ты умеешь?", "answer": "Я могу поддержать беседу, рассказать анекдот и помочь с различными вопросами."},
+            {"question": "Как тебя зовут?", "answer": "Меня зовут Sin. Приятно познакомиться!"},
+            {"question": "Пока", "answer": "До скорой встречи!"},
+            {"question": "Что такое ИИ?", "answer": "Искусственный интеллект - это область компьютерных наук, которая создает интеллектуальные машины."},
+            {"question": "Расскажи о погоде", "answer": "Я не могу получить информацию о погоде в реальном времени, но могу поговорить о климате."},
         ]
     
     if not data:
@@ -780,8 +770,32 @@ def train_sft(bot: EmotionalChatBot, custom_dataset: Optional[List[Dict[str, str
     try:
         from datasets import Dataset as HFDataset
         dataset = HFDataset.from_list(data)
-    except ImportError:
-        console.print("[red]Библиотека datasets не установлена. Установите её: pip install datasets[/red]")
+        
+        def preprocess_function(examples):
+            inputs = [q for q in examples["question"]]
+            targets = [a for a in examples["answer"]]
+            model_inputs = bot.tokenizer(
+                inputs, 
+                max_length=256, 
+                truncation=True, 
+                padding="max_length"
+            )
+            labels = bot.tokenizer(
+                text_target=targets,
+                max_length=256,
+                truncation=True,
+                padding="max_length"
+            )
+            model_inputs["labels"] = labels["input_ids"]
+            return model_inputs
+
+        tokenized_dataset = dataset.map(
+            preprocess_function,
+            batched=True,
+            remove_columns=dataset.column_names
+        )
+    except Exception as e:
+        console.print(f"[red]Ошибка при подготовке данных: {e}[/red]")
         return
 
     peft_config = LoraConfig(
@@ -799,7 +813,7 @@ def train_sft(bot: EmotionalChatBot, custom_dataset: Optional[List[Dict[str, str
         console.print(f"[red]Ошибка при настройке LoRA для SFT: {e}[/red]")
         return
 
-    training_args = TrainingArguments(
+    training_args = Seq2SeqTrainingArguments(
         output_dir=str(LOGS_DIR),
         per_device_train_batch_size=4,
         gradient_accumulation_steps=4,
@@ -815,35 +829,35 @@ def train_sft(bot: EmotionalChatBot, custom_dataset: Optional[List[Dict[str, str
         logging_first_step=True,
         load_best_model_at_end=False,
         dataloader_num_workers=0,
+        predict_with_generate=True
     )
 
     try:
-        trainer = SFTTrainer(
+        data_collator = DataCollatorForSeq2Seq(
+            bot.tokenizer,
+            model=model_for_training,
+            padding=True,
+            return_tensors="pt"
+        )
+
+        trainer = Seq2SeqTrainer(
             model=model_for_training,
             args=training_args,
-            train_dataset=dataset,
-            dataset_text_field="text",
-            max_seq_length=256,
-            packing=False,
+            train_dataset=tokenized_dataset,
             tokenizer=bot.tokenizer,
-            data_collator=DataCollatorForSeq2Seq(
-                tokenizer=bot.tokenizer, 
-                model=model_for_training, 
-                padding=True,
-                return_tensors="pt"  # Исправление для предупреждения о медленных тензорах
-            )
+            data_collator=data_collator
         )
     except Exception as e:
-        console.print(f"[red]Ошибка при создании SFTTrainer: {e}[/red]")
+        console.print(f"[red]Ошибка при создании Trainer: {e}[/red]")
         return
         
-    console.print("[blue]Запуск процесса обучения SFT...[/blue]")
+    console.print("[blue]Запуск процесса обучения...[/blue]")
     try:
-        with Progress(SpinnerColumn(), TextColumn("SFT обучение..."), BarColumn(), console=console) as progress:
+        with Progress(SpinnerColumn(), TextColumn("Обучение..."), BarColumn(), console=console) as progress:
             progress.add_task("", total=None)
             trainer.train()
     except Exception as e:
-        console.print(f"[red]Ошибка во время обучения SFT: {e}[/red]")
+        console.print(f"[red]Ошибка во время обучения: {e}[/red]")
         return
         
     console.print("[green]Сохранение обученной модели...[/green]")
@@ -852,9 +866,9 @@ def train_sft(bot: EmotionalChatBot, custom_dataset: Optional[List[Dict[str, str
         bot.config["last_trained"] = datetime.now().isoformat()
         bot.model = model_for_training.merge_and_unload()
         bot.save_state()
-        logger.info("[bold green]SFT обучение завершено и модель обновлена.[/bold green]")
+        logger.info("[bold green]Обучение завершено и модель обновлена.[/bold green]")
     except Exception as e:
-        console.print(f"[red]Ошибка при сохранении модели после SFT: {e}[/red]")
+        console.print(f"[red]Ошибка при сохранении модели: {e}[/red]")
 
 # ----------------------------------------
 # RLHF: Сбор оценок
@@ -954,7 +968,7 @@ def main():
             console.print("[blue]Загрузка датасета из файлов...[/blue]")
             qa_pairs = load_dataset_from_files(DATA_DIR)
             if qa_pairs:
-                console.print("[blue]Запуск SFT обучения на данных из файлов...[/blue]")
+                console.print("[blue]Запуск обучения на данных из файлов...[/blue]")
                 train_sft(bot, custom_dataset=qa_pairs)
             else:
                 console.print("[red]Не удалось загрузить датасет из файлов.[/red]")
