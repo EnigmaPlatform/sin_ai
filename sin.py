@@ -16,9 +16,8 @@ from transformers import (
 from datasets import Dataset
 from peft import LoraConfig, get_peft_model, prepare_model_for_kbit_training
 from trl import PPOTrainer, PPOConfig, AutoModelForCausalLMWithValueHead
-from trl.core import respond_to_batch
 from rich.console import Console
-from rich.progress import Progress, SpinnerColumn, BarColumn, TextColumn, TimeElapsedColumn
+from rich.progress import Progress, SpinnerColumn, BarColumn, TextColumn
 from rich.logging import RichHandler
 from rich.table import Table
 from rich.panel import Panel
@@ -40,7 +39,7 @@ os.makedirs(MODEL_DIR, exist_ok=True)
 os.makedirs(LOGS_DIR, exist_ok=True)
 os.makedirs(CACHE_DIR, exist_ok=True)
 
-# ✅ Исправление: RichHandler без console_width
+# Логирование
 rich_console = RichConsole(width=120)
 logging.basicConfig(
     level=logging.INFO,
@@ -54,7 +53,7 @@ console = Console()
 # Конфигурация
 # ----------------------------------------
 default_config = {
-    "model_name": "sberbank-ai/rugpt3small",  # causal LM для PPO
+    "model_name": "sberbank-ai/rugpt3small",
     "max_length": 128,
     "batch_size": 2,
     "epochs": 3,
@@ -92,11 +91,19 @@ class VectorMemory:
 
     def _get_embedding(self, text):
         if self.emb_pipeline is None:
-            self.emb_pipeline = pipeline("feature-extraction", model="cointegrated/rubert-tiny2", device=0 if torch.cuda.is_available() else -1)
+            try:
+                self.emb_pipeline = pipeline(
+                    "feature-extraction",
+                    model="cointegrated/rubert-tiny2",
+                    device=0 if torch.cuda.is_available() else -1
+                )
+            except:
+                logger.warning("[yellow]Не удалось загрузить rubert-tiny2. Используется заглушка.[/yellow]")
+                return np.random.rand(self.dim).astype(np.float32)
         try:
             emb = self.emb_pipeline(text)[0][0]
             return np.array(emb).astype(np.float32)
-        except Exception as e:
+        except:
             return np.random.rand(self.dim).astype(np.float32)
 
     def add(self, sentence):
@@ -137,17 +144,38 @@ class VectorMemory:
 memory = VectorMemory()
 
 # ----------------------------------------
+# Загрузка модели (PPO или базовая)
+# ----------------------------------------
+def load_model_base():
+    global tokenizer, model
+    model_path = MODEL_DIR / "finetuned_ppo"
+    base_name = config["model_name"]
+
+    if os.path.exists(model_path):
+        tokenizer = AutoTokenizer.from_pretrained(model_path)
+        model = AutoModelForCausalLMWithValueHead.from_pretrained(model_path)
+        logger.info("[blue]PPO-модель загружена.[/blue]")
+    else:
+        tokenizer = AutoTokenizer.from_pretrained(base_name)
+        tokenizer.pad_token = tokenizer.eos_token
+        model = AutoModelForCausalLMWithValueHead.from_pretrained(base_name)
+        logger.info("[yellow]Базовая модель загружена.[/yellow]")
+
+    model = model.to("cuda" if torch.cuda.is_available() else "cpu")
+    model = model.eval()  # сначала eval, потом, возможно, перевод в train
+
+# ----------------------------------------
 # Сбор RLHF-оценок
 # ----------------------------------------
 def collect_human_feedback(n=5):
     feedback_file = DATA_DIR / "feedback.jsonl"
     load_model_base()
+    model.eval()
 
     console.print(Panel("🧠 RLHF: Оцените ответы Sin (1–5)", style="bold yellow"))
     feedback = []
 
-    # Простой датасет
-    prompts = [
+    prompts_list = [
         "Привет",
         "Как дела?",
         "Расскажи анекдот",
@@ -158,19 +186,25 @@ def collect_human_feedback(n=5):
         "Что ты умеешь?"
     ]
 
-    for prompt in random.sample(prompts, min(n, len(prompts))):
+    for prompt in random.sample(prompts_list, min(n, len(prompts_list))):
         input_text = f"Вопрос: {prompt}\nОтвет:"
         input_ids = tokenizer.encode(input_text, return_tensors="pt").to(model.device)
-        output_ids = model.generate(
-            input_ids,
-            max_new_tokens=64,
-            temperature=0.8,
-            top_p=0.9,
-            do_sample=True,
-            pad_token_id=tokenizer.eos_token_id
-        )
-        response = tokenizer.decode(output_ids[0], skip_special_tokens=True)
-        response = response[len(input_text):].strip() or "Не понял."
+
+        try:
+            output_ids = model.generate(
+                input_ids,
+                max_new_tokens=64,
+                temperature=0.8,
+                top_p=0.9,
+                do_sample=True,
+                pad_token_id=tokenizer.eos_token_id,
+                use_cache=True
+            )
+            response = tokenizer.decode(output_ids[0], skip_special_tokens=True)
+            response = response[len(input_text):].strip() or "Я не понял."
+        except Exception as e:
+            response = "Ошибка генерации."
+            logger.error(f"[red]Ошибка генерации: {e}[/red]")
 
         console.print(f"[cyan]Вопрос:[/cyan] {prompt}")
         console.print(f"[magenta]Sin:[/magenta] {response}")
@@ -190,27 +224,7 @@ def collect_human_feedback(n=5):
     logger.info(f"[green]Сохранено {len(feedback)} оценок.[/green]")
 
 # ----------------------------------------
-# Загрузка базовой модели (без ValueHead)
-# ----------------------------------------
-def load_model_base():
-    global tokenizer, model
-    model_path = MODEL_DIR / "finetuned_ppo"
-    base_name = config["model_name"]
-
-    if os.path.exists(model_path):
-        tokenizer = AutoTokenizer.from_pretrained(model_path)
-        model = AutoModelForCausalLMWithValueHead.from_pretrained(model_path)
-        logger.info("[blue]PPO-модель загружена.[/blue]")
-    else:
-        tokenizer = AutoTokenizer.from_pretrained(base_name)
-        tokenizer.pad_token = tokenizer.eos_token
-        model = AutoModelForCausalLMWithValueHead.from_pretrained(base_name)
-        logger.info("[yellow]Базовая модель загружена.[/yellow]")
-
-    model = model.to("cuda" if torch.cuda.is_available() else "cpu")
-
-# ----------------------------------------
-# RLHF: PPO обучение по оценкам
+# PPO: обучение по RLHF
 # ----------------------------------------
 def train_from_feedback_ppo():
     feedback_file = DATA_DIR / "feedback.jsonl"
@@ -218,28 +232,31 @@ def train_from_feedback_ppo():
         logger.warning("[yellow]Нет данных RLHF. Сначала соберите оценки.[/yellow]")
         return
 
-    # Читаем оценки
+    # Загрузка оценок
     examples = []
     with open(feedback_file, 'r', encoding='utf-8') as f:
         for line in f:
             if not line.strip():
                 continue
-            item = json.loads(line)
-            examples.append({
-                "prompt": item["input"].strip(),
-                "response": item["output"].strip(),
-                "reward": float(item["score"] - 3.0)  # нормализация: 1-5 → -2 до +2
-            })
+            try:
+                item = json.loads(line)
+                examples.append({
+                    "prompt": item["input"].strip(),
+                    "reward": float(item["score"] - 3.0)  # -2..+2
+                })
+            except:
+                continue
 
     if len(examples) < 2:
         logger.warning("[yellow]Нужно минимум 2 оценки для PPO.[/yellow]")
         return
 
-    logger.info(f"[blue]Запуск PPO с {len(examples)} примерами...[/blue]")
+    logger.info(f"[blue]PPO: {len(examples)} примеров...[/blue]")
 
     # Модель
     load_model_base()
-    model_ppo = prepare_model_for_kbit_training(model)
+    model_ppo = prepare_model_for_kbit_training(model, use_gradient_checkpointing=True)
+    model_ppo.train()
 
     # LoRA
     lora_config = LoraConfig(
@@ -275,43 +292,41 @@ def train_from_feedback_ppo():
     rewards = [torch.tensor([ex["reward"]]) for ex in examples]
 
     # Токены
-    prompt_tokens = [tokenizer.encode(p, return_tensors="pt").to(model.device) for p in prompts]
+    prompt_tokens = [
+        tokenizer.encode(p, return_tensors="pt")[0].to(model.device)  # remove batch dim
+        for p in prompts
+    ]
 
-    # PPO шаг
+    # Обучение
     try:
-        with Progress(
-            SpinnerColumn(),
-            TextColumn("[progress.description]{task.description}"),
-            BarColumn(),
-            console=console
-        ) as progress:
-            task = progress.add_task("PPO обучение...", total=len(prompts))
+        with Progress(SpinnerColumn(), TextColumn("PPO обучение..."), BarColumn(), console=console) as progress:
+            task = progress.add_task("", total=len(prompts))
             for i in range(0, len(prompts), ppo_config.batch_size):
                 batch_tokens = prompt_tokens[i:i + ppo_config.batch_size]
                 batch_rewards = rewards[i:i + ppo_config.batch_size]
 
-                # Генерация
-                outputs = ppo_trainer.generate(
-                    batch_tokens,
-                    return_prompt=False,
-                    gen_kwargs={
-                        "min_length": -1,
-                        "top_k": 0,
-                        "top_p": 0.9,
-                        "do_sample": True,
-                        "max_new_tokens": 64,
-                        "pad_token_id": tokenizer.eos_token_id,
-                    },
-                )
-                # Убираем prompt
-                texts = [tokenizer.decode(o, skip_special_tokens=True) for o in outputs]
+                try:
+                    # Генерация
+                    generated_tensors = ppo_trainer.generate(
+                        batch_tokens,
+                        max_new_tokens=64,
+                        temperature=0.8,
+                        top_p=0.9,
+                        do_sample=True,
+                        pad_token_id=tokenizer.eos_token_id,
+                        use_cache=True
+                    )
 
-                # Реворды
-                reward_tensors = [r.to(model.device) for r in batch_rewards]
+                    # Реворды
+                    reward_tensors = [r.to(model.device) for r in batch_rewards]
 
-                # Обучение
-                stats = ppo_trainer.step(batch_tokens, outputs, reward_tensors)
-                progress.update(task, advance=len(batch_tokens))
+                    # Шаг PPO
+                    stats = ppo_trainer.step(batch_tokens, generated_tensors, reward_tensors)
+                    progress.update(task, advance=len(batch_tokens))
+
+                except Exception as e:
+                    logger.error(f"[red]Ошибка шага: {e}[/red]")
+                    continue
 
         # Сохранение
         model_ppo.pretrained_model.save_pretrained(MODEL_DIR / "finetuned_ppo")
@@ -322,7 +337,7 @@ def train_from_feedback_ppo():
         logger.info("[bold green]PPO обучение завершено и сохранено.[/bold green]")
 
     except Exception as e:
-        logger.error(f"[red]Ошибка PPO: {e}[/red]")
+        logger.error(f"[red]Критическая ошибка PPO: {e}[/red]")
 
 # ----------------------------------------
 # Тест общения
@@ -343,16 +358,20 @@ def test_chat():
         prompt = (ctx + "\n" if ctx else "") + f"Вопрос: {user_input}\nОтвет:"
 
         input_ids = tokenizer.encode(prompt, return_tensors="pt").to(model.device)
-        output_ids = model.generate(
-            input_ids,
-            max_new_tokens=100,
-            temperature=0.8,
-            top_p=0.9,
-            do_sample=True,
-            pad_token_id=tokenizer.eos_token_id
-        )
-        response = tokenizer.decode(output_ids[0], skip_special_tokens=True)
-        response = response[len(prompt):].strip() or "Я не понял."
+        try:
+            output_ids = model.generate(
+                input_ids,
+                max_new_tokens=100,
+                temperature=0.8,
+                top_p=0.9,
+                do_sample=True,
+                pad_token_id=tokenizer.eos_token_id,
+                use_cache=True
+            )
+            response = tokenizer.decode(output_ids[0], skip_special_tokens=True)
+            response = response[len(prompt):].strip() or "Я не понял."
+        except Exception as e:
+            response = "Извини, не могу ответить."
 
         console.print(f"[magenta]Sin:[/magenta] {response}")
 
@@ -370,9 +389,9 @@ def main():
         table = Table(title="Меню", show_header=True, header_style="bold magenta")
         table.add_column("№", style="dim")
         table.add_column("Действие")
-        table.add_row("1", "Собрать RLHF оценки (человек)")
+        table.add_row("1", "Собрать RLHF оценки")
         table.add_row("2", "PPO: дообучить по оценкам")
-        table.add_row("3", "Тест общения (с памятью)")
+        table.add_row("3", "Тест общения")
         table.add_row("4", "Статус")
         table.add_row("5", "Выход")
         console.print(table)
@@ -385,13 +404,16 @@ def main():
         elif choice == "3":
             test_chat()
         elif choice == "4":
+            fb_file = DATA_DIR / "feedback.jsonl"
+            n_feedback = 0
+            if fb_file.exists():
+                n_feedback = sum(1 for _ in open(fb_file, 'r', encoding='utf-8') if _.strip())
             status = Table(title="Статус Sin", show_header=True)
             status.add_column("Параметр")
             status.add_column("Значение")
             status.add_row("Последнее обучение", config.get("last_trained", "—"))
-            fb_file = DATA_DIR / "feedback.jsonl"
-            status.add_row("Оценок RLHF", str(sum(1 for _ in open(fb_file, 'r', encoding='utf-8')) if fb_file.exists() else 0))
-            status.add_row("RAG записей", str(len(memory.sentences) if hasattr(memory, 'sentences') else 0))
+            status.add_row("Оценок RLHF", str(n_feedback))
+            status.add_row("RAG записей", str(len(memory.sentences)))
             console.print(status)
         elif choice == "5":
             console.print("[bold red]До свидания, Sin спит...[/bold red]")
