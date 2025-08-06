@@ -12,9 +12,9 @@ from transformers import (
     AutoModelForSeq2SeqLM,
     TrainingArguments,
     Trainer,
-    BitsAndBytesConfig,
-    SFTTrainer  # Импорт SFTTrainer
+    BitsAndBytesConfig
 )
+from trl import SFTTrainer  # ✅ Правильный импорт
 from sentence_transformers import SentenceTransformer
 from sklearn.metrics.pairwise import cosine_similarity
 from rich.console import Console
@@ -286,6 +286,29 @@ def train_sft(bot: EmotionalChatBot):
     bot.config["last_trained"] = datetime.now().isoformat()
     bot.save_state()
     logger.info("[bold green]SFT обучение завершено.[/bold green]")
+
+# ----------------------------------------
+# RLHF: Сбор оценок
+# ----------------------------------------
+def collect_rlhf_feedback(bot: EmotionalChatBot):
+    feedback_file = DATA_DIR / "feedback.jsonl"
+    console.print(Panel("🧠 Оцените ответы Sin (1–5)", style="bold yellow"))
+    feedback = []
+
+    prompts = ["Привет", "Как дела?", "Расскажи анекдот", "Кто ты?", "Погода", "2+2", "Пока"]
+
+    for q in random.sample(prompts, 3):
+        response = bot.generate_response(q)
+        console.print(f"[cyan]Вопрос:[/cyan] {q}")
+        console.print(f"[magenta]Sin:[/magenta] {response}")
+        rating = console.input("Оценка (1-5): ").strip()
+        if rating in "12345":
+            feedback.append({"input": q, "output": response, "score": int(rating)})
+
+    with open(feedback_file, "a", encoding="utf-8") as f:
+        for item in feedback:
+            f.write(json.dumps(item, ensure_ascii=False) + "\n")
+    logger.info(f"[green]Сохранено {len(feedback)} оценок.[/green]")
 
 # ----------------------------------------
 # Главное меню
