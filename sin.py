@@ -1,80 +1,83 @@
 import os
 import json
-import time
 import random
-import logging
-from pathlib import Path
-
-import torch
-import faiss
 import numpy as np
+from pathlib import Path
+from datetime import datetime
+from typing import List, Dict, Tuple
+from collections import deque
+import torch
 from transformers import (
     AutoTokenizer,
     AutoModelForSeq2SeqLM,
-    pipeline
+    pipeline,
+    TrainingArguments,
+    Trainer,
+    BitsAndBytesConfig
 )
+from sentence_transformers import SentenceTransformer
+from sklearn.metrics.pairwise import cosine_similarity
 from peft import LoraConfig, get_peft_model
-from huggingface_hub import snapshot_download, HfApi
+from huggingface_hub import snapshot_download
 from rich.console import Console
+from rich.panel import Panel
+from rich.table import Table
 from rich.progress import Progress, SpinnerColumn, BarColumn, TextColumn
 from rich.logging import RichHandler
-from rich.table import Table
-from rich.panel import Panel
-from rich.console import Console as RichConsole
+import logging
 
 # ----------------------------------------
-# Настройки
+# Настройки путей
 # ----------------------------------------
-PROJECT_DIR = Path(r"C:\Users\alex\Downloads\Sin")
-DATA_DIR = PROJECT_DIR / "data"
+PROJECT_DIR = Path(r"C:\Users\User\Downloads\Sin")
 MODEL_DIR = PROJECT_DIR / "model"
-CACHE_DIR = PROJECT_DIR / "cache"
+DATA_DIR = PROJECT_DIR / "data"
+MEMORY_DIR = PROJECT_DIR / "memory"
 CONFIG_FILE = PROJECT_DIR / "config.json"
 LOGS_DIR = PROJECT_DIR / "logs"
 
 os.makedirs(PROJECT_DIR, exist_ok=True)
-os.makedirs(DATA_DIR, exist_ok=True)
 os.makedirs(MODEL_DIR, exist_ok=True)
-os.makedirs(CACHE_DIR, exist_ok=True)
+os.makedirs(DATA_DIR, exist_ok=True)
+os.makedirs(MEMORY_DIR, exist_ok=True)
 os.makedirs(LOGS_DIR, exist_ok=True)
 
 # Логирование
-rich_console = RichConsole(width=120)
+rich_console = Console(width=120)
 logging.basicConfig(
     level=logging.INFO,
     format="%(message)s",
     handlers=[RichHandler(console=rich_console, show_path=False)]
 )
 logger = logging.getLogger("Sin")
-console = Console()
 
-# Конфиг
-config = {
-    "model_name": "cointegrated/rut5-base",  # ✅ Правильное имя
-    "max_length": 512,
-    "lora_r": 8,
-    "lora_alpha": 32,
-    "batch_size": 4,
-    "epochs": 1,
-    "learning_rate": 2e-4,
-    "last_trained": None,
-    "quality_score": 0.0
+# --- Конфигурация ---
+EMOTION_ENGINE_CONFIG = {
+    "base_emotions": {
+        "happy": {"icon": "😊", "triggers": ["рад", "счастлив", "люблю", "класс", "прикольно"]},
+        "sad": {"icon": "😢", "triggers": ["грустн", "печаль", "плак", "тоска", "одиноко"]},
+        "angry": {"icon": "😠", "triggers": ["злюсь", "бесит", "ненавижу", "отстой", "фу"]},
+        "fear": {"icon": "😨", "triggers": ["боюсь", "страх", "пугает", "ужас", "опасно"]},
+        "surprise": {"icon": "😲", "triggers": ["невероятно", "удивитель", "вау", "о боже"]},
+        "disgust": {"icon": "🤢", "triggers": ["отврат", "мерзк", "противно", "гадость"]},
+        "neutral": {"icon": "😐", "triggers": []}
+    },
+    "decay_rate": 0.95,
+    "intensity_threshold": 0.3,
+    "max_memory": 1000
 }
 
-if CONFIG_FILE.exists():
-    with open(CONFIG_FILE, 'r', encoding='utf-8') as f:
-        config.update(json.load(f))
-else:
-    with open(CONFIG_FILE, 'w', encoding='utf-8') as f:
-        json.dump(config, f, indent=4, ensure_ascii=False)
+# --- Инициализация ---
+console = Console()
+device = "cuda" if torch.cuda.is_available() else "cpu"
 
 # ----------------------------------------
 # Проверка подключения к HF
 # ----------------------------------------
 def is_online():
     try:
-        api = HfApi()
-        api.list_models(limit=1)
+        from huggingface_hub import HfApi
+        HfApi().list_models(limit=1)
         return True
     except:
         return False
@@ -91,10 +94,9 @@ def download_model():
         console.print("[bold]Скачивание модели cointegrated/rut5-base...[/bold]")
         try:
             snapshot_download(
-                repo_id=config["model_name"],
+                repo_id="cointegrated/rut5-base",
                 local_dir=MODEL_DIR,
-                local_dir_use_symlinks=False,
-                max_workers=2
+                local_dir_use_symlinks=False
             )
             logger.info("[green]Модель успешно скачана.[/green]")
         except Exception as e:
@@ -105,172 +107,215 @@ def download_model():
     return True
 
 # ----------------------------------------
-# Загрузка модели
+# Загрузка модели с оптимизацией
 # ----------------------------------------
-tokenizer = None
-model = None
-
-def load_model():
-    global tokenizer, model
-    if tokenizer is not None and model is not None:
+def load_optimized_model():
+    try:
+        local = (MODEL_DIR / "config.json").exists()
+        tokenizer = AutoTokenizer.from_pretrained(MODEL_DIR if local else "cointegrated/rut5-base", local_files_only=local)
+        model = AutoModelForSeq2SeqLM.from_pretrained(MODEL_DIR if local else "cointegrated/rut5-base", local_files_only=local)
+        logger.info("[green]Модель загружена.[/green]")
         return tokenizer, model
+    except Exception as e:
+        logger.error(f"[red]Ошибка загрузки модели: {e}[/red]")
+        return None, None
 
-    # Попробуем загрузить локально
-    if (MODEL_DIR / "config.json").exists():
-        try:
-            tokenizer = AutoTokenizer.from_pretrained(MODEL_DIR)
-            model = AutoModelForSeq2SeqLM.from_pretrained(MODEL_DIR)
-            logger.info("[green]Модель загружена локально.[/green]")
-            return tokenizer, model
-        except Exception as e:
-            logger.error(f"[red]Ошибка загрузки локальной модели: {e}[/red]")
+# --- Класс эмоционального состояния ---
+class EmotionalState:
+    def __init__(self):
+        self.current_emotion = "neutral"
+        self.emotion_intensity = 0.5
+        self.emotion_history = deque(maxlen=50)
+        self.long_term_mood = 0.5
+        self.triggers_activated = set()
 
-    # Если не получилось — скачиваем
-    if download_model():
-        try:
-            tokenizer = AutoTokenizer.from_pretrained(MODEL_DIR)
-            model = AutoModelForSeq2SeqLM.from_pretrained(MODEL_DIR)
-            logger.info("[green]Модель загружена после скачивания.[/green]")
-            return tokenizer, model
-        except Exception as e:
-            logger.error(f"[red]Ошибка загрузки после скачивания: {e}[/red]")
+    def update(self, text: str):
+        text_lower = text.lower()
+        for emotion, data in EMOTION_ENGINE_CONFIG["base_emotions"].items():
+            for trigger in data["triggers"]:
+                if trigger in text_lower:
+                    self.current_emotion = emotion
+                    self.emotion_intensity = min(1.0, self.emotion_intensity + 0.3)
+                    self.triggers_activated.add(emotion)
 
-    # Фолбэк: используем встроенные данные
-    logger.warning("[yellow]Использую режим без модели (тестовые ответы).[/yellow]")
-    return None, None
+        self.emotion_intensity *= EMOTION_ENGINE_CONFIG["decay_rate"]
+        if self.emotion_intensity < EMOTION_ENGINE_CONFIG["intensity_threshold"]:
+            self.current_emotion = "neutral"
 
-# ----------------------------------------
-# Векторная память (RAG)
-# ----------------------------------------
-class VectorMemory:
-    def __init__(self, dim=768):
-        self.dim = dim
-        self.index = faiss.IndexFlatL2(dim)
-        self.sentences = []
-        self.embeddings = np.zeros((0, dim), dtype=np.float32)
-        self.emb_pipeline = None
+        sentiment = self.analyze_sentiment(text)
+        self.long_term_mood = 0.9 * self.long_term_mood + 0.1 * sentiment
 
-    def _get_embedding(self, text):
-        if self.emb_pipeline is None:
-            try:
-                self.emb_pipeline = pipeline("feature-extraction", model="cointegrated/rubert-tiny2")
-            except:
-                return np.random.rand(self.dim).astype(np.float32)
-        try:
-            emb = self.emb_pipeline(text)[0][0]
-            return np.array(emb).astype(np.float32)
-        except:
-            return np.random.rand(self.dim).astype(np.float32)
+        self.emotion_history.append({
+            "timestamp": datetime.now().isoformat(),
+            "emotion": self.current_emotion,
+            "intensity": self.emotion_intensity,
+            "text": text
+        })
 
-    def add(self, sentence):
-        if len(sentence.strip()) < 3:
-            return
-        emb = self._get_embedding(sentence).reshape(1, -1)
-        self.embeddings = np.vstack((self.embeddings, emb)) if self.embeddings.shape[0] > 0 else emb
-        self.sentences.append(sentence)
-        self.index.add(emb)
+    def analyze_sentiment(self, text: str) -> float:
+        positive_words = ["хорош", "прекрасн", "рад", "счастлив", "люблю"]
+        negative_words = ["плох", "ужасн", "грустн", "злюсь", "ненавижу"]
+        pos_count = sum(1 for word in positive_words if word in text.lower())
+        neg_count = sum(1 for word in negative_words if word in text.lower())
+        return (pos_count - neg_count) / max(1, pos_count + neg_count)
 
-    def search(self, query, k=3):
-        if self.embeddings.shape[0] == 0:
+    def get_state(self) -> Dict:
+        return {
+            "current_emotion": self.current_emotion,
+            "emotion_icon": EMOTION_ENGINE_CONFIG["base_emotions"][self.current_emotion]["icon"],
+            "intensity": self.emotion_intensity,
+            "long_term_mood": self.long_term_mood,
+            "triggers": list(self.triggers_activated)
+        }
+
+# --- Класс долговременной памяти ---
+class LongTermMemory:
+    def __init__(self):
+        self.memory_file = MEMORY_DIR / "long_term_memory.json"
+        self.embeddings_file = MEMORY_DIR / "embeddings.npy"
+        self.sentence_model = SentenceTransformer("cointegrated/rubert-tiny2", device=device)
+        self.memories = []
+        self.embeddings = np.zeros((0, 312))
+        if self.memory_file.exists():
+            self.load_memory()
+
+    def add_memory(self, text: str, emotion_state: Dict):
+        embedding = self.sentence_model.encode(text)
+        memory = {
+            "text": text,
+            "timestamp": datetime.now().isoformat(),
+            "emotion": emotion_state,
+            "embedding": embedding.tolist()
+        }
+        self.memories.append(memory)
+        if len(self.memories) > EMOTION_ENGINE_CONFIG["max_memory"]:
+            self.memories.pop(0)
+        self.save_memory()
+
+    def find_related_memories(self, query: str, top_k: int = 3) -> List[Dict]:
+        if not self.memories:
             return []
-        q_emb = self._get_embedding(query).reshape(1, -1)
-        _, indices = self.index.search(q_emb, k)
-        return [self.sentences[i] for i in indices[0] if i < len(self.sentences)]
+        query_embedding = self.sentence_model.encode(query)
+        similarities = cosine_similarity([query_embedding], [np.array(m["embedding"]) for m in self.memories])[0]
+        top_indices = np.argsort(similarities)[-top_k:][::-1]
+        return [self.memories[i] for i in top_indices]
 
-    def save(self):
-        faiss.write_index(self.index, str(CACHE_DIR / "index.faiss"))
-        np.save(CACHE_DIR / "embeddings.npy", self.embeddings)
-        with open(CACHE_DIR / "sentences.json", "w", encoding="utf-8") as f:
-            json.dump(self.sentences, f, ensure_ascii=False, indent=2)
-        logger.info(f"[blue]Память сохранена: {len(self.sentences)} записей[/blue]")
+    def save_memory(self):
+        data = {
+            "memories": self.memories,
+            "last_updated": datetime.now().isoformat()
+        }
+        with open(self.memory_file, "w", encoding="utf-8") as f:
+            json.dump(data, f, ensure_ascii=False, indent=2)
 
-    def load(self):
-        if (CACHE_DIR / "index.faiss").exists():
-            self.index = faiss.read_index(str(CACHE_DIR / "index.faiss"))
-            self.embeddings = np.load(CACHE_DIR / "embeddings.npy")
-            with open(CACHE_DIR / "sentences.json", "r", encoding="utf-8") as f:
-                self.sentences = json.load(f)
-            logger.info(f"[blue]Память загружена: {len(self.sentences)} записей[/blue]")
+    def load_memory(self):
+        with open(self.memory_file, "r", encoding="utf-8") as f:
+            data = json.load(f)
+            self.memories = data.get("memories", [])
 
-memory = VectorMemory()
-memory.load()
+# --- Основной класс бота ---
+class EmotionalChatBot:
+    def __init__(self):
+        self.tokenizer, self.model = load_optimized_model()
+        self.emotion_engine = EmotionalState()
+        self.memory = LongTermMemory()
+        self.conversation_history = []
+        self.config = self.load_config()
 
-# ----------------------------------------
-# Генерация данных
-# ----------------------------------------
-def generate_data():
-    return [
-        ("Привет", "Здравствуй!"),
-        ("Как дела?", "Хорошо, спасибо!"),
-        ("Расскажи анекдот", "Не программисты ли ходят в лес?"),
-        ("Кто ты?", "Я — Sin, твой помощник."),
-        ("Погода", "Солнечно."),
-        ("2+2", "4"),
-        ("Пока", "До встречи!")
-    ]
+    def load_config(self):
+        if CONFIG_FILE.exists():
+            with open(CONFIG_FILE, "r", encoding="utf-8") as f:
+                return json.load(f)
+        return {
+            "personality_traits": {
+                "openness": 0.7,
+                "conscientiousness": 0.5,
+                "extraversion": 0.3,
+                "agreeableness": 0.8,
+                "neuroticism": 0.4
+            },
+            "learning_rate": 0.01,
+            "last_trained": None
+        }
+
+    def save_state(self):
+        with open(CONFIG_FILE, "w", encoding="utf-8") as f:
+            json.dump(self.config, f, ensure_ascii=False, indent=2)
+
+    def generate_response(self, user_input: str) -> str:
+        self.emotion_engine.update(user_input)
+        emotion_state = self.emotion_engine.get_state()
+        self.memory.add_memory(user_input, emotion_state)
+
+        related_memories = self.memory.find_related_memories(user_input)
+        context = "\n".join([m["text"] for m in related_memories[:2]])
+
+        prompt = f"""
+        Ты — Sin, дружелюбный ассистент.
+        Контекст: {context}
+        Эмоция: {emotion_state['emotion_icon']} ({emotion_state['current_emotion']}, интенсивность: {emotion_state['intensity']:.2f})
+        Пользователь: {user_input}
+        Ответ:
+        """
+
+        if self.model is None:
+            return "Я пока не могу отвечать (модель не загружена)"
+
+        try:
+            inputs = self.tokenizer(prompt, return_tensors="pt", max_length=512, truncation=True).to(device)
+            outputs = self.model.generate(**inputs, max_new_tokens=150, temperature=0.7, top_p=0.9, do_sample=True)
+            response = self.tokenizer.decode(outputs[0], skip_special_tokens=True)
+            return f"{emotion_state['emotion_icon']} {response}"
+        except Exception as e:
+            return f"Ошибка: {str(e)}"
 
 # ----------------------------------------
 # Сбор RLHF-оценок
 # ----------------------------------------
-def collect_human_feedback():
+def collect_human_feedback(bot: EmotionalChatBot):
     feedback_file = DATA_DIR / "feedback.jsonl"
-    tokenizer, model = load_model()
-
     console.print(Panel("🧠 Оцените ответы Sin (1–5)", style="bold yellow"))
     feedback = []
 
-    for q, a in generate_data():
-        if model is not None:
-            prompt = f"Вопрос: {q} Ответ:"
-            inputs = tokenizer(prompt, return_tensors="pt", truncation=True, max_length=256)
-            try:
-                outputs = model.generate(**inputs, max_length=300)
-                a = tokenizer.decode(outputs[0], skip_special_tokens=True)
-            except:
-                pass
+    prompts = ["Привет", "Как дела?", "Расскажи анекдот", "Кто ты?", "Погода", "2+2", "Пока"]
 
+    for q in random.sample(prompts, 3):
+        response = bot.generate_response(q)
         console.print(f"[cyan]Вопрос:[/cyan] {q}")
-        console.print(f"[magenta]Sin:[/magenta] {a}")
+        console.print(f"[magenta]Sin:[/magenta] {response}")
         rating = console.input("Оценка (1-5): ").strip()
         if rating in "12345":
-            feedback.append({"input": q, "output": a, "score": int(rating)})
+            feedback.append({"input": q, "output": response, "score": int(rating)})
 
-    if feedback:
-        mode = "a" if feedback_file.exists() else "w"
-        with open(feedback_file, mode, encoding="utf-8") as f:
-            for item in feedback:
-                f.write(json.dumps(item, ensure_ascii=False) + "\n")
-        logger.info(f"[green]Сохранено {len(feedback)} оценок.[/green]")
+    with open(feedback_file, "a", encoding="utf-8") as f:
+        for item in feedback:
+            f.write(json.dumps(item, ensure_ascii=False) + "\n")
+    logger.info(f"[green]Сохранено {len(feedback)} оценок.[/green]")
 
 # ----------------------------------------
-# Обучение
+# Обучение (SFT)
 # ----------------------------------------
-def train_model():
-    tokenizer, model = load_model()
-    if model is None:
+def train_model(bot: EmotionalChatBot):
+    if bot.model is None:
         logger.warning("[yellow]Нет модели для обучения.[/yellow]")
         return
 
-    data = generate_data()
-    texts = [f"Вопрос: {q} Ответ: {a}" for q, a in data]
+    bot.model = get_peft_model(bot.model, LoraConfig(r=8, lora_alpha=32, target_modules=["q", "v"], task_type="SEQ_2_SEQ_LM"))
+
+    # Пример данных
+    texts = [
+        "Привет Ответ: Здравствуй!",
+        "Как дела? Ответ: У меня всё хорошо!",
+        "Расскажи анекдот Ответ: Почему программисты не ходят в лес? Боятся рекурсии!"
+    ]
     from datasets import Dataset
-    dataset = Dataset.from_dict({"text": texts})
+    dataset = Dataset.from_dict({"text": texts}).map(lambda x: bot.tokenizer(x["text"], truncation=True, max_length=256))
 
-    model = get_peft_model(model, LoraConfig(
-        r=config["lora_r"],
-        lora_alpha=config["lora_alpha"],
-        target_modules=["q", "v"],
-        lora_dropout=0.05,
-        bias="none",
-        task_type="SEQ_2_SEQ_LM"
-    ))
-
-    from transformers import TrainingArguments, Trainer
     args = TrainingArguments(
         output_dir=MODEL_DIR,
-        per_device_train_batch_size=config["batch_size"],
-        num_train_epochs=config["epochs"],
-        learning_rate=config["learning_rate"],
+        per_device_train_batch_size=4,
+        num_train_epochs=1,
+        learning_rate=2e-4,
         logging_steps=10,
         save_steps=50,
         save_total_limit=2,
@@ -278,87 +323,54 @@ def train_model():
         report_to=None
     )
 
-    trainer = Trainer(
-        model=model,
-        args=args,
-        train_dataset=dataset.map(lambda x: tokenizer(x["text"], truncation=True, max_length=256)),
-        tokenizer=tokenizer
-    )
-
+    trainer = Trainer(model=bot.model, args=args, train_dataset=dataset, tokenizer=bot.tokenizer)
     with Progress(SpinnerColumn(), TextColumn("Обучение..."), BarColumn(), console=console) as progress:
         progress.add_task("", total=None)
         trainer.train()
 
-    model.save_pretrained(MODEL_DIR)
-    tokenizer.save_pretrained(MODEL_DIR)
-    config["last_trained"] = time.strftime("%Y-%m-%d %H:%M:%S")
-    with open(CONFIG_FILE, 'w', encoding='utf-8') as f:
-        json.dump(config, f, indent=4, ensure_ascii=False)
-    logger.info("[bold green]Обучение завершено.[/bold green]")
+    bot.model.save_pretrained(MODEL_DIR)
+    bot.tokenizer.save_pretrained(MODEL_DIR)
+    bot.config["last_trained"] = datetime.now().isoformat()
+    bot.save_state()
+    logger.info("[bold green]Модель обучена и сохранена.[/bold green]")
 
-# ----------------------------------------
-# Тест общения
-# ----------------------------------------
-def test_chat():
-    tokenizer, model = load_model()
-    console.print(Panel("💬 Sin — режим общения", style="bold blue"))
-    console.print("[yellow]Напишите 'выход' для завершения.[/yellow]")
-
-    while True:
-        user_input = console.input("[bold]Вы:[/bold] ").strip()
-        if user_input.lower() in ['выход', 'exit']:
-            break
-
-        # RAG
-        ctx = "\n".join([f"Ранее: {x}" for x in memory.search(user_input, k=2)])
-        prompt = f"{ctx}\nВопрос: {user_input} Ответ:" if ctx else f"Вопрос: {user_input} Ответ:"
-
-        response = "Я не понял."
-        if model is not None:
-            try:
-                inputs = tokenizer(prompt, return_tensors="pt", truncation=True, max_length=256)
-                outputs = model.generate(**inputs, max_length=300)
-                response = tokenizer.decode(outputs[0], skip_special_tokens=True)
-                response = response.split("Ответ:")[-1].strip()
-            except:
-                pass
-
-        console.print(f"[magenta]Sin:[/magenta] {response}")
-
-        memory.add(user_input)
-        memory.add(response)
-
-    memory.save()
-
-# ----------------------------------------
-# Главное меню
-# ----------------------------------------
+# --- Интерфейс ---
 def main():
-    console.print(Panel("🤖 Sin — ваш ИИ-ассистент", style="bold green"))
+    console.print(Panel.fit("🤖 [bold green]Sin — ваш эмоциональный ассистент[/bold green]"))
+    console.print("Напишите 'выход' для завершения диалога\n")
+
+    bot = EmotionalChatBot()
+
     while True:
         table = Table(title="Меню", show_header=True, header_style="bold magenta")
         table.add_column("№", style="dim")
         table.add_column("Действие")
-        table.add_row("1", "Собрать RLHF оценки")
-        table.add_row("2", "Обучить модель")
-        table.add_row("3", "Тест общения")
-        table.add_row("4", "Статус")
-        table.add_row("5", "Выход")
+        table.add_row("1", "Поговорить с Sin")
+        table.add_row("2", "Собрать RLHF оценки")
+        table.add_row("3", "Дообучить модель")
+        table.add_row("4", "Выход")
         console.print(table)
 
         choice = console.input("[bold]Выберите: [/bold]")
-        if choice == "1": collect_human_feedback()
-        elif choice == "2": train_model()
-        elif choice == "3": test_chat()
+        if choice == "1":
+            while True:
+                user_input = console.input("[bold blue]Вы:[/bold blue] ").strip()
+                if user_input.lower() in ("выход", "exit", "quit"):
+                    break
+                response = bot.generate_response(user_input)
+                console.print(f"[bold magenta]Sin:[/bold magenta] {response}")
+                emotion_state = bot.emotion_engine.get_state()
+                table = Table(title="Состояние", show_header=False)
+                table.add_row("Эмоция", f"{emotion_state['emotion_icon']} {emotion_state['current_emotion']}")
+                table.add_row("Интенсивность", f"{emotion_state['intensity']:.2f}")
+                table.add_row("Настроение", "😊 Хорошее" if emotion_state['long_term_mood'] > 0.3 else "😐 Нейтральное" if -0.3 <= emotion_state['long_term_mood'] <= 0.3 else "😢 Плохое")
+                console.print(table)
+        elif choice == "2":
+            collect_human_feedback(bot)
+        elif choice == "3":
+            train_model(bot)
         elif choice == "4":
-            fb_file = DATA_DIR / "feedback.jsonl"
-            n_fb = sum(1 for _ in open(fb_file, 'r', encoding='utf-8') if _.strip()) if fb_file.exists() else 0
-            status = Table(title="Статус")
-            status.add_row("Последнее обучение", config.get("last_trained", "—"))
-            status.add_row("Оценок RLHF", str(n_fb))
-            status.add_row("RAG записей", str(len(memory.sentences)))
-            console.print(status)
-        elif choice == "5":
+            bot.save_state()
             console.print("[bold red]До свидания, Sin спит...[/bold red]")
             break
         else:
