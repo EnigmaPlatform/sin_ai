@@ -1,7 +1,7 @@
 import numpy as np
 import matplotlib.pyplot as plt
 from sklearn.metrics.pairwise import cosine_similarity
-from sklearn.cluster import KMeans, AgglomerativeClustering
+from sklearn.cluster import KMeans
 from sklearn.manifold import TSNE
 import faiss
 import random
@@ -32,6 +32,7 @@ from transformers import AutoTokenizer, AutoModelForCausalLM, pipeline
 from bs4 import BeautifulSoup
 import chromadb
 from chromadb.config import Settings
+import re
 
 # === Отключение предупреждения о symlinks в Hugging Face ===
 os.environ["HF_HUB_DISABLE_SYMLINKS_WARNING"] = "1"
@@ -191,15 +192,12 @@ class SubconsciousModule:
         self._load_or_initialize()
 
     def _load_or_initialize(self):
-        """Сначала пытаемся загрузить из папки, иначе — из HF, потом сохраняем."""
         os.makedirs(self.save_dir, exist_ok=True)
-        # 1. Проверяем, есть ли файлы в папке
         if self._is_model_saved():
             logger.info(f"📥 Попытка загрузить подсознание из: {self.save_dir}")
             if self._try_load_from_disk():
                 logger.info(f"✅ Подсознание успешно загружено из: {self.save_dir}")
                 return
-        # 2. Если не получилось — загружаем из Hugging Face
         logger.info(f"🌐 Загрузка подсознания из Hugging Face: {self.model_name}")
         try:
             self.tokenizer = AutoTokenizer.from_pretrained(self.model_name)
@@ -214,7 +212,6 @@ class SubconsciousModule:
                 pad_token_id=self.tokenizer.eos_token_id
             )
             logger.info(f"🧠 Подсознание загружено из Hugging Face: {self.model_name}")
-            # 3. Сразу сохраняем локально
             self._save_to_disk()
             logger.info(f"💾 Подсознание сохранено в: {self.save_dir}")
         except Exception as e:
@@ -367,7 +364,6 @@ class Resonator:
     __slots__ = ['id', 'freq', 'phase', 'amplitude', 'damping', 'connections',
                  'pattern', 'level', 'last_activation', 'attention', 'phase_history',
                  'sin_instance']
-
     def __init__(self, node_id: int, level: int = 0):
         self.id = node_id
         self.freq = 1.0
@@ -660,33 +656,30 @@ class AutonomousLearner:
         self.is_learning = True
         self.log = []
         self.log_event(f"Запуск автономного обучения на {duration_minutes} минут")
-
         def learning_loop():
             end_time = time.time() + duration_minutes * 60
             cycle = 0
-            while time.time() < end_time and self.is_learning:
-                cycle += 1
-                self.log_event(f"🔄 Автономный цикл {cycle}")
-                self.generate_curiosity_questions()
-                self.learn_from_urls()
-                self.self_reflect()
-                self.strengthen_connections()
-                self.detect_conflicts()
-                self.form_and_test_hypotheses()
-
-                if cycle % 6 == 0:
-                    self.log_event("Шаг: Автосохранение...")
-                    self.sin.save_state()
-                    self.sin.knowledge_graph.save_graph()
-                    self.sin.semantic_memory.cluster_episodes()
-                    self.sin.semantic_memory.form_scenes_from_clusters()
-
-                self.log_event(f"Завершён цикл {cycle}. Пауза на 5 минут.")
-                time.sleep(300)
-
-            self.is_learning = False
-            self.log_event("✅ Автономное обучение завершено")
-
+            with tqdm(total=duration_minutes*60, unit="сек", desc="🤖 Обучение") as pbar:
+                while time.time() < end_time and self.is_learning:
+                    cycle += 1
+                    self.log_event(f"🔄 Автономный цикл {cycle}")
+                    self.generate_curiosity_questions()
+                    self.learn_from_urls()
+                    self.self_reflect()
+                    self.strengthen_connections()
+                    self.detect_conflicts()
+                    self.form_and_test_hypotheses()
+                    self.reinforce_high_error_memories()
+                    if cycle % 6 == 0:
+                        self.log_event("Шаг: Автосохранение...")
+                        self.sin.save_state()
+                        self.sin.knowledge_graph.save_graph()
+                        self.sin.semantic_memory.cluster_episodes()
+                        self.sin.semantic_memory.form_scenes_from_clusters()
+                    time.sleep(10)
+                    pbar.update(10)
+                self.is_learning = False
+                self.log_event("✅ Автономное обучение завершено")
         self.learning_thread = threading.Thread(target=learning_loop, daemon=True)
         self.learning_thread.start()
         return f"Обучение запущено на {duration_minutes} минут"
@@ -699,9 +692,13 @@ class AutonomousLearner:
                 self.learning_thread.join(timeout=1)
             self.log_event("🛑 Автономное обучение остановлено")
 
+    def reinforce_high_error_memories(self):
+        high_error_memories = sorted(self.sin.memory, key=lambda x: x.prediction_error, reverse=True)[:5]
+        for mem in high_error_memories:
+            self.sin.learn(mem.text, user_feedback="good")
+            self.log_event(f"🔁 Повторное обучение: '{mem.text}' (ошибка: {mem.prediction_error:.2f})")
+
     def generate_curiosity_questions(self):
-        if len(self.sin.memory) < 2:
-            return
         concepts = list(self.sin.knowledge_graph.graph.nodes())
         if len(concepts) < 2:
             return
@@ -734,8 +731,6 @@ class AutonomousLearner:
                 logger.error(f"❌ Ошибка при обучении на URL {url}: {e}")
 
     def self_reflect(self):
-        if not self.sin.memory:
-            return
         recent = self.sin.memory[-5:]
         topics = [m.text for m in recent if len(m.text) > 3]
         if topics:
@@ -768,7 +763,6 @@ class AutonomousLearner:
     def form_and_test_hypotheses(self):
         concepts = list(self.sin.knowledge_graph.graph.nodes())
         if len(concepts) < 3:
-            self.log_event("Недостаточно концептов в графе для формирования гипотез.")
             return
         cause = random.choice(concepts)
         neighbors = list(self.sin.knowledge_graph.graph.neighbors(cause))
@@ -821,7 +815,7 @@ class MultiAgentSystem:
 
 # === SIN — ОСНОВНАЯ СИСТЕМА ===
 class Sin:
-    VERSION = "19.5"
+    VERSION = "19.6"
 
     def __init__(self, persist_file: str = PERSIST_FILE):
         os.makedirs(SUBCONSCIOUS_SAVE_DIR, exist_ok=True)
@@ -921,9 +915,7 @@ class Sin:
     def save_state(self):
         try:
             serializable = {
-                'nodes': self.nodes,
                 'node_counter': self.node_counter,
-                'memory': [item.__dict__ for item in self.memory],
                 't': self.t,
                 'word_frequency': dict(self.word_frequency),
                 'rl_policy': self.rl_policy,
@@ -935,6 +927,7 @@ class Sin:
                     'thematic_attention': self.dialog_context.thematic_attention
                 },
                 'params': self.params,
+                'memory': [item.__dict__ for item in self.memory],
                 'goals': [g.__dict__ for g in self.goals],
                 'emotions': self.emotions
             }
@@ -1016,6 +1009,7 @@ class Sin:
         words = self.tokenize(text)
         if not words:
             return {"status": "empty", "response": "Пусто", "understanding": understanding}
+
         context_words = []
         for msg in self.dialog_context.last_messages[-2:]:
             context_words.extend(self.tokenize(msg))
@@ -1023,14 +1017,25 @@ class Sin:
         predicted_vec = self._predict_next(context_words)
         predicted_item = MemoryItem.from_np(predicted_vec, "[предсказание]", level=0, timestamp=time.time())
         self.hippocampus.add_prediction(predicted_item)
+
         actual_last_word = words[-1]
         actual_vec = self.embedder.get_vector(actual_last_word)
         actual_item = MemoryItem.from_np(actual_vec, actual_last_word, level=0, timestamp=time.time())
         prediction_error = self.hippocampus.get_prediction_error(actual_item)
-        logger.debug(f"📈 Ошибка предсказания для '{actual_last_word}': {prediction_error:.3f}")
+
         total_vec = np.zeros(self.embedder.dim)
         reward = 0.0
         items_to_add = []
+
+        # Анализ текста на связи
+        if "это" in text:
+            parts = text.split("это")
+            if len(parts) > 1:
+                a = normalize_word(parts[0].strip())
+                b = normalize_word(parts[1].strip())
+                if a and b:
+                    self.knowledge_graph.add_concept(a, self.embedder.get_vector(a), relations={"is_a": [b]})
+
         for i, word in enumerate(words):
             vec = self.embedder.get_vector(word)
             total_vec += vec
@@ -1064,6 +1069,7 @@ class Sin:
                     prev_word = words[i-1]
                     self.knowledge_graph.add_concept(prev_word, self.embedder.get_vector(prev_word), relations={"next": [word]})
                     self.knowledge_graph.add_concept(word, vec, relations={"prev": [prev_word]})
+
         total_vec /= len(words)
         phrase_item = MemoryItem.from_np(
             vector=total_vec,
@@ -1073,25 +1079,32 @@ class Sin:
             reward_score=reward
         )
         items_to_add.append(phrase_item)
+
         for item in items_to_add:
             self.hippocampus.add(item)
         self.hippocampus.consolidate(self.memory, self.vector_index, prediction_error)
+
         slots = {}
         frame_type = "COMMUNICATION" if any(w in text for w in ["ты", "я", "мы"]) else None
         self.semantic_memory.add_episode(text, slots=slots, frame_type=frame_type)
+
         if user_feedback == "good":
             reward = RL_REWARD_CORRECT
             self.emotions["certainty"].intensity = min(1.0, self.emotions["certainty"].intensity + 0.1)
         elif user_feedback == "bad":
             reward = RL_PENALTY_WRONG
             self.emotions["certainty"].intensity = max(0.0, self.emotions["certainty"].intensity - 0.2)
+
         curiosity_boost = 0.05 + 0.1 * prediction_error
         self.emotions["curiosity"].intensity = min(1.0, self.emotions["curiosity"].intensity + curiosity_boost)
         self.params.update(reward)
+
         old_ask_prob = self.rl_policy["ask_question"]
         self.rl_policy["ask_question"] = 0.3 + 0.4 * (reward / 2.0 if reward != 0 else 0.7) + 0.3 * self.emotions["curiosity"].intensity
         logger.debug(f"⚖️ Политика RL обновлена. Вероятность вопроса: {old_ask_prob:.3f} -> {self.rl_policy['ask_question']:.3f}")
+
         self._auto_save()
+
         status = "understood" if understanding > UNDERSTANDING_THRESHOLD else "partially"
         return {
             "status": status,
@@ -1153,25 +1166,30 @@ class Sin:
         if not words:
             logger.info("🗣️ Пустой запрос.")
             return "Я слушаю..."
+
         query_vec = np.mean([self.embedder.get_vector(w) for w in words], axis=0)
         query_concepts = self._extract_concepts_from_text(text)
         context_concepts = set()
         for ctx_msg in self.dialog_context.last_messages[-2:]:
             context_concepts.update(self._extract_concepts_from_text(ctx_msg))
+
         knowledge_response = self._generate_response_from_knowledge(query_concepts, context_concepts)
         if knowledge_response and random.random() < 0.7:
             logger.info("🧠 Ответ сгенерирован на основе графа знаний.")
             return f"🧠 {knowledge_response}"
+
         semantic_response = self.semantic_search(text)
         if "не нашёл" not in semantic_response:
             logger.info("🔍 Ответ найден через семантический поиск.")
             return semantic_response
+
         curiosity = self.emotions["curiosity"].intensity
         certainty = self.emotions["certainty"].intensity
         if self.pending_questions and (random.random() < self.rl_policy["ask_question"] * curiosity or curiosity > 0.8):
             question = self.pending_questions.pop(0)
             logger.info(f"❓ Задаю вопрос: {question}")
             return f"❓ {question}"
+
         prompt = f"Пользователь: {text}\nSin:"
         response = self.subconscious.generate(prompt, max_length=100)
         logger.info("💬 Ответ сгенерирован через подсознание.")
@@ -1369,11 +1387,15 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_text = update.message.text
+    if sin.autonomous_learner.is_learning:
+        await update.message.reply_text("🤖 Я сейчас обучаюсь. Подождите...")
+        return
     if user_text.lower().startswith("good") or user_text.lower().startswith("bad"):
         feedback = "good" if "good" in user_text.lower() else "bad"
         sin.learn("feedback", user_feedback=feedback)
         await update.message.reply_text(f"✅ Ответ оценён как '{feedback}'")
     else:
+        sin.learn(user_text)
         response = sin.respond(user_text)
         await update.message.reply_text(f"💬 Sin: {response}")
 
@@ -1404,6 +1426,7 @@ def run_cli():
   !goals — показать цели
   !graph — показать граф знаний
   !autolog — показать лог автономного обучения
+  !chat — режим чата
   !quit — выход
 """)
     while True:
@@ -1466,9 +1489,20 @@ def run_cli():
                         print(f"  {entry}")
                 else:
                     print("📝 Лог автономного обучения пуст.")
+            elif user_input.lower() == "!chat":
+                print("\n💬 Режим чата активирован. Пиши, и Sin будет отвечать. Введи 'exit' для выхода.")
+                while True:
+                    msg = input("Вы: ").strip()
+                    if msg.lower() in ["exit", "выход", "quit"]:
+                        print("🔚 Выход из режима чата.")
+                        break
+                    if not msg:
+                        continue
+                    sin.learn(msg)
+                    response = sin.respond(msg)
+                    print(f"Sin: {response}")
             else:
-                learn_result = sin.learn(user_input)
-                print(learn_result["response"])
+                sin.learn(user_input)
                 response = sin.respond(user_input)
                 print(f"💬 Sin: {response}")
         except KeyboardInterrupt:
