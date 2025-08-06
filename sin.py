@@ -4,7 +4,7 @@ import random
 import numpy as np
 from pathlib import Path
 from datetime import datetime
-from typing import List, Dict
+from typing import List, Dict, Tuple
 from collections import deque
 import torch
 from transformers import (
@@ -12,13 +12,11 @@ from transformers import (
     AutoModelForSeq2SeqLM,
     TrainingArguments,
     Trainer,
-    BitsAndBytesConfig
+    BitsAndBytesConfig,
+    SFTTrainer  # Импорт SFTTrainer
 )
 from sentence_transformers import SentenceTransformer
 from sklearn.metrics.pairwise import cosine_similarity
-from peft import LoraConfig, get_peft_model
-from trl import SFTTrainer
-from huggingface_hub import snapshot_download
 from rich.console import Console
 from rich.panel import Panel
 from rich.table import Table
@@ -58,12 +56,12 @@ device = "cuda" if torch.cuda.is_available() else "cpu"
 # --- Конфигурация ---
 EMOTION_ENGINE_CONFIG = {
     "base_emotions": {
-        "happy": {"icon": "😊", "triggers": ["рад", "счастлив", "люблю", "класс", "прикольно"]},
-        "sad": {"icon": "😢", "triggers": ["грустн", "печаль", "плак", "тоска", "одиноко"]},
-        "angry": {"icon": "😠", "triggers": ["злюсь", "бесит", "ненавижу", "отстой", "фу"]},
-        "fear": {"icon": "😨", "triggers": ["боюсь", "страх", "пугает", "ужас", "опасно"]},
-        "surprise": {"icon": "😲", "triggers": ["невероятно", "удивитель", "вау", "о боже"]},
-        "disgust": {"icon": "🤢", "triggers": ["отврат", "мерзк", "противно", "гадость"]},
+        "happy": {"icon": "😊", "triggers": ["рад", "счастлив", "люблю"]},
+        "sad": {"icon": "😢", "triggers": ["грустн", "печаль", "плак"]},
+        "angry": {"icon": "😠", "triggers": ["злюсь", "бесит", "ненавижу"]},
+        "fear": {"icon": "😨", "triggers": ["боюсь", "страх", "пугает"]},
+        "surprise": {"icon": "😲", "triggers": ["невероятно", "удивитель"]},
+        "disgust": {"icon": "🤢", "triggers": ["отврат", "мерзк", "противно"]},
         "neutral": {"icon": "😐", "triggers": []}
     },
     "decay_rate": 0.95,
@@ -72,51 +70,15 @@ EMOTION_ENGINE_CONFIG = {
 }
 
 # ----------------------------------------
-# Проверка подключения
-# ----------------------------------------
-def is_online():
-    try:
-        from huggingface_hub import HfApi
-        HfApi().list_models(limit=1)
-        return True
-    except:
-        return False
-
-# ----------------------------------------
-# Скачивание модели
-# ----------------------------------------
-def download_model():
-    if not (MODEL_DIR / "config.json").exists():
-        if not is_online():
-            logger.warning("[yellow]Нет интернета. Работаю в оффлайн-режиме.[/yellow]")
-            return False
-        console.print("[bold]Скачивание cointegrated/rut5-base...[/bold]")
-        try:
-            snapshot_download(
-                repo_id="cointegrated/rut5-base",
-                local_dir=MODEL_DIR,
-                local_dir_use_symlinks=False,
-                max_workers=2
-            )
-            logger.info("[green]Модель скачана.[/green]")
-        except Exception as e:
-            logger.error(f"[red]Ошибка скачивания: {e}[/red]")
-            return False
-    else:
-        logger.info("[blue]Модель уже загружена.[/blue]")
-    return True
-
-# ----------------------------------------
-# Загрузка модели с исправлением ошибки токенизатора
+# Загрузка модели с оптимизацией для CPU
 # ----------------------------------------
 def load_optimized_model():
     local = (MODEL_DIR / "config.json").exists()
     try:
-        # Ключевое исправление: use_fast=False
         tokenizer = AutoTokenizer.from_pretrained(
             MODEL_DIR if local else "cointegrated/rut5-base",
             local_files_only=local,
-            use_fast=False  # ✅ Отключаем попытку создать fast-токенизатор
+            use_fast=False  # Отключаем fast-токенизатор
         )
         model = AutoModelForSeq2SeqLM.from_pretrained(
             MODEL_DIR if local else "cointegrated/rut5-base",
@@ -125,10 +87,10 @@ def load_optimized_model():
             low_cpu_mem_usage=True,
             device_map="auto"
         )
-        logger.info("[green]Модель и токенизатор загружены.[/green]")
+        console.print("[green]Модель успешно загружена[/green]")
         return tokenizer, model
     except Exception as e:
-        logger.error(f"[red]Ошибка загрузки модели: {e}[/red]")
+        console.print(f"[red]Ошибка загрузки модели: {e}[/red]")
         return None, None
 
 # --- Класс эмоционального состояния ---
@@ -164,8 +126,8 @@ class EmotionalState:
         })
 
     def analyze_sentiment(self, text: str) -> float:
-        positive_words = ["хорош", "прекрасн", "рад", "счастлив", "люблю"]
-        negative_words = ["плох", "ужасн", "грустн", "злюсь", "ненавижу"]
+        positive_words = ["хорош", "прекрасн", "рад", "счастлив"]
+        negative_words = ["плох", "ужасн", "грустн", "злюсь"]
         pos_count = sum(1 for word in positive_words if word in text.lower())
         neg_count = sum(1 for word in negative_words if word in text.lower())
         return (pos_count - neg_count) / max(1, pos_count + neg_count)
@@ -183,10 +145,7 @@ class EmotionalState:
 class LongTermMemory:
     def __init__(self):
         self.memory_file = MEMORY_DIR / "long_term_memory.json"
-        try:
-            self.sentence_model = SentenceTransformer("all-MiniLM-L6-v2", device=device)
-        except:
-            self.sentence_model = SentenceTransformer("sentence-transformers/all-MiniLM-L6-v2", device="cpu")
+        self.sentence_model = SentenceTransformer("all-MiniLM-L6-v2", device=device)
         self.memories = []
         if self.memory_file.exists():
             self.load_memory()
@@ -327,29 +286,6 @@ def train_sft(bot: EmotionalChatBot):
     bot.config["last_trained"] = datetime.now().isoformat()
     bot.save_state()
     logger.info("[bold green]SFT обучение завершено.[/bold green]")
-
-# ----------------------------------------
-# RLHF: Сбор оценок и обучение
-# ----------------------------------------
-def collect_rlhf_feedback(bot: EmotionalChatBot):
-    feedback_file = DATA_DIR / "feedback.jsonl"
-    console.print(Panel("🧠 Оцените ответы Sin (1–5)", style="bold yellow"))
-    feedback = []
-
-    prompts = ["Привет", "Как дела?", "Расскажи анекдот", "Кто ты?", "Погода", "2+2", "Пока"]
-
-    for q in random.sample(prompts, 3):
-        response = bot.generate_response(q)
-        console.print(f"[cyan]Вопрос:[/cyan] {q}")
-        console.print(f"[magenta]Sin:[/magenta] {response}")
-        rating = console.input("Оценка (1-5): ").strip()
-        if rating in "12345":
-            feedback.append({"input": q, "output": response, "score": int(rating)})
-
-    with open(feedback_file, "a", encoding="utf-8") as f:
-        for item in feedback:
-            f.write(json.dumps(item, ensure_ascii=False) + "\n")
-    logger.info(f"[green]Сохранено {len(feedback)} оценок.[/green]")
 
 # ----------------------------------------
 # Главное меню
