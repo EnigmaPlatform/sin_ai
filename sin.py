@@ -193,14 +193,12 @@ class SubconsciousModule:
     def _load_or_initialize(self):
         """Сначала пытаемся загрузить из папки, иначе — из HF, потом сохраняем."""
         os.makedirs(self.save_dir, exist_ok=True)
-
         # 1. Проверяем, есть ли файлы в папке
         if self._is_model_saved():
             logger.info(f"📥 Попытка загрузить подсознание из: {self.save_dir}")
             if self._try_load_from_disk():
                 logger.info(f"✅ Подсознание успешно загружено из: {self.save_dir}")
                 return
-
         # 2. Если не получилось — загружаем из Hugging Face
         logger.info(f"🌐 Загрузка подсознания из Hugging Face: {self.model_name}")
         try:
@@ -216,11 +214,9 @@ class SubconsciousModule:
                 pad_token_id=self.tokenizer.eos_token_id
             )
             logger.info(f"🧠 Подсознание загружено из Hugging Face: {self.model_name}")
-
             # 3. Сразу сохраняем локально
             self._save_to_disk()
             logger.info(f"💾 Подсознание сохранено в: {self.save_dir}")
-
         except Exception as e:
             logger.error(f"❌ Ошибка при загрузке модели из HF: {e}")
             raise
@@ -370,7 +366,7 @@ class Emotion:
 class Resonator:
     __slots__ = ['id', 'freq', 'phase', 'amplitude', 'damping', 'connections',
                  'pattern', 'level', 'last_activation', 'attention', 'phase_history',
-                 'sin_instance']  # <-- ДОБАВЛЕНО: sin_instance
+                 'sin_instance']
 
     def __init__(self, node_id: int, level: int = 0):
         self.id = node_id
@@ -384,7 +380,7 @@ class Resonator:
         self.last_activation = 0.0
         self.attention = 1.0
         self.phase_history = deque(maxlen=100)
-        self.sin_instance = None  # Инициализируем
+        self.sin_instance = None
 
     def excite(self, amp: float, phase_offset: float = 0.0):
         self.amplitude = amp * self.attention
@@ -398,7 +394,6 @@ class Resonator:
             self.amplitude *= (1 - self.damping * dt)
             self.attention *= ATTENTION_DECAY
             self.phase_history.append(self.phase)
-            # Записываем в историю активации SIN
             if self.sin_instance:
                 activation_row = [0.0] * len(self.sin_instance.nodes)
                 idx = list(self.sin_instance.nodes.keys()).index(self.id)
@@ -672,18 +667,23 @@ class AutonomousLearner:
             while time.time() < end_time and self.is_learning:
                 cycle += 1
                 self.log_event(f"🔄 Автономный цикл {cycle}")
-                self.generate_hypotheses()
+                self.generate_curiosity_questions()
+                self.learn_from_urls()
+                self.self_reflect()
                 self.strengthen_connections()
                 self.detect_conflicts()
                 self.form_and_test_hypotheses()
+
                 if cycle % 6 == 0:
-                    self.log_event("Шаг 5: Автосохранение...")
+                    self.log_event("Шаг: Автосохранение...")
                     self.sin.save_state()
                     self.sin.knowledge_graph.save_graph()
                     self.sin.semantic_memory.cluster_episodes()
                     self.sin.semantic_memory.form_scenes_from_clusters()
+
                 self.log_event(f"Завершён цикл {cycle}. Пауза на 5 минут.")
                 time.sleep(300)
+
             self.is_learning = False
             self.log_event("✅ Автономное обучение завершено")
 
@@ -699,20 +699,49 @@ class AutonomousLearner:
                 self.learning_thread.join(timeout=1)
             self.log_event("🛑 Автономное обучение остановлено")
 
-    def generate_hypotheses(self):
+    def generate_curiosity_questions(self):
         if len(self.sin.memory) < 2:
-            self.log_event("Недостаточно памяти для генерации гипотез.")
             return
-        mem1, mem2 = random.sample(self.sin.memory, 2)
-        vec1, vec2 = mem1.to_np_vector(), mem2.to_np_vector()
-        hypothesis_vec = vec1 - vec2 + np.random.normal(0, 0.05, vec1.shape)
-        hypothesis_vec /= (np.linalg.norm(hypothesis_vec) + 1e-8)
-        results = self.sin.vector_index.search_similar(hypothesis_vec, k=1)
-        if results and results[0][0] > 0.5:
-            target_text = self.sin.memory[results[0][1]].text
-            question = f"Я заметил связь между '{mem1.text}' и '{mem2.text}'. Возможно, '{target_text}' — это результат этой связи?"
-            self.sin.pending_questions.append(question)
-            self.log_event(f"🧠 Сгенерирована гипотеза: {question}")
+        concepts = list(self.sin.knowledge_graph.graph.nodes())
+        if len(concepts) < 2:
+            return
+        concept = random.choice(concepts)
+        question = f"Что я знаю о {concept}? А что ещё не знаю?"
+        self.sin.pending_questions.append(question)
+        self.log_event(f"❓ Сгенерирован вопрос любопытства: {question}")
+
+    def learn_from_urls(self):
+        urls = [
+            "https://ru.wikipedia.org/wiki/Искусственный_интеллект",
+            "https://habr.com/ru/news/"
+        ]
+        for url in urls:
+            try:
+                response = requests.get(url, timeout=10)
+                response.raise_for_status()
+                soup = BeautifulSoup(response.text, 'html.parser')
+                for script in soup(["script", "style"]):
+                    script.decompose()
+                text = soup.get_text()
+                lines = (line.strip() for line in text.splitlines())
+                chunks = (phrase.strip() for line in lines for phrase in line.split("  "))
+                text = ' '.join(chunk for chunk in chunks if chunk)
+                sentences = [s.strip() for s in text.split('.') if len(s.strip()) > 50][:10]
+                for sent in sentences:
+                    self.sin.learn(sent[:500], user_feedback="good")
+                self.log_event(f"✅ Обучение на URL завершено: {url}")
+            except Exception as e:
+                logger.error(f"❌ Ошибка при обучении на URL {url}: {e}")
+
+    def self_reflect(self):
+        if not self.sin.memory:
+            return
+        recent = self.sin.memory[-5:]
+        topics = [m.text for m in recent if len(m.text) > 3]
+        if topics:
+            reflection = f"Я недавно изучал: {', '.join(topics[:3])}. Что это может значить?"
+            self.sin.pending_questions.append(reflection)
+            self.log_event(f"🧠 Саморефлексия: {reflection}")
 
     def strengthen_connections(self):
         strengthened_count = 0
@@ -818,10 +847,7 @@ class Sin:
         self.level_nodes = [[] for _ in range(3)]
         self.knowledge_graph = KnowledgeGraph()
         self.knowledge_graph.load_graph()
-
-        # === НОВОЕ: Семантическая память с Chroma ===
         self.semantic_memory = SemanticMemory(self.embedder)
-
         self.goals = []
         self.emotions = {
             "curiosity": Emotion("curiosity", 0.5),
@@ -832,17 +858,12 @@ class Sin:
         self.multi_agent_system = MultiAgentSystem(self)
         self._init_system()
         logger.info(f"🌐 SIN v{self.VERSION} запущен. Узлов: {len(self.nodes)}, Память: {len(self.memory)}")
-
-        # === АВТОПРЕДОБУЧЕНИЕ ===
         self.auto_pretrain()
 
     def auto_pretrain(self):
-        """Автоматическое предобучение на эмбеддингах и URL."""
         logger.info("🚀 Начинаем автопредобучение...")
-        # 1. Обучение на словах из эмбеддингов
-        for word in list(self.embedder.model.key_to_index.keys())[:1000]:  # первые 1000 слов
+        for word in list(self.embedder.model.key_to_index.keys())[:1000]:
             self.learn(word, user_feedback="good")
-        # 2. Обучение на URL
         urls = [
             "https://ru.wikipedia.org/wiki/Искусственный_интеллект",
             "https://habr.com/ru/news/"
@@ -852,7 +873,6 @@ class Sin:
         logger.info("✅ Автопредобучение завершено.")
 
     def learn_from_url(self, url: str):
-        """Парсинг, очистка и обучение на контенте URL."""
         try:
             response = requests.get(url, timeout=10)
             response.raise_for_status()
@@ -996,7 +1016,6 @@ class Sin:
         words = self.tokenize(text)
         if not words:
             return {"status": "empty", "response": "Пусто", "understanding": understanding}
-
         context_words = []
         for msg in self.dialog_context.last_messages[-2:]:
             context_words.extend(self.tokenize(msg))
@@ -1004,13 +1023,11 @@ class Sin:
         predicted_vec = self._predict_next(context_words)
         predicted_item = MemoryItem.from_np(predicted_vec, "[предсказание]", level=0, timestamp=time.time())
         self.hippocampus.add_prediction(predicted_item)
-
         actual_last_word = words[-1]
         actual_vec = self.embedder.get_vector(actual_last_word)
         actual_item = MemoryItem.from_np(actual_vec, actual_last_word, level=0, timestamp=time.time())
         prediction_error = self.hippocampus.get_prediction_error(actual_item)
         logger.debug(f"📈 Ошибка предсказания для '{actual_last_word}': {prediction_error:.3f}")
-
         total_vec = np.zeros(self.embedder.dim)
         reward = 0.0
         items_to_add = []
@@ -1047,7 +1064,6 @@ class Sin:
                     prev_word = words[i-1]
                     self.knowledge_graph.add_concept(prev_word, self.embedder.get_vector(prev_word), relations={"next": [word]})
                     self.knowledge_graph.add_concept(word, vec, relations={"prev": [prev_word]})
-
         total_vec /= len(words)
         phrase_item = MemoryItem.from_np(
             vector=total_vec,
@@ -1057,31 +1073,24 @@ class Sin:
             reward_score=reward
         )
         items_to_add.append(phrase_item)
-
         for item in items_to_add:
             self.hippocampus.add(item)
-
         self.hippocampus.consolidate(self.memory, self.vector_index, prediction_error)
-
         slots = {}
         frame_type = "COMMUNICATION" if any(w in text for w in ["ты", "я", "мы"]) else None
         self.semantic_memory.add_episode(text, slots=slots, frame_type=frame_type)
-
         if user_feedback == "good":
             reward = RL_REWARD_CORRECT
             self.emotions["certainty"].intensity = min(1.0, self.emotions["certainty"].intensity + 0.1)
         elif user_feedback == "bad":
             reward = RL_PENALTY_WRONG
             self.emotions["certainty"].intensity = max(0.0, self.emotions["certainty"].intensity - 0.2)
-
         curiosity_boost = 0.05 + 0.1 * prediction_error
         self.emotions["curiosity"].intensity = min(1.0, self.emotions["curiosity"].intensity + curiosity_boost)
-
         self.params.update(reward)
         old_ask_prob = self.rl_policy["ask_question"]
         self.rl_policy["ask_question"] = 0.3 + 0.4 * (reward / 2.0 if reward != 0 else 0.7) + 0.3 * self.emotions["curiosity"].intensity
         logger.debug(f"⚖️ Политика RL обновлена. Вероятность вопроса: {old_ask_prob:.3f} -> {self.rl_policy['ask_question']:.3f}")
-
         self._auto_save()
         status = "understood" if understanding > UNDERSTANDING_THRESHOLD else "partially"
         return {
@@ -1137,40 +1146,32 @@ class Sin:
         self.dialog_context.add_message(text)
         understanding = self.calculate_understanding_score(text)
         logger.info(f"💬 Получен запрос: '{text}' (понимание: {understanding:.3f})")
-
         if understanding < 0.2:
             logger.warning("❓ Запрос не понят. Запрашиваю уточнение.")
             return "❓ Совсем новое. Расскажи подробнее."
-
         words = self.tokenize(text)
         if not words:
             logger.info("🗣️ Пустой запрос.")
             return "Я слушаю..."
-
         query_vec = np.mean([self.embedder.get_vector(w) for w in words], axis=0)
         query_concepts = self._extract_concepts_from_text(text)
         context_concepts = set()
         for ctx_msg in self.dialog_context.last_messages[-2:]:
             context_concepts.update(self._extract_concepts_from_text(ctx_msg))
-
         knowledge_response = self._generate_response_from_knowledge(query_concepts, context_concepts)
         if knowledge_response and random.random() < 0.7:
             logger.info("🧠 Ответ сгенерирован на основе графа знаний.")
             return f"🧠 {knowledge_response}"
-
         semantic_response = self.semantic_search(text)
         if "не нашёл" not in semantic_response:
             logger.info("🔍 Ответ найден через семантический поиск.")
             return semantic_response
-
         curiosity = self.emotions["curiosity"].intensity
         certainty = self.emotions["certainty"].intensity
-
         if self.pending_questions and (random.random() < self.rl_policy["ask_question"] * curiosity or curiosity > 0.8):
             question = self.pending_questions.pop(0)
             logger.info(f"❓ Задаю вопрос: {question}")
             return f"❓ {question}"
-
         prompt = f"Пользователь: {text}\nSin:"
         response = self.subconscious.generate(prompt, max_length=100)
         logger.info("💬 Ответ сгенерирован через подсознание.")
@@ -1310,7 +1311,7 @@ app = FastAPI(title=f"SIN API v{Sin.VERSION}")
 sin = Sin()
 
 @app.post("/learn")
-async def api_learn( dict):
+async def api_learn(data: dict):
     try:
         text = data.get("text", "")
         result = sin.learn(text)
@@ -1319,7 +1320,7 @@ async def api_learn( dict):
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.post("/respond")
-async def api_respond( dict):
+async def api_respond(data: dict):
     try:
         text = data.get("text", "")
         response = sin.respond(text)
@@ -1340,7 +1341,7 @@ async def api_status():
     }
 
 @app.post("/autonomous_learn")
-async def api_autonomous_learn( dict):
+async def api_autonomous_learn(data: dict):
     duration = data.get("duration", 30)
     result = sin.start_autonomous_learning(duration)
     return {"result": result}
@@ -1356,7 +1357,7 @@ async def api_autonomous_learn_log():
     return {"log": log}
 
 @app.post("/add_goal")
-async def api_add_goal( dict):
+async def api_add_goal(data: dict):
     description = data.get("description", "")
     priority = data.get("priority", 0.5)
     result = sin.add_goal(description, priority)
@@ -1368,8 +1369,13 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_text = update.message.text
-    response = sin.respond(user_text)
-    await update.message.reply_text(f"💬 Sin: {response}")
+    if user_text.lower().startswith("good") or user_text.lower().startswith("bad"):
+        feedback = "good" if "good" in user_text.lower() else "bad"
+        sin.learn("feedback", user_feedback=feedback)
+        await update.message.reply_text(f"✅ Ответ оценён как '{feedback}'")
+    else:
+        response = sin.respond(user_text)
+        await update.message.reply_text(f"💬 Sin: {response}")
 
 def run_telegram():
     app_bot = Application.builder().token(TELEGRAM_TOKEN).build()
