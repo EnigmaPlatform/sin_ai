@@ -3,13 +3,16 @@ import json
 import time
 import random
 import logging
+import numpy as np
 from datetime import datetime
 from pathlib import Path
 
 import torch
+import faiss
 from transformers import (
     AutoTokenizer, AutoModelForSeq2SeqLM,
-    TrainingArguments, Trainer, DataCollatorForSeq2Seq
+    TrainingArguments, Trainer, DataCollatorForSeq2Seq,
+    pipeline
 )
 from datasets import Dataset
 from peft import LoraConfig, get_peft_model, prepare_model_for_kbit_training
@@ -18,6 +21,7 @@ from rich.progress import Progress, SpinnerColumn, BarColumn, TextColumn, TimeEl
 from rich.logging import RichHandler
 from rich.table import Table
 from rich.panel import Panel
+from rich.console import Console as RichConsole
 
 # ----------------------------------------
 # Настройки
@@ -26,21 +30,23 @@ PROJECT_DIR = Path(r"C:\Users\User\Downloads\Sin")
 DATA_DIR = PROJECT_DIR / "data"
 MODEL_DIR = PROJECT_DIR / "model"
 LOGS_DIR = PROJECT_DIR / "logs"
+CACHE_DIR = PROJECT_DIR / "cache"
 CONFIG_FILE = PROJECT_DIR / "config.json"
 
 os.makedirs(PROJECT_DIR, exist_ok=True)
 os.makedirs(DATA_DIR, exist_ok=True)
 os.makedirs(MODEL_DIR, exist_ok=True)
 os.makedirs(LOGS_DIR, exist_ok=True)
+os.makedirs(CACHE_DIR, exist_ok=True)
 
-# Логирование
+# Логирование с Rich
+rich_console = RichConsole(width=120)
 logging.basicConfig(
     level=logging.INFO,
     format="%(message)s",
-    handlers=[RichHandler(console_width=120, show_path=False)]
+    handlers=[RichHandler(console=rich_console, show_path=False)]
 )
 logger = logging.getLogger("Sin")
-
 console = Console()
 
 # ----------------------------------------
@@ -55,7 +61,10 @@ default_config = {
     "lora_r": 8,
     "lora_alpha": 32,
     "last_trained": None,
-    "quality_score": 0.0
+    "quality_score": 0.0,
+    "rag_enabled": True,
+    "rlhf_enabled": True,
+    "history_size": 50  # сколько диалогов хранить
 }
 
 if not os.path.exists(CONFIG_FILE):
@@ -71,6 +80,7 @@ else:
 # ----------------------------------------
 tokenizer = None
 model = None
+embedding_model = None
 
 def load_model():
     global tokenizer, model
@@ -89,9 +99,63 @@ def load_model():
         logger.info("[yellow]Базовая модель загружена.[/yellow]")
 
 # ----------------------------------------
+# Векторная память (RAG)
+# ----------------------------------------
+class VectorMemory:
+    def __init__(self, dim=768):
+        self.dim = dim
+        self.index = faiss.IndexFlatL2(dim)
+        self.sentences = []
+        self.embeddings = np.zeros((0, dim), dtype=np.float32)
+        self.emb_pipeline = None
+
+    def _get_embedding(self, text):
+        if self.emb_pipeline is None:
+            self.emb_pipeline = pipeline("feature-extraction", model="cointegrated/rubert-tiny2", device=0 if torch.cuda.is_available() else -1)
+        emb = self.emb_pipeline(text)[0][0]  # [CLS] токен
+        return np.array(emb).astype(np.float32)
+
+    def add(self, sentence):
+        if len(sentence.strip()) < 3:
+            return
+        emb = self._get_embedding(sentence).reshape(1, -1)
+        if self.embeddings.shape[0] == 0:
+            self.embeddings = emb
+        else:
+            self.embeddings = np.vstack((self.embeddings, emb))
+        self.sentences.append(sentence)
+        self.index.add(emb)
+
+    def search(self, query, k=3):
+        if self.embeddings.shape[0] == 0:
+            return []
+        q_emb = self._get_embedding(query).reshape(1, -1)
+        scores, indices = self.index.search(q_emb, k)
+        return [self.sentences[i] for i in indices[0] if i < len(self.sentences)]
+
+    def save(self, path):
+        path = Path(path)
+        faiss.write_index(self.index, str(path / "index.faiss"))
+        np.save(path / "embeddings.npy", self.embeddings)
+        with open(path / "sentences.json", "w", encoding="utf-8") as f:
+            json.dump(self.sentences, f, ensure_ascii=False, indent=2)
+
+    def load(self, path):
+        path = Path(path)
+        if not os.path.exists(path / "index.faiss"):
+            return
+        self.index = faiss.read_index(str(path / "index.faiss"))
+        self.embeddings = np.load(path / "embeddings.npy")
+        with open(path / "sentences.json", "r", encoding="utf-8") as f:
+            self.sentences = json.load(f)
+        logger.info(f"[blue]RAG-память загружена: {len(self.sentences)} записей[/blue]")
+
+memory = VectorMemory()
+
+# ----------------------------------------
 # Генерация "связок" предложений
 # ----------------------------------------
-def generate_sentence_pairs(n=1000):
+def generate_sentence_pairs(n=500):
     templates = [
         ("Привет", "Здравствуй!"),
         ("Как дела?", "У меня всё хорошо, спасибо!"),
@@ -117,11 +181,10 @@ def generate_sentence_pairs(n=1000):
             q = template[0] + " " + " ".join([random.choice(["и?", "скажи", "расскажи", "объясни"]) for _ in range(random.randint(0, 2))])
             a = template[1] + " " + random.choice(["Спрашивай ещё!", "Всё понятно?", ""])
             if random.random() < 0.1:
-                a = "Я не понимаю этот вопрос."  # шум
+                a = "Я не понимаю этот вопрос."
             pairs.append({"instruction": q.strip(), "response": a.strip()})
             progress.update(task, advance=1, description=f"Генерация: {len(pairs)} из {n}")
 
-    # Сохранение
     data_file = DATA_DIR / "pairs.json"
     with open(data_file, 'w', encoding='utf-8') as f:
         json.dump(pairs, f, ensure_ascii=False, indent=2)
@@ -129,7 +192,7 @@ def generate_sentence_pairs(n=1000):
     return pairs
 
 # ----------------------------------------
-# Фильтрация данных (простая валидация)
+# Фильтрация данных
 # ----------------------------------------
 def filter_invalid_pairs(pairs):
     filtered = []
@@ -150,7 +213,6 @@ def filter_invalid_pairs(pairs):
                 continue
             filtered.append(pair)
             progress.update(task, advance=1)
-
     logger.info(f"[yellow]Отфильтровано {invalid} невалидных пар. Осталось: {len(filtered)}[/yellow]")
     return filtered
 
@@ -181,10 +243,43 @@ def format_dataset(pairs):
     )
 
 # ----------------------------------------
-# Оценка качества (упрощённая)
+# RLHF: Человеческая оценка
 # ----------------------------------------
-def evaluate_model(model, eval_pairs, num_samples=10):
-    correct_keywords = ["привет", "дела", "анекдот", "пока", "спасибо"]
+def collect_human_feedback(pairs, n=5):
+    feedback_data = []
+    console.print(Panel("🧠 RLHF: Оцените ответы Sin", style="bold yellow"))
+    load_model()
+    for pair in random.sample(pairs, min(n, len(pairs))):
+        q = pair["instruction"]
+        inputs = tokenizer(f"Вопрос: {q} Ответ:", return_tensors="pt", truncation=True, max_length=64).to(model.device)
+        outputs = model.generate(**inputs, max_length=128)
+        response = tokenizer.decode(outputs[0], skip_special_tokens=True).replace("Вопрос: " + q + " Ответ:", "").strip()
+
+        console.print(f"[cyan]Вопрос:[/cyan] {q}")
+        console.print(f"[magenta]Sin:[/magenta] {response}")
+        rating = console.input("Оценка (1-5, или пропустить): ").strip()
+        if rating in ["1", "2", "3", "4", "5"]:
+            feedback_data.append({
+                "input": q,
+                "output": response,
+                "rating": int(rating)
+            })
+    # Сохраняем фидбэк
+    fb_file = DATA_DIR / "feedback.json"
+    old = []
+    if os.path.exists(fb_file):
+        with open(fb_file, 'r', encoding='utf-8') as f:
+            old = json.load(f)
+    old.extend(feedback_data)
+    with open(fb_file, 'w', encoding='utf-8') as f:
+        json.dump(old, f, ensure_ascii=False, indent=2)
+    logger.info(f"[green]Собрано {len(feedback_data)} оценок. Сохранено.[/green]")
+
+# ----------------------------------------
+# Оценка качества
+# ----------------------------------------
+def evaluate_model(eval_pairs, num_samples=10):
+    keywords = ["привет", "дела", "анекдот", "пока", "спасибо", "понятно"]
     score = 0.0
     with Progress(console=console) as progress:
         task = progress.add_task("Оценка качества...", total=num_samples)
@@ -193,8 +288,7 @@ def evaluate_model(model, eval_pairs, num_samples=10):
             inputs = tokenizer(f"Вопрос: {q} Ответ:", return_tensors="pt", truncation=True, max_length=64).to(model.device)
             outputs = model.generate(**inputs, max_length=128)
             response = tokenizer.decode(outputs[0], skip_special_tokens=True)
-            # Простая проверка: содержит ли ответ осмысленные слова
-            if len(response) > 10 and any(k in response.lower() for k in correct_keywords):
+            if len(response) > 10 and any(k in response.lower() for k in keywords):
                 score += 1
             progress.update(task, advance=1)
     return score / num_samples
@@ -219,7 +313,6 @@ def train_model():
         task_type="SEQ_2_SEQ_LM"
     )
     model = get_peft_model(model, lora_config)
-    model.print_trainable_parameters()
 
     training_args = TrainingArguments(
         output_dir=MODEL_DIR / "finetuned",
@@ -231,7 +324,6 @@ def train_model():
         evaluation_strategy="no",
         save_total_limit=2,
         fp16=True,
-        push_to_hub=False,
         report_to=None,
         warmup_ratio=0.1,
         gradient_accumulation_steps=2,
@@ -259,13 +351,11 @@ def train_model():
         trainer.train()
         progress.update(task, completed=100)
 
-    # Сохранение
     model.save_pretrained(MODEL_DIR / "finetuned")
     tokenizer.save_pretrained(MODEL_DIR / "finetuned")
     logger.info("[bold green]Модель сохранена![/bold green]")
 
-    # Оценка
-    quality = evaluate_model(model, pairs)
+    quality = evaluate_model(pairs)
     config["quality_score"] = quality
     config["last_trained"] = datetime.now().isoformat()
     with open(CONFIG_FILE, 'w', encoding='utf-8') as f:
@@ -288,23 +378,45 @@ def test_generation():
         console.print(f"[green]Sin:[/green] {response}")
 
 # ----------------------------------------
-# Тест общения
+# Тест общения (с RAG)
 # ----------------------------------------
 def test_chat():
     load_model()
-    console.print(Panel("ТЕСТ ОБЩЕНИЯ С SIN", style="bold blue"))
-    console.print("[yellow]Привет! Я — Sin. Готов к диалогу. Напиши что-нибудь или 'exit' для выхода.[/yellow]")
+    memory.load(CACHE_DIR)
+    history = []
+    console.print(Panel("ТЕСТ ОБЩЕНИЯ С SIN (с памятью)", style="bold blue"))
+    console.print("[yellow]Привет! Я — Sin. Я помню наш диалог. Напиши 'exit' для выхода.[/yellow]")
+
     while True:
         user_input = console.input("[bold]Вы:[/bold] ")
         if user_input.lower() in ['exit', 'выход', 'quit']:
             break
-        prompt = f"Вопрос: {user_input} Ответ:"
-        inputs = tokenizer(prompt, return_tensors="pt", truncation=True, max_length=64).to(model.device)
+
+        # RAG: поиск похожих вопросов
+        relevant = memory.search(user_input, k=2)
+        context = "\n".join([f"Ранее: {r}" for r in relevant]) if relevant else ""
+
+        # Добавляем в историю
+        history.append(f"Вы: {user_input}")
+        memory.add(user_input)
+
+        # Формируем промпт
+        prompt = (context + "\n" if context else "") + f"Вопрос: {user_input} Ответ:"
+        inputs = tokenizer(prompt, return_tensors="pt", truncation=True, max_length=96).to(model.device)
         outputs = model.generate(**inputs, max_length=128, temperature=0.7, top_p=0.9)
         response = tokenizer.decode(outputs[0], skip_special_tokens=True)
-        if "Вопрос:" in response:
-            response = response.split("Вопрос:")[0].strip()
+        response = response.replace(prompt, "").strip()
+
         console.print(f"[magenta]Sin:[/magenta] {response}")
+        history.append(f"Sin: {response}")
+        memory.add(response)
+
+        # Ограничиваем историю
+        if len(history) > config["history_size"]:
+            history.pop(0)
+
+    # Сохраняем память
+    memory.save(CACHE_DIR)
 
 # ----------------------------------------
 # Главное меню
@@ -318,9 +430,10 @@ def main():
         table.add_column("Описание")
         table.add_row("1", "Автообучение (генерация + обучение)")
         table.add_row("2", "Тест генерации текста")
-        table.add_row("3", "Тест общения")
-        table.add_row("4", "Просмотр статуса")
-        table.add_row("5", "Выход")
+        table.add_row("3", "Тест общения (с памятью)")
+        table.add_row("4", "Сбор RLHF-оценок (человеческая оценка)")
+        table.add_row("5", "Просмотр статуса")
+        table.add_row("6", "Выход")
 
         console.print(table)
         choice = console.input("[bold]Выберите действие: [/bold]")
@@ -332,15 +445,19 @@ def main():
         elif choice == "3":
             test_chat()
         elif choice == "4":
+            pairs = load_or_generate_data()
+            collect_human_feedback(pairs, n=5)
+        elif choice == "5":
             status_table = Table(title="Статус Sin", show_header=True)
             status_table.add_column("Параметр")
             status_table.add_column("Значение")
             status_table.add_row("Последнее обучение", config.get("last_trained", "Не было"))
             status_table.add_row("Оценка качества", f"{config.get('quality_score', 0):.2f}")
+            status_table.add_row("RLHF оценок", str(len([f for f in os.listdir(DATA_DIR) if 'feedback' in f])))
+            status_table.add_row("RAG записей", str(len(memory.sentences) if hasattr(memory, 'sentences') else 0))
             status_table.add_row("Модель", str(MODEL_DIR / "finetuned"))
-            status_table.add_row("Данные", f"{len(os.listdir(DATA_DIR))} файлов")
             console.print(status_table)
-        elif choice == "5":
+        elif choice == "6":
             console.print("[bold red]До свидания! Sin спит...[/bold red]")
             break
         else:
