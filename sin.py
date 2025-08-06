@@ -13,9 +13,8 @@ from transformers import (
     AutoModelForSeq2SeqLM,
     pipeline
 )
-from peft import LoraConfig, get_peft_model, prepare_model_for_kbit_training
-from trl import SFTTrainer, SFTConfig
-from huggingface_hub import snapshot_download
+from peft import LoraConfig, get_peft_model
+from huggingface_hub import snapshot_download, HfApi
 from rich.console import Console
 from rich.progress import Progress, SpinnerColumn, BarColumn, TextColumn
 from rich.logging import RichHandler
@@ -51,7 +50,7 @@ console = Console()
 
 # Конфиг
 config = {
-    "model_name": "cointegrated/rut5-base-summarizer",  # легкая, русская, работает везде
+    "model_name": "cointegrated/rut5-base",  # ✅ Правильное имя
     "max_length": 512,
     "lora_r": 8,
     "lora_alpha": 32,
@@ -70,18 +69,34 @@ else:
         json.dump(config, f, indent=4, ensure_ascii=False)
 
 # ----------------------------------------
+# Проверка подключения к HF
+# ----------------------------------------
+def is_online():
+    try:
+        api = HfApi()
+        api.list_models(limit=1)
+        return True
+    except:
+        return False
+
+# ----------------------------------------
 # Скачивание модели
 # ----------------------------------------
 def download_model():
     if not (MODEL_DIR / "config.json").exists():
-        console.print("[bold]Скачивание модели...[/bold]")
+        if not is_online():
+            logger.warning("[yellow]Нет интернета. Работаю в оффлайн-режиме.[/yellow]")
+            return False
+
+        console.print("[bold]Скачивание модели cointegrated/rut5-base...[/bold]")
         try:
             snapshot_download(
                 repo_id=config["model_name"],
                 local_dir=MODEL_DIR,
-                local_dir_use_symlinks=False
+                local_dir_use_symlinks=False,
+                max_workers=2
             )
-            logger.info("[green]Модель скачана.[/green]")
+            logger.info("[green]Модель успешно скачана.[/green]")
         except Exception as e:
             logger.error(f"[red]Ошибка скачивания: {e}[/red]")
             return False
@@ -100,17 +115,29 @@ def load_model():
     if tokenizer is not None and model is not None:
         return tokenizer, model
 
-    if not download_model():
-        raise RuntimeError("Не удалось скачать модель")
+    # Попробуем загрузить локально
+    if (MODEL_DIR / "config.json").exists():
+        try:
+            tokenizer = AutoTokenizer.from_pretrained(MODEL_DIR)
+            model = AutoModelForSeq2SeqLM.from_pretrained(MODEL_DIR)
+            logger.info("[green]Модель загружена локально.[/green]")
+            return tokenizer, model
+        except Exception as e:
+            logger.error(f"[red]Ошибка загрузки локальной модели: {e}[/red]")
 
-    try:
-        tokenizer = AutoTokenizer.from_pretrained(MODEL_DIR)
-        model = AutoModelForSeq2SeqLM.from_pretrained(MODEL_DIR)
-        model = prepare_model_for_kbit_training(model)
-        logger.info("[green]Модель и токенизатор загружены.[/green]")
-        return tokenizer, model
-    except Exception as e:
-        raise RuntimeError(f"Ошибка загрузки: {e}")
+    # Если не получилось — скачиваем
+    if download_model():
+        try:
+            tokenizer = AutoTokenizer.from_pretrained(MODEL_DIR)
+            model = AutoModelForSeq2SeqLM.from_pretrained(MODEL_DIR)
+            logger.info("[green]Модель загружена после скачивания.[/green]")
+            return tokenizer, model
+        except Exception as e:
+            logger.error(f"[red]Ошибка загрузки после скачивания: {e}[/red]")
+
+    # Фолбэк: используем встроенные данные
+    logger.warning("[yellow]Использую режим без модели (тестовые ответы).[/yellow]")
+    return None, None
 
 # ----------------------------------------
 # Векторная память (RAG)
@@ -125,7 +152,10 @@ class VectorMemory:
 
     def _get_embedding(self, text):
         if self.emb_pipeline is None:
-            self.emb_pipeline = pipeline("feature-extraction", model="cointegrated/rubert-tiny2")
+            try:
+                self.emb_pipeline = pipeline("feature-extraction", model="cointegrated/rubert-tiny2")
+            except:
+                return np.random.rand(self.dim).astype(np.float32)
         try:
             emb = self.emb_pipeline(text)[0][0]
             return np.array(emb).astype(np.float32)
@@ -169,16 +199,15 @@ memory.load()
 # Генерация данных
 # ----------------------------------------
 def generate_data():
-    pairs = [
+    return [
         ("Привет", "Здравствуй!"),
-        ("Как дела?", "У меня всё хорошо, спасибо!"),
-        ("Расскажи анекдот", "Почему программисты не ходят в лес? Боятся глубоких рекурсий!"),
-        ("Кто ты?", "Я — Sin, ваш помощник."),
-        ("Погода", "Сегодня солнечно."),
+        ("Как дела?", "Хорошо, спасибо!"),
+        ("Расскажи анекдот", "Не программисты ли ходят в лес?"),
+        ("Кто ты?", "Я — Sin, твой помощник."),
+        ("Погода", "Солнечно."),
         ("2+2", "4"),
-        ("Пока", "До встречи!"),
+        ("Пока", "До встречи!")
     ]
-    return [{"instruction": q, "response": a} for q, a in pairs]
 
 # ----------------------------------------
 # Сбор RLHF-оценок
@@ -186,54 +215,47 @@ def generate_data():
 def collect_human_feedback():
     feedback_file = DATA_DIR / "feedback.jsonl"
     tokenizer, model = load_model()
-    model.eval()
 
     console.print(Panel("🧠 Оцените ответы Sin (1–5)", style="bold yellow"))
     feedback = []
 
-    for pair in generate_data():
-        prompt = f"Вопрос: {pair['instruction']} Ответ:"
-        inputs = tokenizer(prompt, return_tensors="pt", truncation=True, max_length=256).to(model.device)
+    for q, a in generate_data():
+        if model is not None:
+            prompt = f"Вопрос: {q} Ответ:"
+            inputs = tokenizer(prompt, return_tensors="pt", truncation=True, max_length=256)
+            try:
+                outputs = model.generate(**inputs, max_length=300)
+                a = tokenizer.decode(outputs[0], skip_special_tokens=True)
+            except:
+                pass
 
-        try:
-            outputs = model.generate(**inputs, max_length=300)
-            response = tokenizer.decode(outputs[0], skip_special_tokens=True)
-        except:
-            response = "Не могу ответить."
-
-        console.print(f"[cyan]Вопрос:[/cyan] {pair['instruction']}")
-        console.print(f"[magenta]Sin:[/magenta] {response}")
+        console.print(f"[cyan]Вопрос:[/cyan] {q}")
+        console.print(f"[magenta]Sin:[/magenta] {a}")
         rating = console.input("Оценка (1-5): ").strip()
         if rating in "12345":
-            feedback.append({
-                "input": prompt.strip(),
-                "output": response,
-                "score": int(rating)
-            })
+            feedback.append({"input": q, "output": a, "score": int(rating)})
 
-    with open(feedback_file, "a", encoding="utf-8") as f:
-        for item in feedback:
-            f.write(json.dumps(item, ensure_ascii=False) + "\n")
-    logger.info(f"[green]Сохранено {len(feedback)} оценок.[/green]")
+    if feedback:
+        mode = "a" if feedback_file.exists() else "w"
+        with open(feedback_file, mode, encoding="utf-8") as f:
+            for item in feedback:
+                f.write(json.dumps(item, ensure_ascii=False) + "\n")
+        logger.info(f"[green]Сохранено {len(feedback)} оценок.[/green]")
 
 # ----------------------------------------
-# Обучение (SFT)
+# Обучение
 # ----------------------------------------
 def train_model():
     tokenizer, model = load_model()
-    model.train()
+    if model is None:
+        logger.warning("[yellow]Нет модели для обучения.[/yellow]")
+        return
 
-    # Данные
     data = generate_data()
-    texts = [f"Вопрос: {p['instruction']} Ответ: {p['response']}" for p in data]
+    texts = [f"Вопрос: {q} Ответ: {a}" for q, a in data]
     from datasets import Dataset
     dataset = Dataset.from_dict({"text": texts})
-    dataset = dataset.map(
-        lambda x: tokenizer(x["text"], truncation=True, max_length=256),
-        batched=True
-    )
 
-    # LoRA
     model = get_peft_model(model, LoraConfig(
         r=config["lora_r"],
         lora_alpha=config["lora_alpha"],
@@ -243,29 +265,24 @@ def train_model():
         task_type="SEQ_2_SEQ_LM"
     ))
 
-    # Тренировка
-    args = SFTConfig(
+    from transformers import TrainingArguments, Trainer
+    args = TrainingArguments(
         output_dir=MODEL_DIR,
-        max_steps=100,
         per_device_train_batch_size=config["batch_size"],
-        gradient_accumulation_steps=2,
+        num_train_epochs=config["epochs"],
         learning_rate=config["learning_rate"],
         logging_steps=10,
         save_steps=50,
         save_total_limit=2,
-        bf16=False,
         fp16=torch.cuda.is_available(),
-        remove_unused_columns=False,
-        optim="adamw_torch"
+        report_to=None
     )
 
-    trainer = SFTTrainer(
+    trainer = Trainer(
         model=model,
         args=args,
-        train_dataset=dataset,
-        tokenizer=tokenizer,
-        dataset_text_field="text",
-        max_seq_length=256
+        train_dataset=dataset.map(lambda x: tokenizer(x["text"], truncation=True, max_length=256)),
+        tokenizer=tokenizer
     )
 
     with Progress(SpinnerColumn(), TextColumn("Обучение..."), BarColumn(), console=console) as progress:
@@ -284,7 +301,6 @@ def train_model():
 # ----------------------------------------
 def test_chat():
     tokenizer, model = load_model()
-    model.eval()
     console.print(Panel("💬 Sin — режим общения", style="bold blue"))
     console.print("[yellow]Напишите 'выход' для завершения.[/yellow]")
 
@@ -293,16 +309,19 @@ def test_chat():
         if user_input.lower() in ['выход', 'exit']:
             break
 
+        # RAG
         ctx = "\n".join([f"Ранее: {x}" for x in memory.search(user_input, k=2)])
         prompt = f"{ctx}\nВопрос: {user_input} Ответ:" if ctx else f"Вопрос: {user_input} Ответ:"
 
-        inputs = tokenizer(prompt, return_tensors="pt", truncation=True, max_length=256).to(model.device)
-        try:
-            outputs = model.generate(**inputs, max_length=300)
-            response = tokenizer.decode(outputs[0], skip_special_tokens=True)
-            response = response.split("Ответ:")[-1].strip()
-        except:
-            response = "Извини, не могу ответить."
+        response = "Я не понял."
+        if model is not None:
+            try:
+                inputs = tokenizer(prompt, return_tensors="pt", truncation=True, max_length=256)
+                outputs = model.generate(**inputs, max_length=300)
+                response = tokenizer.decode(outputs[0], skip_special_tokens=True)
+                response = response.split("Ответ:")[-1].strip()
+            except:
+                pass
 
         console.print(f"[magenta]Sin:[/magenta] {response}")
 
