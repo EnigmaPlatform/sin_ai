@@ -107,14 +107,25 @@ def download_model():
     return True
 
 # ----------------------------------------
-# Загрузка модели
+# Загрузка модели с исправлением ошибки токенизатора
 # ----------------------------------------
 def load_optimized_model():
     local = (MODEL_DIR / "config.json").exists()
     try:
-        tokenizer = AutoTokenizer.from_pretrained(MODEL_DIR if local else "cointegrated/rut5-base", local_files_only=local)
-        model = AutoModelForSeq2SeqLM.from_pretrained(MODEL_DIR if local else "cointegrated/rut5-base", local_files_only=local)
-        logger.info("[green]Модель загружена.[/green]")
+        # Ключевое исправление: use_fast=False
+        tokenizer = AutoTokenizer.from_pretrained(
+            MODEL_DIR if local else "cointegrated/rut5-base",
+            local_files_only=local,
+            use_fast=False  # ✅ Отключаем попытку создать fast-токенизатор
+        )
+        model = AutoModelForSeq2SeqLM.from_pretrained(
+            MODEL_DIR if local else "cointegrated/rut5-base",
+            local_files_only=local,
+            torch_dtype=torch.float32,
+            low_cpu_mem_usage=True,
+            device_map="auto"
+        )
+        logger.info("[green]Модель и токенизатор загружены.[/green]")
         return tokenizer, model
     except Exception as e:
         logger.error(f"[red]Ошибка загрузки модели: {e}[/red]")
