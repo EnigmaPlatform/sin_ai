@@ -511,7 +511,7 @@ class EmotionalChatBot:
             
             # Формируем промпт с учетом эмоций и контекста
             prompt = f"""
-Ты — Sin, эмоциональный ИИ-ассистент. Учитывай контекст и эмоции.
+Ты — Sin, эмоциональный ИИ-ассистент. Отвечай естественно и дружелюбно.
 Текущее состояние: {emotion_state['emotion_icon']} {emotion_state['current_emotion']} 
 Настроение: {emotion_state['mood_description']}
 {context}
@@ -546,6 +546,9 @@ Sin:
             # Удаляем повтор prompt'а из ответа
             response = full_response[len(prompt):].strip() if full_response.startswith(prompt) else full_response
             
+            # Удаляем специальные токены T5
+            response = response.replace("<extra_id_0>", "").replace("<pad>", "").replace("</s>", "").strip()
+            
             # Обработка пустого ответа
             if not response:
                 response = random.choice([
@@ -564,6 +567,25 @@ Sin:
         except Exception as e:
             logger.error(f"Ошибка генерации ответа: {e}\n{traceback.format_exc()}")
             return "Произошла ошибка при генерации ответа. Попробуйте снова."
+
+    def show_emotion_state(self) -> None:
+        """Показывает текущее эмоциональное состояние в виде таблицы"""
+        state = self.emotion_engine.get_state()
+        
+        table = Table(
+            title="Состояние Sin",
+            show_header=True,
+            header_style="bold blue",
+            width=50
+        )
+        table.add_column("Параметр", style="dim", width=20)
+        table.add_column("Значение", width=30)
+        
+        table.add_row("Эмоция", f"{state['emotion_icon']} {state['current_emotion']}")
+        table.add_row("Интенсивность", f"{state['intensity']:.2f}")
+        table.add_row("Настроение", state['mood_description'])
+        
+        console.print(table)
 
     def save_state(self) -> None:
         try:
@@ -1088,12 +1110,7 @@ def chat_with_bot(bot: EmotionalChatBot) -> None:
             console.print(f"[bold magenta]Sin:[/bold magenta] {response}")
             
             # Показ состояния
-            emotion_state = bot.emotion_engine.get_state()
-            state_table = Table(title="Состояние Sin", show_header=False)
-            state_table.add_row("Эмоция", f"{emotion_state['emotion_icon']} {emotion_state['current_emotion']}")
-            state_table.add_row("Интенсивность", f"{emotion_state['intensity']:.2f}")
-            state_table.add_row("Настроение", emotion_state['mood_description'])
-            console.print(state_table)
+            bot.show_emotion_state()
             
         except KeyboardInterrupt:
             break
