@@ -96,24 +96,81 @@ EMOTION_ENGINE_CONFIG = {
 
 # --- Конфигурация для загрузки датасетов ---
 HF_DATASETS = [
-    # {"name": "Russian Conversational AI Dataset (small)", "path": "RussianNLP/russian_super_glue", "config": "rcb"},
-    # Добавьте сюда датасеты с Hugging Face
+    {
+        "name": "Russian QA Dataset",
+        "path": "IlyaGusev/ru_qa",
+        "config": None,
+        "split": "train",
+        "text_field": "text"
+    },
+    {
+        "name": "Russian Conversational Dataset",
+        "path": "IlyaGusev/ru_tweets",
+        "config": None,
+        "split": "train",
+        "text_field": "text"
+    }
 ]
 
 GITHUB_DATASETS = [
-    # {
-    #     "name": "Russian News Dataset (~500MB)",
-    #     "url": "https://github.com/Desklop/Ukrainian_news_Title_Generation/releases/download/v1.0/ua_news_dataset.zip",
-    #     "type": "zip",
-    #     "extract_path": "ua_news_dataset",
-    #     "move_files": True
-    # },
-    # Добавьте сюда датасеты с GitHub
+    {
+        "name": "Russian OpenSubtitles Dataset",
+        "url": "https://github.com/akanyaani/rus-opensubtitles/releases/download/v1.0/opensubtitles_ru.txt.gz",
+        "type": "gzip",
+        "extract_path": "opensubtitles_ru.txt",
+        "move_files": False
+    },
+    {
+        "name": "Russian Wikipedia QA",
+        "url": "https://github.com/avidale/ruqa/releases/download/v1.0/ruqa_wiki.jsonl.gz",
+        "type": "gzip",
+        "extract_path": "ruqa_wiki.jsonl",
+        "move_files": False
+    }
 ]
 
 # ----------------------------------------
-# Функции для загрузки датасетов из файлов
+# Функции для загрузки датасетов
 # ----------------------------------------
+def download_and_extract_github_dataset(dataset_info: Dict) -> Optional[Path]:
+    """Загружает и распаковывает датасет с GitHub"""
+    import gzip
+    import shutil
+    from urllib.request import urlretrieve
+    
+    try:
+        console.print(f"[blue]Загрузка датасета {dataset_info['name']}...[/blue]")
+        archive_path = DATASETS_CACHE_DIR / Path(dataset_info['url']).name
+        urlretrieve(dataset_info['url'], archive_path)
+        
+        if dataset_info['type'] == 'gzip':
+            with gzip.open(archive_path, 'rb') as f_in:
+                extracted_path = DATASETS_CACHE_DIR / dataset_info['extract_path']
+                with open(extracted_path, 'wb') as f_out:
+                    shutil.copyfileobj(f_in, f_out)
+            return extracted_path
+        else:
+            console.print(f"[red]Неподдерживаемый тип архива: {dataset_info['type']}[/red]")
+            return None
+    except Exception as e:
+        console.print(f"[red]Ошибка при загрузке датасета: {e}[/red]")
+        return None
+
+def load_hf_dataset(dataset_info: Dict) -> Optional[List[Dict[str, str]]]:
+    """Загружает датасет с Hugging Face"""
+    try:
+        from datasets import load_dataset
+        console.print(f"[blue]Загрузка датасета {dataset_info['name']}...[/blue]")
+        dataset = load_dataset(
+            dataset_info['path'],
+            dataset_info['config'] if dataset_info['config'] else None,
+            split=dataset_info['split']
+        )
+        return [{"text": item[dataset_info['text_field']]} for item in dataset]
+    except Exception as e:
+        console.print(f"[red]Ошибка при загрузке датасета: {e}[/red]")
+        return None
+
 def load_text_from_txt(file_path: Path) -> str:
     """Загружает текст из .txt файла."""
     try:
@@ -166,9 +223,7 @@ def load_text_from_docx(file_path: Path) -> str:
         return ""
 
 def load_qa_from_json(file_path: Path) -> List[Dict[str, str]]:
-    """Загружает пары вопрос-ответ из .json файла.
-    Ожидается формат: [{"question": "...", "answer": "..."}, ...] или [{"input": "...", "output": "..."}, ...]
-    """
+    """Загружает пары вопрос-ответ из .json файла."""
     try:
         with open(file_path, 'r', encoding='utf-8') as f:
             data = json.load(f)
@@ -473,13 +528,37 @@ class QADataset(Dataset):
         else:
             input_text = text
             target_text = "Хорошо, я понял."
-        model_inputs = self.tokenizer(input_text, max_length=self.max_length, truncation=True, padding="max_length", return_tensors="pt")
-        with self.tokenizer.as_target_tokenizer():
-            labels = self.tokenizer(target_text, max_length=self.max_length, truncation=True, padding="max_length", return_tensors="pt")
+        
+        # Исправление для устранения предупреждения об устаревшем методе
+        model_inputs = self.tokenizer(
+            input_text, 
+            max_length=self.max_length, 
+            truncation=True, 
+            padding="max_length", 
+            return_tensors="pt"
+        )
+        
+        # Исправление для устранения предупреждения об устаревшем методе
+        labels = self.tokenizer(
+            text_target=target_text,
+            max_length=self.max_length,
+            truncation=True,
+            padding="max_length",
+            return_tensors="pt"
+        )["input_ids"]
+        
         model_inputs = {key: val.squeeze(0) for key, val in model_inputs.items()}
-        labels = labels["input_ids"].squeeze(0)
+        labels = labels.squeeze(0)
         labels[labels == self.tokenizer.pad_token_id] = -100
         model_inputs["labels"] = labels
+        
+        # Исправление для устранения предупреждения о медленном создании тензора
+        for key in model_inputs:
+            if isinstance(model_inputs[key], torch.Tensor):
+                model_inputs[key] = model_inputs[key].clone().detach()
+            else:
+                model_inputs[key] = torch.tensor(model_inputs[key], dtype=torch.long)
+        
         return model_inputs
 
 # --- Основной класс бота ---
@@ -642,7 +721,7 @@ def train_pytorch(bot: EmotionalChatBot, train_dataset: Dataset, epochs: int = 3
 # ----------------------------------------
 # SFT: Обучение на парах вопрос-ответ (с улучшениями)
 # ----------------------------------------
-def train_sft(bot: EmotionalChatBot, custom_dataset: Optional[List[Dict[str, str]]] = None):
+def train_sft(bot: EmotionalChatBot, custom_dataset: Optional[List[Dict[str, str]]] = None, dataset_source: str = None):
     """Обучение с использованием SFTTrainer."""
     if bot.model is None or bot.tokenizer is None:
         logger.warning("[yellow]Нет модели или токенизатора для обучения.[/yellow]")
@@ -651,9 +730,36 @@ def train_sft(bot: EmotionalChatBot, custom_dataset: Optional[List[Dict[str, str
             console.print("[red]Не удалось загрузить модель для обучения.[/red]")
             return
 
+    data = []
     if custom_dataset is not None:
         data = custom_dataset
         console.print("[blue]Используется пользовательский датасет для обучения.[/blue]")
+    elif dataset_source == "hf":
+        console.print("[blue]Загрузка датасета с Hugging Face...[/blue]")
+        for dataset_info in HF_DATASETS:
+            hf_data = load_hf_dataset(dataset_info)
+            if hf_data:
+                data.extend(hf_data)
+                console.print(f"[green]Загружено {len(hf_data)} примеров из {dataset_info['name']}[/green]")
+                break
+    elif dataset_source == "github":
+        console.print("[blue]Загрузка датасета с GitHub...[/blue]")
+        for dataset_info in GITHUB_DATASETS:
+            dataset_path = download_and_extract_github_dataset(dataset_info)
+            if dataset_path:
+                if dataset_path.suffix == '.jsonl':
+                    with open(dataset_path, 'r', encoding='utf-8') as f:
+                        for line in f:
+                            item = json.loads(line)
+                            if 'question' in item and 'answer' in item:
+                                data.append({"text": f"{item['question']} Ответ: {item['answer']}"})
+                elif dataset_path.suffix == '.txt':
+                    text = load_text_from_txt(dataset_path)
+                    if text:
+                        qa_pairs = create_qa_pairs_from_text(text, max_pairs=500)
+                        data.extend(qa_pairs)
+                console.print(f"[green]Загружено {len(data)} примеров из {dataset_info['name']}[/green]")
+                break
     else:
         console.print("[blue]Используется стандартный датасет для обучения.[/blue]")
         data = [
@@ -666,6 +772,11 @@ def train_sft(bot: EmotionalChatBot, custom_dataset: Optional[List[Dict[str, str
             {"text": "Что такое ИИ? Ответ: Искусственный интеллект - это область компьютерных наук, которая создает интеллектуальные машины."},
             {"text": "Расскажи о погоде Ответ: Я не могу получить информацию о погоде в реальном времени, но могу поговорить о климате."},
         ]
+    
+    if not data:
+        console.print("[red]Не удалось загрузить данные для обучения.[/red]")
+        return
+
     try:
         from datasets import Dataset as HFDataset
         dataset = HFDataset.from_list(data)
@@ -704,7 +815,6 @@ def train_sft(bot: EmotionalChatBot, custom_dataset: Optional[List[Dict[str, str
         logging_first_step=True,
         load_best_model_at_end=False,
         dataloader_num_workers=0,
-        # disable_tqdm=False # Отключаем внутренний прогресс-бар Trainer
     )
 
     try:
@@ -715,7 +825,13 @@ def train_sft(bot: EmotionalChatBot, custom_dataset: Optional[List[Dict[str, str
             dataset_text_field="text",
             max_seq_length=256,
             packing=False,
-            data_collator=DataCollatorForSeq2Seq(tokenizer=bot.tokenizer, model=model_for_training, padding=True)
+            tokenizer=bot.tokenizer,
+            data_collator=DataCollatorForSeq2Seq(
+                tokenizer=bot.tokenizer, 
+                model=model_for_training, 
+                padding=True,
+                return_tensors="pt"  # Исправление для предупреждения о медленных тензорах
+            )
         )
     except Exception as e:
         console.print(f"[red]Ошибка при создании SFTTrainer: {e}[/red]")
@@ -792,8 +908,10 @@ def main():
         table.add_row("4", "SFT: дообучить модель по URL")
         table.add_row("5", "SFT: дообучить модель из файлов")
         table.add_row("6", "PyTorch: дообучить модель из файлов")
-        table.add_row("7", "Сохранить состояние")
-        table.add_row("8", "Выход")
+        table.add_row("7", "SFT: дообучить модель с Hugging Face")
+        table.add_row("8", "SFT: дообучить модель с GitHub")
+        table.add_row("9", "Сохранить состояние")
+        table.add_row("10", "Выход")
         console.print(table)
         choice = console.input("[bold]Выберите: [/bold]").strip()
         if choice == "1":
@@ -854,9 +972,15 @@ def main():
             else:
                 console.print("[red]Не удалось загрузить датасет или токенизатор.[/red]")
         elif choice == "7":
+            console.print("[blue]Запуск обучения на датасете с Hugging Face...[/blue]")
+            train_sft(bot, dataset_source="hf")
+        elif choice == "8":
+            console.print("[blue]Запуск обучения на датасете с GitHub...[/blue]")
+            train_sft(bot, dataset_source="github")
+        elif choice == "9":
              bot.save_state()
              console.print("[green]Состояние сохранено.[/green]")
-        elif choice == "8":
+        elif choice == "10":
             bot.save_state()
             console.print("[bold red]До свидания, Sin спит...[/bold red]")
             break
