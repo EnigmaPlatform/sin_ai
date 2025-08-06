@@ -2,6 +2,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 from sklearn.metrics.pairwise import cosine_similarity
 from sklearn.cluster import KMeans, AgglomerativeClustering
+from sklearn.manifold import TSNE
 import faiss
 import random
 import time
@@ -26,6 +27,9 @@ import psutil
 import pymorphy3
 import networkx as nx
 from typing import List, Dict, Optional, Tuple, Any, Set
+import torch
+from transformers import AutoTokenizer, AutoModelForCausalLM, pipeline
+from bs4 import BeautifulSoup
 import chromadb
 from chromadb.config import Settings
 
@@ -40,6 +44,7 @@ GRAPH_FILE = os.path.join(BASE_PATH, "knowledge_graph.pkl")
 CHROMA_DIR = os.path.join(BASE_PATH, "chroma_db")
 LOG_FILE = os.path.join(BASE_PATH, "sin.log")
 TELEGRAM_TOKEN = "7990254673:AAE-7UGlXLWnQ-Dn5D2uyrz0RYDJnBZZKM8"
+SUBCONSCIOUS_MODEL = "ai-forever/rugpt3small_based_on_gpt2"
 
 # === ГЛОБАЛЬНЫЕ ПАРАМЕТРЫ ===
 MAX_NODES = 10000
@@ -170,6 +175,60 @@ class RuEmbedder:
             return np.random.normal(0, 0.1, self.dim)
         return self.model[norm].copy()
 
+# === SubconsciousModule — LLM как "подсознание" ===
+class SubconsciousModule:
+    def __init__(self, model_name=SUBCONSCIOUS_MODEL):
+        self.model_name = model_name
+        self.tokenizer = AutoTokenizer.from_pretrained(model_name)
+        self.model = AutoModelForCausalLM.from_pretrained(model_name)
+        self.device = "cuda" if torch.cuda.is_available() else "cpu"
+        self.model.to(self.device)
+        self.model.eval()
+        self.generator = pipeline(
+            "text-generation",
+            model=self.model,
+            tokenizer=self.tokenizer,
+            device=0 if self.device == "cuda" else -1,
+            pad_token_id=self.tokenizer.eos_token_id
+        )
+        logger.info(f"🧠 Подсознание загружено: {model_name}")
+
+    def generate(self, prompt: str, max_length: int = 100) -> str:
+        try:
+            outputs = self.generator(
+                prompt,
+                max_length=max_length,
+                temperature=GENERATION_TEMP,
+                top_k=50,
+                do_sample=True,
+                num_return_sequences=1
+            )
+            return outputs[0]['generated_text'].replace(prompt, "").strip()
+        except Exception as e:
+            logger.error(f"Ошибка генерации: {e}")
+            return "Я пока не могу ответить."
+
+    def get_embedding(self, text: str) -> np.ndarray:
+        inputs = self.tokenizer(text, return_tensors="pt", truncation=True, max_length=512).to(self.device)
+        with torch.no_grad():
+            outputs = self.model.base_model(**inputs)
+            return outputs.last_hidden_state[:, 0, :].cpu().numpy()[0]
+
+    def save(self, path: str):
+        os.makedirs(path, exist_ok=True)
+        self.model.save_pretrained(path)
+        self.tokenizer.save_pretrained(path)
+        logger.info(f"💾 Подсознание сохранено: {path}")
+
+    def load(self, path: str):
+        if os.path.exists(path):
+            self.model = AutoModelForCausalLM.from_pretrained(path)
+            self.tokenizer = AutoTokenizer.from_pretrained(path)
+            self.model.to(self.device)
+            self.model.eval()
+            self.generator = pipeline("text-generation", model=self.model, tokenizer=self.tokenizer, device=0 if self.device == "cuda" else -1)
+            logger.info(f"📥 Подсознание загружено: {path}")
+
 # === СТРУКТУРЫ ПАМЯТИ ===
 @dataclass
 class MemoryItem:
@@ -289,6 +348,13 @@ class Resonator:
             self.amplitude *= (1 - self.damping * dt)
             self.attention *= ATTENTION_DECAY
             self.phase_history.append(self.phase)
+            # Записываем в историю активации SIN
+            sin_instance = getattr(self, 'sin_instance', None)
+            if sin_instance:
+                activation_row = [0.0] * len(sin_instance.nodes)
+                idx = list(sin_instance.nodes.keys()).index(self.id)
+                activation_row[idx] = self.amplitude
+                sin_instance.activation_history.append(activation_row)
         else:
             self.amplitude = 0.0
 
@@ -325,7 +391,7 @@ class Hippocampus:
         self.working_memory.clear()
         self.predicted_items.clear()
 
-# === VectorIndex (FAISS) ===
+# === VectorIndex ===
 class VectorIndex:
     def __init__(self, dim: int = INDEX_DIM):
         self.dim = dim
@@ -454,7 +520,6 @@ class SemanticMemory:
             vector=vec,
             timestamp=time.time()
         )
-        # Добавляем в Chroma
         self.collection.add(
             embeddings=[vec.tolist()],
             documents=[text],
@@ -513,6 +578,23 @@ class SemanticMemory:
             word_freq[w] += 1
         theme = max(word_freq, key=word_freq.get)
         return theme
+
+    def visualize_clusters(self):
+        if not self.clusters:
+            logger.warning("Нет кластеров для визуализации.")
+            return
+        vectors = np.array([ep.vector for ep in self.episodes])
+        labels = np.array([lbl for lbl, eps in self.clusters.items() for _ in eps])
+        tsne = TSNE(n_components=2, random_state=42)
+        reduced = tsne.fit_transform(vectors)
+        plt.figure(figsize=(10, 8))
+        scatter = plt.scatter(reduced[:, 0], reduced[:, 1], c=labels, cmap='tab10', alpha=0.7)
+        plt.colorbar(scatter)
+        plt.title("Кластеры эпизодов (t-SNE)")
+        plt.xlabel("Компонента 1")
+        plt.ylabel("Компонента 2")
+        plt.tight_layout()
+        plt.show()
 
 # === AutonomousLearner ===
 class AutonomousLearner:
@@ -661,10 +743,13 @@ class MultiAgentSystem:
 
 # === SIN — ОСНОВНАЯ СИСТЕМА ===
 class Sin:
-    VERSION = "19.2"
+    VERSION = "19.3"
 
     def __init__(self, persist_file: str = PERSIST_FILE):
         self.embedder = RuEmbedder()
+        self.subconscious = SubconsciousModule()
+        if os.path.exists(SUBCONSCIOUS_SAVE_DIR):
+            self.subconscious.load(SUBCONSCIOUS_SAVE_DIR)
         self.nodes = {}
         self.node_counter = 0
         self.memory = []
@@ -699,6 +784,43 @@ class Sin:
         self.multi_agent_system = MultiAgentSystem(self)
         self._init_system()
         logger.info(f"🌐 SIN v{self.VERSION} запущен. Узлов: {len(self.nodes)}, Память: {len(self.memory)}")
+
+        # === АВТОПРЕДОБУЧЕНИЕ ===
+        self.auto_pretrain()
+
+    def auto_pretrain(self):
+        """Автоматическое предобучение на эмбеддингах и URL."""
+        logger.info("🚀 Начинаем автопредобучение...")
+        # 1. Обучение на словах из эмбеддингов
+        for word in list(self.embedder.model.key_to_index.keys())[:1000]:  # первые 1000 слов
+            self.learn(word, user_feedback="good")
+        # 2. Обучение на URL
+        urls = [
+            "https://ru.wikipedia.org/wiki/Искусственный_интеллект",
+            "https://habr.com/ru/news/"
+        ]
+        for url in urls:
+            self.learn_from_url(url)
+        logger.info("✅ Автопредобучение завершено.")
+
+    def learn_from_url(self, url: str):
+        """Парсинг, очистка и обучение на контенте URL."""
+        try:
+            response = requests.get(url, timeout=10)
+            response.raise_for_status()
+            soup = BeautifulSoup(response.text, 'html.parser')
+            for script in soup(["script", "style"]):
+                script.decompose()
+            text = soup.get_text()
+            lines = (line.strip() for line in text.splitlines())
+            chunks = (phrase.strip() for line in lines for phrase in line.split("  "))
+            text = ' '.join(chunk for chunk in chunks if chunk)
+            sentences = [s.strip() for s in text.split('.') if len(s.strip()) > 50][:10]
+            for sent in sentences:
+                self.learn(sent[:500], user_feedback="good")
+            logger.info(f"✅ Обучение на URL завершено: {url}")
+        except Exception as e:
+            logger.error(f"❌ Ошибка при обучении на URL {url}: {e}")
 
     def _init_system(self):
         if os.path.exists(self.persist_file):
@@ -851,6 +973,7 @@ class Sin:
                 reward -= 0.5
             nid = self.node_counter
             node = Resonator(nid)
+            node.sin_instance = self  # Для визуализации
             node.pattern = vec.copy()
             self.nodes[nid] = node
             node.excite(1.0)
@@ -867,7 +990,15 @@ class Sin:
             )
             items_to_add.append(mem_item)
             if len(conflicts) == 0:
-                self.knowledge_graph.add_concept(word, vec)
+                # === ДОБАВЛЕНИЕ СВЯЗЕЙ В ГРАФ ЗНАНИЙ ===
+                if len(words) > 1:
+                    phrase = ' '.join(words)
+                    self.knowledge_graph.add_concept(word, vec, children=[phrase])
+                    self.knowledge_graph.add_concept(phrase, total_vec, parents=[word])
+                if i > 0:
+                    prev_word = words[i-1]
+                    self.knowledge_graph.add_concept(prev_word, self.embedder.get_vector(prev_word), relations={"next": [word]})
+                    self.knowledge_graph.add_concept(word, vec, relations={"prev": [prev_word]})
 
         total_vec /= len(words)
         phrase_item = MemoryItem.from_np(
@@ -993,17 +1124,11 @@ class Sin:
             logger.info(f"❓ Задаю вопрос: {question}")
             return f"❓ {question}"
 
-        results = self.vector_index.search_similar(query_vec, k=10)
-        if results and results[0][0] > 0.6:
-            best_text = self.memory[results[0][1]].text
-            similarity = results[0][0]
-            if certainty > 0.7:
-                return f"🧠 Это напоминает: '{best_text}' (схожесть: {similarity:.2f})"
-            else:
-                return f"🤔 Возможно, это связано с: '{best_text}' (схожесть: {similarity:.2f})"
-        if curiosity > 0.6:
-            return f"🤔 Интересно... Расскажи больше об этом."
-        return f"🤔 Частично понимаю. Ещё не до конца ясно."
+        # Генерация через подсознание
+        prompt = f"Пользователь: {text}\nSin:"
+        response = self.subconscious.generate(prompt, max_length=100)
+        logger.info("💬 Ответ сгенерирован через подсознание.")
+        return f"💬 {response}"
 
     def dream_cycle(self):
         logger.info("💭 Sin видит сны...")
@@ -1087,6 +1212,9 @@ class Sin:
         plt.tight_layout()
         plt.show()
 
+    def visualize_clusters(self):
+        self.semantic_memory.visualize_clusters()
+
     def clear_memory(self):
         self.memory = []
         self.nodes = {}
@@ -1136,7 +1264,7 @@ app = FastAPI(title=f"SIN API v{Sin.VERSION}")
 sin = Sin()
 
 @app.post("/learn")
-async def api_learn(data: dict):
+async def api_learn( dict):
     try:
         text = data.get("text", "")
         result = sin.learn(text)
@@ -1145,7 +1273,7 @@ async def api_learn(data: dict):
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.post("/respond")
-async def api_respond(data: dict):
+async def api_respond( dict):
     try:
         text = data.get("text", "")
         response = sin.respond(text)
@@ -1166,7 +1294,7 @@ async def api_status():
     }
 
 @app.post("/autonomous_learn")
-async def api_autonomous_learn(data: dict):
+async def api_autonomous_learn( dict):
     duration = data.get("duration", 30)
     result = sin.start_autonomous_learning(duration)
     return {"result": result}
@@ -1182,7 +1310,7 @@ async def api_autonomous_learn_log():
     return {"log": log}
 
 @app.post("/add_goal")
-async def api_add_goal(data: dict):
+async def api_add_goal( dict):
     description = data.get("description", "")
     priority = data.get("priority", 0.5)
     result = sin.add_goal(description, priority)
@@ -1211,6 +1339,7 @@ def run_cli():
   !status — статус
   !sleep — заставить поспать
   !visualize — график резонанса
+  !clusters — визуализация кластеров
   !memory — показать память
   !episodes — показать эпизоды
   !search "запрос" — семантический поиск
@@ -1236,6 +1365,8 @@ def run_cli():
                 sin.start_sleep()
             elif user_input.lower() == "!visualize":
                 sin.visualize_resonance()
+            elif user_input.lower() == "!clusters":
+                sin.visualize_clusters()
             elif user_input.lower() == "!memory":
                 sin.show_memory()
             elif user_input.lower() == "!episodes":
