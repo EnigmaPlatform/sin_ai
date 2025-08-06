@@ -48,7 +48,7 @@ CHROMA_DIR = os.path.join(BASE_PATH, "chroma_db")
 LOG_FILE = os.path.join(BASE_PATH, "sin.log")
 TELEGRAM_TOKEN = "7990254673:AAE-7UGlXLWnQ-Dn5D2uyrz0RYDJnBZZKM8"
 SUBCONSCIOUS_MODEL = "ai-forever/rugpt3small_based_on_gpt2"
-SUBCONSCIOUS_SAVE_DIR = os.path.join(BASE_PATH, "subconscious")  # <-- КРИТИЧЕСКИ ВАЖНО: ОБЪЯВЛЕНО
+SUBCONSCIOUS_SAVE_DIR = os.path.join(BASE_PATH, "subconscious")
 
 # === ГЛОБАЛЬНЫЕ ПАРАМЕТРЫ ===
 MAX_NODES = 10000
@@ -181,21 +181,79 @@ class RuEmbedder:
 
 # === SubconsciousModule — LLM как "подсознание" ===
 class SubconsciousModule:
-    def __init__(self, model_name=SUBCONSCIOUS_MODEL):
+    def __init__(self, model_name=SUBCONSCIOUS_MODEL, save_dir=SUBCONSCIOUS_SAVE_DIR):
         self.model_name = model_name
-        self.tokenizer = AutoTokenizer.from_pretrained(model_name)
-        self.model = AutoModelForCausalLM.from_pretrained(model_name)
+        self.save_dir = save_dir
         self.device = "cuda" if torch.cuda.is_available() else "cpu"
-        self.model.to(self.device)
-        self.model.eval()
-        self.generator = pipeline(
-            "text-generation",
-            model=self.model,
-            tokenizer=self.tokenizer,
-            device=0 if self.device == "cuda" else -1,
-            pad_token_id=self.tokenizer.eos_token_id
-        )
-        logger.info(f"🧠 Подсознание загружено: {model_name}")
+        self.model = None
+        self.tokenizer = None
+        self.generator = None
+        self._load_or_initialize()
+
+    def _load_or_initialize(self):
+        """Сначала пытаемся загрузить из папки, иначе — из HF, потом сохраняем."""
+        os.makedirs(self.save_dir, exist_ok=True)
+
+        # 1. Проверяем, есть ли файлы в папке
+        if self._is_model_saved():
+            logger.info(f"📥 Попытка загрузить подсознание из: {self.save_dir}")
+            if self._try_load_from_disk():
+                logger.info(f"✅ Подсознание успешно загружено из: {self.save_dir}")
+                return
+
+        # 2. Если не получилось — загружаем из Hugging Face
+        logger.info(f"🌐 Загрузка подсознания из Hugging Face: {self.model_name}")
+        try:
+            self.tokenizer = AutoTokenizer.from_pretrained(self.model_name)
+            self.model = AutoModelForCausalLM.from_pretrained(self.model_name)
+            self.model.to(self.device)
+            self.model.eval()
+            self.generator = pipeline(
+                "text-generation",
+                model=self.model,
+                tokenizer=self.tokenizer,
+                device=0 if self.device == "cuda" else -1,
+                pad_token_id=self.tokenizer.eos_token_id
+            )
+            logger.info(f"🧠 Подсознание загружено из Hugging Face: {self.model_name}")
+
+            # 3. Сразу сохраняем локально
+            self._save_to_disk()
+            logger.info(f"💾 Подсознание сохранено в: {self.save_dir}")
+
+        except Exception as e:
+            logger.error(f"❌ Ошибка при загрузке модели из HF: {e}")
+            raise
+
+    def _is_model_saved(self) -> bool:
+        required = ["config.json", "pytorch_model.bin", "tokenizer_config.json", "vocab.json"]
+        return all(os.path.exists(os.path.join(self.save_dir, f)) for f in required)
+
+    def _try_load_from_disk(self) -> bool:
+        try:
+            self.model = AutoModelForCausalLM.from_pretrained(self.save_dir)
+            self.tokenizer = AutoTokenizer.from_pretrained(self.save_dir)
+            self.model.to(self.device)
+            self.model.eval()
+            self.generator = pipeline(
+                "text-generation",
+                model=self.model,
+                tokenizer=self.tokenizer,
+                device=0 if self.device == "cuda" else -1,
+                pad_token_id=self.tokenizer.eos_token_id
+            )
+            return True
+        except Exception as e:
+            logger.error(f"❌ Ошибка при загрузке с диска: {e}")
+            return False
+
+    def _save_to_disk(self):
+        try:
+            self.model.save_pretrained(self.save_dir)
+            self.tokenizer.save_pretrained(self.save_dir)
+            logger.info(f"💾 Подсознание сохранено: {self.save_dir}")
+        except Exception as e:
+            logger.error(f"❌ Ошибка при сохранении подсознания: {e}")
 
     def generate(self, prompt: str, max_length: int = 100) -> str:
         try:
@@ -217,21 +275,6 @@ class SubconsciousModule:
         with torch.no_grad():
             outputs = self.model.base_model(**inputs)
             return outputs.last_hidden_state[:, 0, :].cpu().numpy()[0]
-
-    def save(self, path: str):
-        os.makedirs(path, exist_ok=True)
-        self.model.save_pretrained(path)
-        self.tokenizer.save_pretrained(path)
-        logger.info(f"💾 Подсознание сохранено: {path}")
-
-    def load(self, path: str):
-        if os.path.exists(path):
-            self.model = AutoModelForCausalLM.from_pretrained(path)
-            self.tokenizer = AutoTokenizer.from_pretrained(path)
-            self.model.to(self.device)
-            self.model.eval()
-            self.generator = pipeline("text-generation", model=self.model, tokenizer=self.tokenizer, device=0 if self.device == "cuda" else -1)
-            logger.info(f"📥 Подсознание загружено: {path}")
 
 # === СТРУКТУРЫ ПАМЯТИ ===
 @dataclass
@@ -747,14 +790,19 @@ class MultiAgentSystem:
 
 # === SIN — ОСНОВНАЯ СИСТЕМА ===
 class Sin:
-    VERSION = "19.3"
+    VERSION = "19.4"
 
     def __init__(self, persist_file: str = PERSIST_FILE):
+        # Создаём все папки
         os.makedirs(SUBCONSCIOUS_SAVE_DIR, exist_ok=True)
+
+        # Загружаем эмбеддинги
         self.embedder = RuEmbedder()
+
+        # Инициализируем подсознание (оно само решит, откуда грузить)
         self.subconscious = SubconsciousModule()
-        if os.path.exists(SUBCONSCIOUS_SAVE_DIR):
-            self.subconscious.load(SUBCONSCIOUS_SAVE_DIR)
+
+        # Остальные компоненты
         self.nodes = {}
         self.node_counter = 0
         self.memory = []
@@ -878,7 +926,7 @@ class Sin:
             with open(self.persist_file, 'wb') as f:
                 pickle.dump(serializable, f)
             self.knowledge_graph.save_graph()
-            self.subconscious.save(SUBCONSCIOUS_SAVE_DIR)
+            self.subconscious._save_to_disk()
             logger.info(f"💾 Сохранено в {self.persist_file}")
         except Exception as e:
             logger.error(f"❌ Ошибка сохранения: {e}")
@@ -996,7 +1044,6 @@ class Sin:
             )
             items_to_add.append(mem_item)
             if len(conflicts) == 0:
-                # === ДОБАВЛЕНИЕ СВЯЗЕЙ В ГРАФ ЗНАНИЙ ===
                 if len(words) > 1:
                     phrase = ' '.join(words)
                     self.knowledge_graph.add_concept(word, vec, children=[phrase])
@@ -1021,7 +1068,6 @@ class Sin:
 
         self.hippocampus.consolidate(self.memory, self.vector_index, prediction_error)
 
-        # === ДОБАВЛЕНИЕ В СЕМАНТИЧЕСКУЮ ПАМЯТЬ (Chroma) ===
         slots = {}
         frame_type = "COMMUNICATION" if any(w in text for w in ["ты", "я", "мы"]) else None
         self.semantic_memory.add_episode(text, slots=slots, frame_type=frame_type)
@@ -1130,7 +1176,6 @@ class Sin:
             logger.info(f"❓ Задаю вопрос: {question}")
             return f"❓ {question}"
 
-        # Генерация через подсознание
         prompt = f"Пользователь: {text}\nSin:"
         response = self.subconscious.generate(prompt, max_length=100)
         logger.info("💬 Ответ сгенерирован через подсознание.")
