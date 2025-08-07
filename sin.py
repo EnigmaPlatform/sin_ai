@@ -239,16 +239,19 @@ class LongTermMemory:
     def _initialize_model(self) -> None:
         try:
             sentence_model_name = "all-MiniLM-L6-v2"
-            sentence_model_path = Path(sentence_model_name)
+            sentence_model_path = MODEL_DIR / sentence_model_name
             
+            # Проверяем, есть ли локальная модель
             if sentence_model_path.exists() and sentence_model_path.is_dir():
                 model_source = str(sentence_model_path)
             else:
                 model_source = sentence_model_name
+                logger.info(f"Загрузка модели предложений: {model_source}")
                 
             self.sentence_model = SentenceTransformer(
                 model_source,
-                device=device
+                device=device,
+                cache_folder=str(MODEL_DIR)
             )
         except Exception as e:
             logger.error(f"Ошибка инициализации модели эмбеддингов: {e}")
@@ -645,7 +648,7 @@ def load_qa_pairs_from_text(text: str, max_pairs: int = 100) -> List[Dict[str, s
         return []
         
     try:
-        # Разделяем текст на предложения
+        # Улучшенное разделение на предложения
         sentences = re.split(r'(?<=[.!?])\s+', text)
         sentences = [s.strip() for s in sentences if 10 < len(s.strip()) < 500]
         
@@ -657,15 +660,27 @@ def load_qa_pairs_from_text(text: str, max_pairs: int = 100) -> List[Dict[str, s
             statement = sentences[i]
             next_statement = sentences[i+1]
             
+            # Пропускаем слишком короткие или длинные предложения
+            if len(statement) < 10 or len(next_statement) < 10:
+                continue
+                
             # Формируем вопрос из текущего предложения
             if statement.endswith('.'):
                 question = statement[:-1] + '?'
+            elif statement.endswith('!'):
+                question = statement[:-1] + '?'
+            elif statement.endswith('?'):
+                question = statement
             else:
                 question = statement + '?'
                 
             # Ответ - следующее предложение
             answer = next_statement
             
+            # Проверяем, что ответ не начинается с союза или местоимения
+            if re.match(r'^(и|а|но|что|который|которая|которые)\b', answer.lower()):
+                continue
+                
             qa_pairs.append({
                 "question": question,
                 "answer": answer
